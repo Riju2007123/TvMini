@@ -33,7 +33,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 22.5 or newer: the .clip writer uses the built-in
+          # node:sqlite module.
+          node-version: "24"
 
       - name: Run the tests
         working-directory: build/my-version
