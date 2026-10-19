@@ -136,6 +136,7 @@ body {
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 10px;
+  overflow-y: auto;
 }
 
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
@@ -198,8 +199,24 @@ button {
   gap: 8px;
 }
 
+.tool-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .tools button:hover, .modal-actions button:hover, .browser-head button:hover {
   background: #f3f4f6;
+}
+
+.tools button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.tools button.active:hover {
+  background: #1d4ed8;
 }
 
 .canvas-wrap {

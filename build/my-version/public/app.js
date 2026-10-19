@@ -19,6 +19,8 @@ const pressureValue = document.getElementById("pressureValue");
 const clearButton = document.getElementById("clearButton");
 const undoButton = document.getElementById("undoButton");
 const redoButton = document.getElementById("redoButton");
+const brushButton = document.getElementById("brushButton");
+const eraserButton = document.getElementById("eraserButton");
 
 const modal = document.getElementById("modal");
 const modalTitle = document.getElementById("modalTitle");
@@ -39,6 +41,7 @@ const state = {
   drawing: null,
   strokeBefore: null,
   pressureEnabled: true,
+  tool: "brush",
   homeDir: ".",
 };
 
@@ -173,40 +176,55 @@ function projectImage() {
   return previewImage?.complete ? previewImage : null;
 }
 
+const paintCanvas = document.createElement("canvas");
+const paintCtx = paintCanvas.getContext("2d");
+
 function render() {
+  const { width, height } = state.project;
+
   ctx.fillStyle = state.project.background;
-  ctx.fillRect(0, 0, state.project.width, state.project.height);
+  ctx.fillRect(0, 0, width, height);
 
   const image = projectImage();
   if (image) {
-    ctx.drawImage(image, 0, 0, state.project.width, state.project.height);
+    ctx.drawImage(image, 0, 0, width, height);
   }
 
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
+  // Strokes live on their own transparent layer so the eraser can clear paint
+  // (destination-out) and reveal the background or imported image underneath.
+  if (paintCanvas.width !== width || paintCanvas.height !== height) {
+    paintCanvas.width = width;
+    paintCanvas.height = height;
+  } else {
+    paintCtx.clearRect(0, 0, width, height);
+  }
+
+  paintCtx.lineCap = "round";
+  paintCtx.lineJoin = "round";
 
   for (const stroke of state.project.strokes) {
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
+    paintCtx.globalCompositeOperation = stroke.eraser ? "destination-out" : "source-over";
+    paintCtx.strokeStyle = stroke.color;
+    paintCtx.fillStyle = stroke.color;
 
     const radii = stroke.points.map((point) => strokeRadius(stroke, point));
 
     if (stroke.points.length === 1) {
-      ctx.beginPath();
-      ctx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
-      ctx.fill();
+      paintCtx.beginPath();
+      paintCtx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
+      paintCtx.fill();
       continue;
     }
 
     const tapered = stroke.points.some((point) => point.length === 3);
     if (!tapered) {
-      ctx.lineWidth = stroke.width;
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+      paintCtx.lineWidth = stroke.width;
+      paintCtx.beginPath();
+      paintCtx.moveTo(stroke.points[0][0], stroke.points[0][1]);
       for (let i = 1; i < stroke.points.length; i += 1) {
-        ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+        paintCtx.lineTo(stroke.points[i][0], stroke.points[i][1]);
       }
-      ctx.stroke();
+      paintCtx.stroke();
       continue;
     }
 
@@ -214,13 +232,16 @@ function render() {
     for (let i = 1; i < stroke.points.length; i += 1) {
       const from = stroke.points[i - 1];
       const to = stroke.points[i];
-      ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
-      ctx.beginPath();
-      ctx.moveTo(from[0], from[1]);
-      ctx.lineTo(to[0], to[1]);
-      ctx.stroke();
+      paintCtx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+      paintCtx.beginPath();
+      paintCtx.moveTo(from[0], from[1]);
+      paintCtx.lineTo(to[0], to[1]);
+      paintCtx.stroke();
     }
   }
+
+  paintCtx.globalCompositeOperation = "source-over";
+  ctx.drawImage(paintCanvas, 0, 0);
 }
 
 const MIN_PRESSURE_SCALE = 0.2;
@@ -275,6 +296,7 @@ canvas.addEventListener("pointerdown", (event) => {
     width: Number(widthInput.value),
     points: [drawPoint(event)],
   };
+  if (state.tool === "eraser") stroke.eraser = true;
 
   state.strokeBefore = cloneStrokes();
   state.project.strokes.push(stroke);
@@ -319,6 +341,26 @@ pressureInput.addEventListener("change", () => {
       : "Pen pressure off — constant width",
   );
 });
+
+function selectTool(tool) {
+  state.tool = tool;
+  const eraser = tool === "eraser";
+
+  brushButton.classList.toggle("active", !eraser);
+  eraserButton.classList.toggle("active", eraser);
+  brushButton.setAttribute("aria-pressed", String(!eraser));
+  eraserButton.setAttribute("aria-pressed", String(eraser));
+  colorInput.disabled = eraser;
+
+  setStatus(
+    eraser
+      ? "Eraser — removes paint and reveals the canvas underneath"
+      : "Brush — paint with the selected colour",
+  );
+}
+
+brushButton.addEventListener("click", () => selectTool("brush"));
+eraserButton.addEventListener("click", () => selectTool("eraser"));
 
 clearButton.addEventListener("click", () => {
   if (state.project.strokes.length === 0) return;
@@ -659,11 +701,24 @@ document.addEventListener("keydown", (event) => {
   }
 
   const modifier = event.ctrlKey || event.metaKey;
-  if (!modifier) return;
-
   const key = event.key.toLowerCase();
   const typing =
     event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+
+  if (!typing && !modifier && modal.hidden) {
+    if (key === "e") {
+      event.preventDefault();
+      selectTool("eraser");
+      return;
+    }
+    if (key === "b") {
+      event.preventDefault();
+      selectTool("brush");
+      return;
+    }
+  }
+
+  if (!modifier) return;
 
   if (!typing && key === "z" && event.shiftKey) {
     event.preventDefault();

@@ -83,6 +83,28 @@ test("normalizeProject rejects a fourth coordinate", () => {
   );
 });
 
+test("normalizeProject keeps the eraser flag and rejects non-booleans", () => {
+  const base = createProject(100, 100);
+  const clean = normalizeProject({
+    ...base,
+    strokes: [
+      { color: "#000000", width: 8, points: [[1, 1]], eraser: true },
+      { color: "#000000", width: 8, points: [[2, 2]], eraser: false },
+    ],
+  });
+
+  assert.equal(clean.strokes[0].eraser, true);
+  assert.equal(clean.strokes[1].eraser, undefined);
+
+  assert.throws(
+    () => normalizeProject({
+      ...base,
+      strokes: [{ color: "#000000", width: 8, points: [[1, 1]], eraser: "yes" }],
+    }),
+    /must be a boolean/,
+  );
+});
+
 test("projectPath appends the extension only when missing", () => {
   assert.equal(path.basename(projectPath("C:/tmp/demo")), "demo.tvmini");
   assert.equal(path.basename(projectPath("C:/tmp/demo.tvmini")), "demo.tvmini");

@@ -10,10 +10,10 @@ described in `REPORT.md` was used as a requirement.
 
 ## 1. Product statement
 
-TVMini is a local drawing app. You can draw strokes on a canvas, keep the work
-in a project file, reopen it later, export the current canvas as a PNG, pick
-recently used projects from a menu, and import the preview image stored inside
-a Clip Studio Paint `.clip` file.
+TVMini is a local drawing app. You can draw strokes on a canvas, erase paint,
+keep the work in a project file, reopen it later, export the current canvas as
+a PNG, pick recently used projects from a menu, and import the preview image
+stored inside a Clip Studio Paint `.clip` file.
 
 Deliberately **not** in scope:
 
@@ -101,6 +101,18 @@ Deliberately **not** in scope:
   with a readable error and leaves the current project untouched.
 - Importing does not add anything to Recent (Recent is for project files).
 
+### FR-11 Eraser
+- The tools panel offers **Brush** and **Eraser**; `B` and `E` switch tools
+  when focus is not in a text field.
+- An eraser stroke is recorded like a brush stroke with `"eraser": true`.
+- It removes paint from the stroke layer only, revealing the canvas background
+  or the imported `.clip` image underneath.
+- Erasing follows the same width slider and pen-pressure taper as the brush.
+- Eraser strokes are ordinary history entries: undo/redo, Clear and save/open
+  work unchanged.
+- A brush stroke drawn after an eraser paints over the erased area again.
+- The on-screen canvas and the PNG export use the same paint/erase order.
+
 ---
 
 ## 3. Data format
@@ -117,7 +129,8 @@ Project file: UTF-8 JSON, extension `.tvmini`.
   "image": null,
   "strokes": [
     { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] },
-    { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] }
+    { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] },
+    { "color": "#000000", "width": 20, "points": [[30, 30]], "eraser": true }
   ]
 }
 ```
@@ -144,6 +157,7 @@ Validation rules:
 | `background`, `color` | `#rrggbb` |
 | `image` | optional; `{ data, width, height }` where `data` is base64 PNG (max 8,000,000 chars) and the size equals the canvas |
 | `width` (stroke) | number 1…200 |
+| `eraser` | optional boolean; `true` means the stroke removes paint |
 | `points` | array of `[x, y]` or `[x, y, p]`; `p` is 0…1 |
 | `strokes` | array, max 10000 |
 
@@ -183,6 +197,8 @@ text; it never fails silently.
 ### 4.2 UI
 - File menu: New, Open…, Import .clip preview…, Save, Save As…, Export PNG…,
   Recent ▸, Exit.
+- Tools: Brush / Eraser buttons (`B` / `E`), colour, width, pen pressure,
+  undo / redo.
 - Canvas: drag to draw; stroke colour and width controls.
 - Status bar: last result or error.
 - Title bar: `name — TVMini` with `*` while unsaved.
@@ -220,6 +236,9 @@ Every item below is automated in `build/my-version/test/`.
 | T23 | `.clip` import | preview PNG, size and base64 match the source |
 | T24 | `.clip` rejection | foreign file and damaged database give a readable error |
 | T25 | image + strokes export | imported pixels and stroke pixels appear in the PNG |
+| T26 | eraser | erased area shows background; later strokes paint again |
+| T27 | eraser over image | erased area shows the imported image, in preview and PNG |
+| T28 | eraser persistence | `eraser: true` survives save → open |
 
 ---
 

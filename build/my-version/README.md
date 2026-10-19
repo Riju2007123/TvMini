@@ -40,6 +40,7 @@ node --test
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
+| Eraser | removes paint, revealing the canvas or imported image | `public/app.js`, `src/png.js` |
 | Undo / redo | 100-step snapshot history, toolbar + shortcuts | `public/history.js` |
 
 Key guarantees:
@@ -66,6 +67,22 @@ visible at 20 % of the slider value and full pressure reaches 100 %.
 The same formula is used by `src/png.js`, so the exported PNG matches what you
 see on screen. Mouse and touch input keep plain `[x, y]` points and a constant
 width. Old files with 2-element points still load unchanged.
+
+## Eraser
+
+Choose **Brush** or **Eraser** in the tools panel, or press `B` / `E`. An eraser
+stroke is stored as a normal stroke with one extra flag:
+
+```json
+{ "color": "#000000", "width": 20, "points": [[30, 30]], "eraser": true }
+```
+
+Strokes are drawn on a transparent paint layer above the background and any
+imported image. An eraser stroke clears that layer (`destination-out` in the
+browser, alpha clearing in `src/png.js`), so what shows through is the white
+canvas or the `.clip` preview — not a painted-on white line. It uses the same
+width slider and pressure taper, is undoable like any stroke, and exports
+identically.
 
 ## Undo / redo
 

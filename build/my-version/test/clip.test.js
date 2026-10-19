@@ -44,6 +44,25 @@ test("renderProject draws the imported image behind strokes", () => {
   assert.deepEqual(pixel(16, 12), [0, 0, 255]);
 });
 
+test("an eraser reveals the imported image underneath", () => {
+  const project = createProject(32, 24);
+  project.image = {
+    data: encodePng(32, 24, solid(32, 24, [200, 0, 0])).toString("base64"),
+    width: 32,
+    height: 24,
+  };
+  project.strokes = [
+    { color: "#0000ff", width: 20, points: [[16, 12]] },
+    { color: "#000000", width: 20, points: [[16, 12]], eraser: true },
+  ];
+
+  const { width, data } = renderProject(project);
+  const pixel = (x, y) => [...data.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)];
+
+  assert.deepEqual(pixel(16, 12), [200, 0, 0]);
+  assert.deepEqual(pixel(0, 0), [200, 0, 0]);
+});
+
 test("normalizeProject accepts an image that matches the canvas", () => {
   const project = createProject(32, 24);
   project.image = {

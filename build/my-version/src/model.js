@@ -138,11 +138,21 @@ export function normalizeProject(input) {
     if (!stroke || typeof stroke !== "object" || Array.isArray(stroke)) {
       throw new ValidationError(`strokes[${index}] must be an object`);
     }
-    return {
+
+    const clean = {
       color: color(stroke.color, `strokes[${index}].color`),
       width: finiteNumber(stroke.width, `strokes[${index}].width`),
       points: points(stroke.points, `strokes[${index}].points`),
     };
+
+    if (stroke.eraser !== undefined) {
+      if (typeof stroke.eraser !== "boolean") {
+        throw new ValidationError(`strokes[${index}].eraser must be a boolean`);
+      }
+      if (stroke.eraser) clean.eraser = true;
+    }
+
+    return clean;
   });
 
   for (let i = 0; i < strokes.length; i += 1) {

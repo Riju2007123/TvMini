@@ -32,6 +32,10 @@
 
     <main class="workspace">
       <aside class="tools">
+        <div class="tool-row">
+          <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)">Brush</button>
+          <button id="eraserButton" aria-pressed="false" title="Eraser (E)">Eraser</button>
+        </div>
         <div class="history-row">
           <button id="undoButton" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
           <button id="redoButton" disabled title="Redo (Ctrl+A, Ctrl+Y)">Redo ↷</button>
@@ -53,6 +57,8 @@
         <div class="hint">
           Drag on the canvas to draw. A drawing tablet varies the width;
           a mouse draws a constant width.<br />
+          The eraser removes paint and reveals the canvas or imported image
+          underneath. Press <code>E</code> / <code>B</code> to switch tools.<br />
           Opening a Clip Studio <code>.clip</code> file imports its saved
           canvas preview; the original file is never changed.<br />
           Recent updates only after a successful save or open.

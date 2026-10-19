@@ -8,18 +8,25 @@ function parseHex(hex) {
   ];
 }
 
-function setPixel(data, width, height, x, y, rgb) {
+function setPixel(layer, width, height, x, y, rgb, erase) {
   const px = Math.round(x);
   const py = Math.round(y);
   if (px < 0 || py < 0 || px >= width || py >= height) return;
-  const index = (py * width + px) * 3;
-  data[index] = rgb[0];
-  data[index + 1] = rgb[1];
-  data[index + 2] = rgb[2];
+  const index = (py * width + px) * 4;
+
+  if (erase) {
+    layer[index + 3] = 0;
+    return;
+  }
+
+  layer[index] = rgb[0];
+  layer[index + 1] = rgb[1];
+  layer[index + 2] = rgb[2];
+  layer[index + 3] = 255;
 }
 
-/** Paint a disc with hard edges (distance test) inside a bounding box. */
-function disc(data, width, height, cx, cy, radius, rgb) {
+/** Paint or erase a disc with hard edges (distance test) inside a bounding box. */
+function disc(layer, width, height, cx, cy, radius, rgb, erase) {
   const x0 = Math.max(0, Math.floor(cx - radius));
   const x1 = Math.min(width - 1, Math.ceil(cx + radius));
   const y0 = Math.max(0, Math.floor(cy - radius));
@@ -30,7 +37,7 @@ function disc(data, width, height, cx, cy, radius, rgb) {
     for (let x = x0; x <= x1; x += 1) {
       const dx = x + 0.5 - cx;
       const dy = y + 0.5 - cy;
-      if (dx * dx + dy * dy <= r2) setPixel(data, width, height, x, y, rgb);
+      if (dx * dx + dy * dy <= r2) setPixel(layer, width, height, x, y, rgb, erase);
     }
   }
 }
@@ -48,8 +55,8 @@ function pointRadius(stroke, point) {
   return Math.max(0.5, radius);
 }
 
-/** Paint a segment by sampling discs with linearly interpolated radius. */
-function segment(data, width, height, [x0, y0], [x1, y1], r0, r1, rgb) {
+/** Paint or erase a segment by sampling discs with linearly interpolated radius. */
+function segment(layer, width, height, [x0, y0], [x1, y1], r0, r1, rgb, erase) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const length = Math.hypot(dx, dy);
@@ -58,7 +65,7 @@ function segment(data, width, height, [x0, y0], [x1, y1], r0, r1, rgb) {
 
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
-    disc(data, width, height, x0 + dx * t, y0 + dy * t, r0 + (r1 - r0) * t, rgb);
+    disc(layer, width, height, x0 + dx * t, y0 + dy * t, r0 + (r1 - r0) * t, rgb, erase);
   }
 }
 
@@ -180,6 +187,35 @@ function composite(data, width, height, image) {
 /** Render a validated project to an RGB byte buffer. */
 export function renderProject(project) {
   const { width, height } = project;
+
+  // Paint layer: strokes are opaque; an eraser stroke clears alpha, which
+  // reveals the background or the imported image underneath.
+  const paint = new Uint8Array(width * height * 4);
+
+  for (const stroke of project.strokes) {
+    const rgb = parseHex(stroke.color);
+    const erase = stroke.eraser === true;
+    const radii = stroke.points.map((point) => pointRadius(stroke, point));
+
+    if (stroke.points.length === 1) {
+      disc(paint, width, height, stroke.points[0][0], stroke.points[0][1], radii[0], rgb, erase);
+      continue;
+    }
+    for (let i = 1; i < stroke.points.length; i += 1) {
+      segment(
+        paint,
+        width,
+        height,
+        stroke.points[i - 1],
+        stroke.points[i],
+        radii[i - 1],
+        radii[i],
+        rgb,
+        erase,
+      );
+    }
+  }
+
   const data = new Uint8Array(width * height * 3);
   const background = parseHex(project.background);
 
@@ -193,26 +229,11 @@ export function renderProject(project) {
     composite(data, width, height, decodePng(Buffer.from(project.image.data, "base64")));
   }
 
-  for (const stroke of project.strokes) {
-    const rgb = parseHex(stroke.color);
-    const radii = stroke.points.map((point) => pointRadius(stroke, point));
-
-    if (stroke.points.length === 1) {
-      disc(data, width, height, stroke.points[0][0], stroke.points[0][1], radii[0], rgb);
-      continue;
-    }
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      segment(
-        data,
-        width,
-        height,
-        stroke.points[i - 1],
-        stroke.points[i],
-        radii[i - 1],
-        radii[i],
-        rgb,
-      );
-    }
+  for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
+    if (paint[j + 3] === 0) continue;
+    data[i] = paint[j];
+    data[i + 1] = paint[j + 1];
+    data[i + 2] = paint[j + 2];
   }
 
   return { width, height, data };
