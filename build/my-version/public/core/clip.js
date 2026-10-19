@@ -11,8 +11,12 @@ const PNG_SIGNATURE = 0x89504e47;
 /**
  * Walk the CSFCHUNK container and return the embedded SQLite database.
  * Each chunk is: 8-byte ASCII name, 8-byte big-endian length, payload.
+ *
+ * Any byte array is accepted; it is wrapped in a `Buffer` first because a
+ * plain `Uint8Array` has neither `readBigUInt64BE` nor `toString("ascii")`.
  */
-export function findClipDatabase(data) {
+export function findClipDatabase(bytes) {
+  const data = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   if (data.length < HEADER_BYTES || data.toString("ascii", 0, 8) !== CLIP_MAGIC) {
     throw new ValidationError("not a Clip Studio .clip file");
   }

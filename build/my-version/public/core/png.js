@@ -112,7 +112,9 @@ function unfilter(type, line, previous, bpp) {
  * Decode a non-interlaced 8-bit RGB/RGBA PNG into RGBA bytes.
  * This is the subset produced by this app and by Clip Studio previews.
  */
-export function decodePng(buffer) {
+export function decodePng(input) {
+  // A plain Uint8Array has no readUInt32BE, so wrap it first.
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
   if (buffer.length < 8 || buffer.readUInt32BE(0) !== 0x89504e47) {
     throw new Error("not a PNG");
   }

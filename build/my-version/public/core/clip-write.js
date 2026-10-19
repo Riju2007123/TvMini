@@ -369,7 +369,9 @@ function newExternalId() {
   return Buffer.from(`extrnlid${hex.toUpperCase()}`, "ascii");
 }
 
-function parseContainer(data) {
+function parseContainer(input) {
+  // A plain Uint8Array has no readBigUInt64BE, so wrap it first.
+  const data = Buffer.isBuffer(input) ? input : Buffer.from(input);
   if (data.length < 24 || data.toString("ascii", 0, 8) !== "CSFCHUNK") {
     throw new ValidationError("the bundled .clip template is not a Clip Studio file");
   }
