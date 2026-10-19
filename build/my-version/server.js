@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { FORMAT, VERSION, normalizeProject, ValidationError } from "./src/model.js";
+import { createProject, normalizeProject, ValidationError } from "./src/model.js";
 import { readClipPreview } from "./src/clip.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
 import { exportPng, openProject, saveProject } from "./src/store.js";
@@ -60,6 +60,22 @@ async function readJson(req) {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
     throw new ValidationError("request body is not valid JSON");
+  }
+}
+
+async function statPath(rawPath) {
+  if (typeof rawPath !== "string" || rawPath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  if (rawPath.includes("\0")) throw new ValidationError("invalid path");
+
+  const target = path.resolve(rawPath);
+  try {
+    const stat = await fsp.stat(target);
+    return { exists: true, dir: stat.isDirectory(), size: stat.size, path: target };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { exists: false, dir: false, size: 0, path: target };
+    throw error;
   }
 }
 
@@ -157,6 +173,11 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         return;
       }
 
+      if (route === "GET /api/stat") {
+        sendJson(res, 200, await statPath(url.searchParams.get("path")));
+        return;
+      }
+
       if (route === "POST /api/open") {
         const body = await readJson(req);
         const result = await openProject(body.path);
@@ -168,17 +189,12 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         const body = await readJson(req);
         const preview = await readClipPreview(body.path);
         const project = normalizeProject({
-          format: FORMAT,
-          version: VERSION,
-          width: preview.width,
-          height: preview.height,
-          background: "#ffffff",
+          ...createProject(preview.width, preview.height),
           image: {
             data: preview.png.toString("base64"),
             width: preview.width,
             height: preview.height,
           },
-          strokes: [],
         });
         sendJson(res, 200, { path: preview.path, name: preview.name, project });
         return;

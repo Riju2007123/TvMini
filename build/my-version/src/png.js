@@ -1,4 +1,5 @@
 import zlib from "node:zlib";
+import { resolveDrawing } from "../public/timeline.js";
 
 function parseHex(hex) {
   return [
@@ -169,30 +170,11 @@ export function decodePng(buffer) {
   return { width, height, data: out };
 }
 
-/** Alpha-composite an RGBA image over an RGB buffer. */
-function composite(data, width, height, image) {
-  if (image.width !== width || image.height !== height) {
-    throw new Error("image size must match the canvas");
-  }
-
-  for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
-    const alpha = image.data[j + 3] / 255;
-    if (alpha === 0) continue;
-    data[i] = Math.round(image.data[j] * alpha + data[i] * (1 - alpha));
-    data[i + 1] = Math.round(image.data[j + 1] * alpha + data[i + 1] * (1 - alpha));
-    data[i + 2] = Math.round(image.data[j + 2] * alpha + data[i + 2] * (1 - alpha));
-  }
-}
-
-/** Render a validated project to an RGB byte buffer. */
-export function renderProject(project) {
-  const { width, height } = project;
-
-  // Paint layer: strokes are opaque; an eraser stroke clears alpha, which
-  // reveals the background or the imported image underneath.
+/** Paint a stroke list onto a transparent RGBA buffer. */
+function paintStrokes(width, height, strokes) {
   const paint = new Uint8Array(width * height * 4);
 
-  for (const stroke of project.strokes) {
+  for (const stroke of strokes) {
     const rgb = parseHex(stroke.color);
     const erase = stroke.eraser === true;
     const radii = stroke.points.map((point) => pointRadius(stroke, point));
@@ -216,6 +198,35 @@ export function renderProject(project) {
     }
   }
 
+  return paint;
+}
+
+/** Alpha-composite an RGBA image over an RGB buffer. */
+function composite(data, width, height, image, opacity = 1) {
+  if (image.width !== width || image.height !== height) {
+    throw new Error("image size must match the canvas");
+  }
+  if (opacity <= 0) return;
+
+  for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
+    const alpha = (image.data[j + 3] / 255) * opacity;
+    if (alpha === 0) continue;
+    data[i] = Math.round(image.data[j] * alpha + data[i] * (1 - alpha));
+    data[i + 1] = Math.round(image.data[j + 1] * alpha + data[i + 1] * (1 - alpha));
+    data[i + 2] = Math.round(image.data[j + 2] * alpha + data[i + 2] * (1 - alpha));
+  }
+}
+
+/**
+ * Render one frame of a validated project to an RGB byte buffer.
+ *
+ * Layers are stored top-to-bottom (the timeline shows the top layer first),
+ * so they are composited in reverse order. Eraser strokes only clear paint
+ * inside their own layer; lower layers and the imported image stay visible.
+ */
+export function renderProject(project, frame = project.currentFrame) {
+  const { width, height } = project;
+
   const data = new Uint8Array(width * height * 3);
   const background = parseHex(project.background);
 
@@ -229,11 +240,15 @@ export function renderProject(project) {
     composite(data, width, height, decodePng(Buffer.from(project.image.data, "base64")));
   }
 
-  for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
-    if (paint[j + 3] === 0) continue;
-    data[i] = paint[j];
-    data[i + 1] = paint[j + 1];
-    data[i + 2] = paint[j + 2];
+  for (let index = project.layers.length - 1; index >= 0; index -= 1) {
+    const layer = project.layers[index];
+    if (!layer.visible || layer.opacity <= 0) continue;
+
+    const resolved = resolveDrawing(layer, frame);
+    if (!resolved) continue;
+
+    const paint = paintStrokes(width, height, resolved.drawing.strokes);
+    composite(data, width, height, { width, height, data: paint }, layer.opacity);
   }
 
   return { width, height, data };

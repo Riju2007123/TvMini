@@ -1,8 +1,15 @@
 import path from "node:path";
+import { BEHAVIORS, isBehavior } from "../public/timeline.js";
 
 export const FORMAT = "tvmini";
-export const VERSION = 1;
+export const VERSION = 2;
 export const MAX_STROKES = 10000;
+export const MAX_LAYERS = 100;
+export const MAX_DRAWINGS_PER_LAYER = 1000;
+export const MAX_TOTAL_DRAWINGS = 5000;
+export const MAX_FPS = 120;
+export const MAX_START_FRAME = 100000;
+export const MAX_HOLD = 10000;
 export const MIN_SIZE = 16;
 export const MAX_SIZE = 4096;
 
@@ -22,12 +29,27 @@ function finiteNumber(value, label) {
   return value;
 }
 
+function numberInRange(value, label, min, max) {
+  const n = finiteNumber(value, label);
+  if (n < min || n > max) {
+    throw new ValidationError(`${label} must be between ${min} and ${max}`);
+  }
+  return n;
+}
+
 function integerInRange(value, label, min, max) {
   const n = finiteNumber(value, label);
   if (!Number.isInteger(n) || n < min || n > max) {
     throw new ValidationError(`${label} must be an integer between ${min} and ${max}`);
   }
   return n;
+}
+
+function boolean(value, label) {
+  if (typeof value !== "boolean") {
+    throw new ValidationError(`${label} must be a boolean`);
+  }
+  return value;
 }
 
 function color(value, label) {
@@ -63,8 +85,59 @@ function points(value, label) {
   });
 }
 
+function normalizeStrokes(value, label) {
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an array`);
+  }
+  if (value.length > MAX_STROKES) {
+    throw new ValidationError(`too many strokes (max ${MAX_STROKES})`);
+  }
 
-/** Create a blank project. */
+  const strokes = value.map((stroke, index) => {
+    if (!stroke || typeof stroke !== "object" || Array.isArray(stroke)) {
+      throw new ValidationError(`${label}[${index}] must be an object`);
+    }
+
+    const clean = {
+      color: color(stroke.color, `${label}[${index}].color`),
+      width: finiteNumber(stroke.width, `${label}[${index}].width`),
+      points: points(stroke.points, `${label}[${index}].points`),
+    };
+
+    if (stroke.eraser !== undefined) {
+      if (typeof stroke.eraser !== "boolean") {
+        throw new ValidationError(`${label}[${index}].eraser must be a boolean`);
+      }
+      if (stroke.eraser) clean.eraser = true;
+    }
+
+    return clean;
+  });
+
+  for (let i = 0; i < strokes.length; i += 1) {
+    if (strokes[i].width < 1 || strokes[i].width > 200) {
+      throw new ValidationError(`${label}[${i}].width must be between 1 and 200`);
+    }
+  }
+
+  return strokes;
+}
+
+export function createLayer(name = "Layer 1") {
+  return {
+    name,
+    type: "anim",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blend: "normal",
+    preBehavior: "none",
+    postBehavior: "hold",
+    drawings: [],
+  };
+}
+
+/** Create a blank, already-valid project. */
 export function createProject(width = 960, height = 600, background = "#ffffff") {
   return {
     format: FORMAT,
@@ -73,7 +146,12 @@ export function createProject(width = 960, height = 600, background = "#ffffff")
     height: integerInRange(height, "height", MIN_SIZE, MAX_SIZE),
     background: color(background, "background"),
     image: null,
-    strokes: [],
+    fps: 12,
+    startFrame: 1,
+    currentLayer: 0,
+    currentFrame: 1,
+    loop: true,
+    layers: [createLayer("Layer 1")],
   };
 }
 
@@ -107,9 +185,96 @@ function normalizeImage(value, width, height) {
   return { data: value.data, width: imageWidth, height: imageHeight };
 }
 
+function normalizeLayer(value, index, startFrame) {
+  const label = `layers[${index}]`;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+
+  if (typeof value.name !== "string") {
+    throw new ValidationError(`${label}.name must be text`);
+  }
+  const name = value.name.trim();
+  if (name.length === 0) {
+    throw new ValidationError(`${label}.name must not be empty`);
+  }
+  if (name.length > 80) {
+    throw new ValidationError(`${label}.name must be 80 characters or fewer`);
+  }
+
+  const type = value.type === undefined ? "anim" : value.type;
+  if (type !== "anim") {
+    throw new ValidationError(`${label}.type must be "anim"`);
+  }
+
+  const visible = value.visible === undefined ? true : boolean(value.visible, `${label}.visible`);
+  const locked = value.locked === undefined ? false : boolean(value.locked, `${label}.locked`);
+  const opacity =
+    value.opacity === undefined ? 1 : numberInRange(value.opacity, `${label}.opacity`, 0, 1);
+  const blend = value.blend === undefined ? "normal" : value.blend;
+  if (blend !== "normal") {
+    throw new ValidationError(`${label}.blend must be "normal"`);
+  }
+
+  const preBehavior = value.preBehavior === undefined ? "none" : value.preBehavior;
+  const postBehavior = value.postBehavior === undefined ? "hold" : value.postBehavior;
+  if (!isBehavior(preBehavior)) {
+    throw new ValidationError(`${label}.preBehavior must be one of ${BEHAVIORS.join(", ")}`);
+  }
+  if (!isBehavior(postBehavior)) {
+    throw new ValidationError(`${label}.postBehavior must be one of ${BEHAVIORS.join(", ")}`);
+  }
+
+  if (!Array.isArray(value.drawings)) {
+    throw new ValidationError(`${label}.drawings must be an array`);
+  }
+  if (value.drawings.length > MAX_DRAWINGS_PER_LAYER) {
+    throw new ValidationError(
+      `${label}.drawings has too many entries (max ${MAX_DRAWINGS_PER_LAYER})`,
+    );
+  }
+
+  const drawings = value.drawings.map((drawing, drawingIndex) => {
+    const dLabel = `${label}.drawings[${drawingIndex}]`;
+    if (!drawing || typeof drawing !== "object" || Array.isArray(drawing)) {
+      throw new ValidationError(`${dLabel} must be an object`);
+    }
+
+    const at = integerInRange(drawing.at, `${dLabel}.at`, 1, 10_000_000);
+    if (at < startFrame) {
+      throw new ValidationError(`${dLabel}.at must be at or after startFrame`);
+    }
+    const hold = integerInRange(drawing.hold, `${dLabel}.hold`, 1, MAX_HOLD);
+    const strokes = normalizeStrokes(drawing.strokes, `${dLabel}.strokes`);
+    return { at, hold, strokes };
+  });
+
+  drawings.sort((a, b) => a.at - b.at);
+  for (let i = 1; i < drawings.length; i += 1) {
+    const previous = drawings[i - 1];
+    if (drawings[i].at < previous.at + previous.hold) {
+      throw new ValidationError(`${label}.drawings overlap at frame ${drawings[i].at}`);
+    }
+  }
+
+  return {
+    name,
+    type,
+    visible,
+    locked,
+    opacity,
+    blend,
+    preBehavior,
+    postBehavior,
+    drawings,
+  };
+}
+
 /**
  * Validate an untrusted object and return a clean copy.
- * Throws ValidationError with a human-readable message.
+ *
+ * Version 1 files (a flat `strokes` array) are migrated to version 2: the
+ * strokes become one drawing at frame 1 on a single animation layer.
  */
 export function normalizeProject(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -118,7 +283,7 @@ export function normalizeProject(input) {
   if (input.format !== FORMAT) {
     throw new ValidationError(`not a ${FORMAT} project (format=${JSON.stringify(input.format)})`);
   }
-  if (input.version !== VERSION) {
+  if (input.version !== 1 && input.version !== VERSION) {
     throw new ValidationError(`unsupported project version ${JSON.stringify(input.version)}`);
   }
 
@@ -127,41 +292,76 @@ export function normalizeProject(input) {
   const background = color(input.background, "background");
   const image = normalizeImage(input.image, width, height);
 
-  if (!Array.isArray(input.strokes)) {
-    throw new ValidationError("strokes must be an array");
+  if (input.version === 1) {
+    const strokes = normalizeStrokes(input.strokes, "strokes");
+    const layer = createLayer("Layer 1");
+    if (strokes.length > 0) layer.drawings.push({ at: 1, hold: 1, strokes });
+
+    return {
+      format: FORMAT,
+      version: VERSION,
+      width,
+      height,
+      background,
+      image,
+      fps: 12,
+      startFrame: 1,
+      currentLayer: 0,
+      currentFrame: 1,
+      loop: true,
+      layers: [layer],
+    };
   }
-  if (input.strokes.length > MAX_STROKES) {
+
+  const fps = numberInRange(input.fps, "fps", 1, MAX_FPS);
+  const startFrame = integerInRange(input.startFrame, "startFrame", 1, MAX_START_FRAME);
+  const loop = boolean(input.loop, "loop");
+
+  if (!Array.isArray(input.layers)) {
+    throw new ValidationError("layers must be an array");
+  }
+  if (input.layers.length === 0) {
+    throw new ValidationError("at least one layer is required");
+  }
+  if (input.layers.length > MAX_LAYERS) {
+    throw new ValidationError(`too many layers (max ${MAX_LAYERS})`);
+  }
+
+  const layers = input.layers.map((layer, index) => normalizeLayer(layer, index, startFrame));
+
+  let totalDrawings = 0;
+  let totalStrokes = 0;
+  for (const layer of layers) {
+    totalDrawings += layer.drawings.length;
+    for (const drawing of layer.drawings) totalStrokes += drawing.strokes.length;
+  }
+  if (totalDrawings > MAX_TOTAL_DRAWINGS) {
+    throw new ValidationError(`too many drawings (max ${MAX_TOTAL_DRAWINGS})`);
+  }
+  if (totalStrokes > MAX_STROKES) {
     throw new ValidationError(`too many strokes (max ${MAX_STROKES})`);
   }
 
-  const strokes = input.strokes.map((stroke, index) => {
-    if (!stroke || typeof stroke !== "object" || Array.isArray(stroke)) {
-      throw new ValidationError(`strokes[${index}] must be an object`);
-    }
-
-    const clean = {
-      color: color(stroke.color, `strokes[${index}].color`),
-      width: finiteNumber(stroke.width, `strokes[${index}].width`),
-      points: points(stroke.points, `strokes[${index}].points`),
-    };
-
-    if (stroke.eraser !== undefined) {
-      if (typeof stroke.eraser !== "boolean") {
-        throw new ValidationError(`strokes[${index}].eraser must be a boolean`);
-      }
-      if (stroke.eraser) clean.eraser = true;
-    }
-
-    return clean;
-  });
-
-  for (let i = 0; i < strokes.length; i += 1) {
-    if (strokes[i].width < 1 || strokes[i].width > 200) {
-      throw new ValidationError(`strokes[${i}].width must be between 1 and 200`);
-    }
+  const currentLayer = integerInRange(input.currentLayer, "currentLayer", 0, layers.length - 1);
+  const currentFrame = integerInRange(input.currentFrame, "currentFrame", 1, 10_000_000);
+  if (currentFrame < startFrame) {
+    throw new ValidationError("currentFrame must be at or after startFrame");
   }
 
-  return { format: FORMAT, version: VERSION, width, height, background, image, strokes };
+  return {
+    format: FORMAT,
+    version: VERSION,
+    width,
+    height,
+    background,
+    image,
+    fps,
+    startFrame,
+    currentLayer,
+    currentFrame,
+    loop,
+    layers,
+  };
 }
 
 /** Normalize a user-supplied project path. */

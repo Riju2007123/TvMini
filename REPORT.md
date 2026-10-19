@@ -343,7 +343,262 @@ one entry visible or greyed out.
 
 ---
 
-## 7. The demo message source
+## 7. Timeline and animation layers
+
+This section answers a second question: what does TVPaint 12 expose about its
+timeline and animation-layer model? The evidence is static: PDB labels, one
+project/template loader, the script-command table, layer accessors and class
+names. It is **not** a full reverse engineering of the timeline UI.
+
+### 7.1 Project-level timeline keys (CONFIRMED)
+
+The binary carries named configuration keys for the timeline:
+
+| label | address | evidence |
+|---|---|---|
+| `u_framerate` | `0x140ae24d8` | `ev_b66122d409002471f9701f79024429eb38eed7d457e33c93130c001c241ba9db` |
+| `u_startframe` | `0x140ae2508` | `ev_55d28a80f0f3c00e5e959af20a5ab2b23d92ee0e047857f3d72d8b8bf36c2006` |
+| `u_currentlayer` | `0x140ae2578` | `ev_3e44a8f457ee08476245cacfb47eb02eeb1e9ece9bb80c9d88ccb7106ffa8719` |
+| `u_layercount` | `0x140ae2598` | `ev_0a0087d42c5e9f06d39ef28fca7afb78784e941cb6009caa3b31945bc6026054` |
+| `u_layer%d` | `0x140ae25b0` | `ev_07d8c513bd88c5d51627b409e1a4cd9c0ad27e78d1358af5edabbe6cec7c1bce` |
+| `u_anim` | `0x140ae3630` | `ev_72e2ca5f8b18cd9771918a1ffb5edd284f813f762f6a8aa9c6dd8ab796633a1e` |
+| `u_loop` | `0x140ae4f18` | `ev_7528963f67735d29b298b8c209e9525a3fb744d2ec3b846509a61f1ad79a3cc2` |
+
+The loader at `FUN_14060fca0` reads these wide-string keys from the project
+configuration:
+
+```c
+FUN_1407a7e90(0, L"startframe", ...);
+FUN_1407a7e90(0, L"bgcolor1", ...);
+FUN_1407a7e90(0, L"bgcolor2", ...);
+FUN_1407a7e90(0, L"bgmode", ...);
+FUN_1407a7e90(0, L"modetimecode", ...);
+FUN_1407a7e90(0, L"currentlayer", ...);
+FUN_1407a7e90(0, L"layercount", ...);
+FUN_1407a5da0(local_90, L"layer%d", i);
+FUN_1407a7e90(0, L"flags", ...);
+FUN_1407a7e90(0, L"name", ...);
+FUN_1407a7e90(0, L"type", ...);
+FUN_1407a7e90(0, L"postbehavior", ...);
+FUN_1407a7e90(0, L"prebehavior", ...);
+FUN_1407a7e90(0, L"small", ...);
+FUN_1407a7e90(0, L"density", ...);
+FUN_1407a7e90(0, L"allicons", ...);
+FUN_1407a7e90(0, L"firstimage", ...);
+FUN_1407a7e90(0, L"lastimage", ...);
+FUN_1407a7e90(0, L"uicolor", ...);
+```
+
+**CONFIRMED:** a project stores a frame rate, a start frame, a current layer,
+a layer count, numbered layer records, and per layer a name/type/flags,
+before/after behaviour, first/last image and UI colour. Layer records are
+indexed with `layer%d`, and the loader loops over `layercount`.
+
+Evidence:
+`ev_c32d4dd074dbbc9725630e21b5cf7d4d8dd535c22869472c17de1bf7e5e040dc`.
+
+**INFERRED:** `u_loop` is the playback-loop setting and `u_anim` is an
+animation-mode flag; the labels are confirmed, their full semantics are not.
+The exact value types (integer, string, blob) and the default behaviour values
+are not established from this loader alone.
+
+**UNKNOWN:** whether these keys describe `.tvpp` projects, templates, or both.
+Next question: open a real `.tvpp`, change one timeline field at a time, and
+diff the configuration keys.
+
+### 7.2 Exposure commands (CONFIRMED)
+
+The script-command table exposes these timeline name/handler pairs:
+
+| script name | handler | evidence |
+|---|---|---|
+| `tv_exposureinfo` | `0x1404a1590` | `ev_864232dee7af15566e5475ec20469ecfebb341844f0f36d6cde1df62f5038cd6` |
+| `tv_exposureadd` | `0x1404a1300` | `ev_cb47a9053ffe515a7113db03355deac562861be682f50ad02fd99ffcd7ece928` |
+| `tv_layerhold` | `0x1404a0c30` | `ev_ab7dd51b865f45d35bcff41243a0c6ab5c7fc32cbc4c92bdfcfe560e574d20f1` |
+| `tv_framerate` | `0x1404ab320` | `ev_abddba1541016609c4e6ac8b27e9619a55b384dbdc52ff8beb07a401e7c99f66` |
+| `tv_layercreate` | `0x1404a5bc0` | `ev_0d218a41e26331a4722694afb5db33cc80163bcc7ba2ee21e4ab4094e7e32d3e` |
+
+The table also contains the script name `tv_layeranim`
+(`ev_03608e5e044e16a9213f6aa3c7de5a29755106446f68cb30981f257c5bcd7a4d`);
+its handler body was not recovered, so no behaviour is claimed for it.
+
+`tv_exposureinfo` (`0x1404a1590`) resolves the current layer and frame and
+returns one of three strings:
+
+- `"None"` — when the frame is before the first image, after the last image,
+  or the layer type is `6`;
+- `"Exposure %d %d"` — when the frame's exposure lookup succeeds; it calls the
+  exposure-count accessor `FUN_1408661d0`;
+- `"Head"` — when the frame is inside the first/last range but that lookup does
+  not take the exposure branch. **INFERRED:** this is the head of a drawing.
+
+Evidence:
+`ev_038f20904eb36ba4c9492c29c15816089b88d87ddd8993348ec2b144e7402c72`.
+
+`tv_exposureadd` (`0x1404a1300`) checks `layer_type != 6`, reads the count from
+`DAT_140da1054` (minimum 1), and calls `FUN_1400e34d0(layer, current_frame,
+count)`. That helper:
+
+1. checks a layer flag (`(*(uint *)(layer + 0x40) >> 4 & 1) == 0`);
+2. checks that the frame is between the first and last image;
+3. calls `FUN_140861d00(layer, frame, count)` and
+   `FUN_14073b130(layer, frame, count)`;
+4. refreshes the UI.
+
+`FUN_140861d00` switches on the layer type and calls a type-specific add
+function for types `1`, `2`, `4`, `5` and `8`.
+
+Evidence:
+`ev_c7113713ea73bf0688de24b519de8e4f17f2fc98e74ef20c29aa417950f807b7`
+(command), `ev_6b569e3b42491b292d36eb703d7046bb4054d5358fc07391a8e31dff56378369`
+(helper), `ev_d3c0f35b8b2e4477c8aa7aedd3242bb9a0d25d517ebef2800c22dd7f1ffb2340`
+(type dispatch).
+
+`tv_layerhold` (`0x1404a0c30`) first checks that the current layer type is not
+`6`, then routes to `FUN_1402a8030`, which creates a dialog titled
+`"Hold&Fetch"` and passes the current layer/frame values into its constructor.
+**CONFIRMED:** Hold is a UI command and type-6 layers are excluded.
+**UNKNOWN:** the dialog's exact effect on an existing exposure (insert, extend,
+split, or replace). Evidence:
+`ev_3c5bdbda9386b4985d88ebd502445cc410e5c63bde222d858f0e796bef33b2db`
+(handler), `ev_6332cda3fa9f1b7c2974142ddfdecb0acd5ae14a4526d823c4a83eccc2cda0ab`
+(dialog).
+
+`tv_layercreate` (`0x1404a5bc0`) accepts the type strings `"anim"` and
+`"folder"` and builds a create request from them. **CONFIRMED:** `anim` is the
+ordinary animation-layer type used by the create command. **UNKNOWN:** the
+exact object-construction path after the request. Evidence:
+`ev_dd5de44e11039ef52a6db683cb893e5996433b802f1f643a711653ecadf74198`.
+
+`tv_framerate` (`0x1404ab320`) parses a numeric argument and accepts the
+`timestretch`, `preview` and `info` options. **CONFIRMED:** there is a runtime
+frame-rate command with timestretch/preview handling. **UNKNOWN:** the exact
+project field it updates and its UI semantics.
+Evidence:
+`ev_5b9d2f3a733fce5860e553804107c75f2eae2f374a992963bbf0c4a2f5500846`.
+
+### 7.3 Layer storage and types (CONFIRMED)
+
+The accessors show a polymorphic layer object:
+
+- the layer type is the 32-bit value at `layer + 0x4c`;
+- type-specific object pointers are at `+0x50`, `+0x58`, `+0x60`, `+0x68`,
+  `+0x70`, `+0x78`, `+0x80`;
+- first-image accessor `FUN_1408654d0` switches on types `1, 2, 4, 5, 6, 7, 8`
+  and reads `+0x10` or `+8` from the selected object;
+- last-image accessor `FUN_1408666c0` switches on the same types and reads
+  `+0x14` or `+0xc`;
+- exposure-count accessor `FUN_1408661d0` and exposed-frame lookup
+  `FUN_1408663b0` use the same type dispatch.
+
+Evidence:
+`ev_39fa729b4156f21d18fd6982f221140425df7a298f7f4653359eafea4ebb87b3`
+(first image), `ev_637251335b06d2bdf451a1d892e839db22b72acd8e82209bd3d99ddf247d2513`
+(last image), `ev_3bba94657916fff742cb9bb10fc44d0c25504b03de28a12429bb477a169e29fb`
+(exposure count).
+
+**CONFIRMED:** there are at least seven layer variants, and not every layer is
+animated. `tv_exposureinfo` explicitly returns `"None"` for type `6`, and
+`tv_exposureadd` explicitly skips type `6`. **INFERRED:** type `6` is a
+non-animated image/background-like layer.
+
+**UNKNOWN:** the human names and full semantics of types `1, 2, 4, 5, 7, 8`,
+why type `3` is absent, and which variant is the ordinary animation layer.
+Next question: create one layer of each type in the retail UI and compare the
+`type` key with the timeline row's icon/menu.
+
+### 7.4 Before/after behaviour names (CONFIRMED)
+
+Six UI icon resources name the possible behaviours:
+
+| resource label | address | evidence |
+|---|---|---|
+| `u_LayerLoopNone.png` | `0x140b28358` | `ev_81403e153d47bb6726d215cc68f9d9eea544e81c6356126f5d0f30d8abd0753f` |
+| `u_LayerLoopRepeatAfter.png` | `0x140b28380` | `ev_ba7d15d683cae539b88cccca81cb1c7f0570f648cfd7c2ec56f424eea936fa02` |
+| `u_LayerLoopPingPong.png` | `0x140b283b8` | `ev_7691bcc1785102ecda1f0f4abe27da06136bd63ba7805df8d397bb19c6d902f2` |
+| `u_LayerLoopHoldAfter.png` | `0x140b283e8` | `ev_ed30670aaf1574f026c99eb726e7d805fdf98d6df9f8222ffc5567694bb27028` |
+| `u_LayerLoopRepeatBefore.png` | `0x140b28418` | `ev_fc3c93a74736bbead563321618787b23d81998ec4c1b93d3e3e9fed086e25468` |
+| `u_LayerLoopHoldBefore.png` | `0x140b28450` | `ev_553bb49329268fdad736d1fa210952e030d234bf96c7360d527ac184dd62fb8f` |
+
+The script names `tv_layerprebehavior`, `tv_layerpostbehavior`,
+`tv_firstimage` and `tv_lastimage` also exist:
+
+- `ev_fa93e118d5ca06d8a739dcd9d5758b568a468a2e8ebf21de49dce80c3ee13e86`
+- `ev_5db07af081a84231594f04b78d8dfccb8c20fd8513304b7b6a1b4d08c040b813`
+- `ev_1786525deb034f8744b69ce1567dc549aa3dee963bb83b066ecf74a52983c02c`
+- `ev_b215bda83ab12fd6a12e0ecde1575fcd2a4ad416e828485814a70c5d6ba63ce6`
+
+**CONFIRMED:** a layer has separate before and after behaviours, and the
+available concepts are `none`, repeat, ping-pong and hold. **INFERRED:** the
+Repeat/Hold icons map to the pre/post fields; `None` and `PingPong` appear as
+single icons. The exact enum encoding is not proven. **UNKNOWN:** the numeric
+values and the defaults for a new or imported layer.
+
+### 7.5 Timeline classes (CONFIRMED existence; INFERRED role)
+
+The public PDB symbols include:
+
+- `cTimelineLayer`, `cTimelineLayerOptions`, `cTimelineLayerTimeline`;
+- `cTimelineLayers`, `cTimelineStrip`, `cTimelineNotes`;
+- `cTimelineAudio`, `cTimelineAudioTrack`, `cTimelineAudioClip`;
+- `cCmdActivateDrawingFrame`, `cLayerProfileHandler`,
+  `cMenuLayerEventListener`.
+
+Two vtables are named:
+`cTimelineLayer::vftable` at `0x140b27c00`
+(`ev_5971ad74bf7d03977b93f73021c2e386f5af5f70e5cda54e43690afbf4bb4c15`) and
+`cTimelineLayers::vftable` at `0x140b284c0`
+(`ev_d58ad0ca5655a1e9d8186dc1b52e10eeaf5681b730bb6642b7891a7784cb9389`).
+Cross-references to the latter were also captured:
+`ev_916103a4993a8192b988f30a52ecfaaa15d06d354fabe5110b0ad4dca9b9e340`.
+
+The same name export resolves vftables for `cTimelineStrip`
+(`ev_0034407de0f02158d056bd9b9c621b48a7679e257e103d5489d5a07acab1994f`),
+`cTimelineNotes`
+(`ev_ce6a744419df13636dec05476c2faea118399eee55f9c4b27548779e4ce83a69`),
+`cTimelineAudio`
+(`ev_767b091ccdb01ab932abab1790b35ba3e90b83a30c4b56bce36f7a3bd4063669`),
+`cCmdActivateDrawingFrame`
+(`ev_bc9e54081e6c127ffee6cfd064beedc88daa582ca2104da285b4603a5bdfc78d`),
+`cLayerProfileHandler`
+(`ev_a53bfd4f0043ac601ab947c616db6be4fcb17e2cd7d3a79c93759bdd12e29c5d`)
+and `cMenuLayerEventListener`
+(`ev_8b11ea0906e9534504f46b1839fc0896c448d414231b5f4a9de2ff66a88438ce`).
+
+**CONFIRMED:** these classes exist and the layer container has a vtable.
+**INFERRED:** they implement the timeline's rows, strips, notes and audio
+lanes, and `cCmdActivateDrawingFrame` is the command that changes the active
+drawing/frame. **UNKNOWN:** their field layout, method roles and the exact UI
+path from a click to an exposure edit. Most methods are still `FUN_*`; a class
+name alone is not enough to reconstruct behaviour.
+
+### 7.6 What this means
+
+The evidence supports this model, which TVMini implements independently:
+
+1. A project has a frame rate, start frame, current layer, current frame,
+   layer count and loop setting.
+2. A layer has a name, type, flags, first/last exposed frame, a before
+   behaviour and an after behaviour.
+3. A frame is either the head of a drawing, a held frame, or outside the
+   layer's exposed range; the before/after behaviour decides what is shown
+   outside that range.
+4. Layers can have different types, and at least one type is not animated;
+   TVMini deliberately implements only its own ordinary animation layer.
+5. The timeline UI is a separate subsystem (`cTimeline*`) layered on top of
+   these exposure primitives.
+
+TVMini does **not** copy TVPaint's field layout or defaults. It uses absolute
+frame numbers, a JSON schema, drawings with a hold length, and the four
+behaviours `none`, `hold`, `repeat`, `pingpong`. New layers default to
+`preBehavior: "none"` / `postBehavior: "hold"`; that is a clean-room choice
+because the retail defaults were not established.
+
+The resulting requirements and tests are in `SPEC.md` sections 2 and 5.
+
+---
+
+## 8. The demo message source
 
 `Resources\data\english.tvpaint.loc`:
 
@@ -358,7 +613,7 @@ and `FUN_140a17b00` — the startup/trial banner, not the save path.
 
 ---
 
-## 8. Evidence index
+## 9. Evidence index
 
 | id | what it proves |
 |---|---|
@@ -373,10 +628,27 @@ and `FUN_140a17b00` — the startup/trial banner, not the save path.
 | `ev_b65a923c…97dd24` | demo flag `DAT_140dabf00` has only accessor references |
 | `ev_21bd61ec…50abcc` | recent-list add function has four callers |
 | `ev_a57a99eb…080b36f3` | Save command callers |
+| `ev_c32d4dd0…e040dc` | project loader reads timeline and per-layer keys |
+| `ev_b66122d4…1ba9db` | `u_framerate` key label |
+| `ev_55d28a80…6c2006` | `u_startframe` key label |
+| `ev_0a0087d4…c6026054` | `u_layercount` key label |
+| `ev_07d8c513…c7c1bce` | `u_layer%d` key label |
+| `ev_038f2090…402c72` | `tv_exposureinfo` output and type-6 handling |
+| `ev_c7113713…f807b7` | `tv_exposureadd` command |
+| `ev_6b569e3b…78369` | exposure-add helper checks flags and first/last image |
+| `ev_3c5bdbda…b33b2db` | `tv_layerhold` skips type-6 layers and opens the dialog |
+| `ev_6332cda3…cda0ab` | `tv_layerhold` opens the `Hold&Fetch` dialog |
+| `ev_dd5de44e…f74198` | `tv_layercreate` accepts `anim` / `folder` type strings |
+| `ev_39fa729b…87b3` | first-image accessor switches on layer type |
+| `ev_63725133…247d2513` | last-image accessor switches on layer type |
+| `ev_81403e15…bd0753f` | six before/after behaviour icon names |
+| `ev_5971ad74…bb4c15` | `cTimelineLayer::vftable` |
+| `ev_d58ad0ca…cb9389` | `cTimelineLayers::vftable` |
+| `ev_0034407d…cab1994f` | `cTimelineStrip::vftable`; other `cTimeline*` vftables also resolved |
 
 ---
 
-## 9. Limits of this analysis
+## 10. Limits of this analysis
 
 1. No runtime observation. Everything above is static. I did not launch the
    application, click menus, or attach a debugger.
@@ -386,19 +658,33 @@ and `FUN_140a17b00` — the startup/trial banner, not the save path.
 3. The File-menu Export command id is still unknown (section 5.3).
 4. The retail `plugins\saver` folder contents are unknown.
 5. The exact "Recent" UI the user means is unknown (section 6.3).
+6. Section 7 is structural and behavioural evidence, not a full timeline UI
+   reverse engineering. Most `cTimeline*` methods are still `FUN_*`.
+7. The human names and complete semantics of layer types `1, 2, 4, 5, 6, 7, 8`
+   are unknown; type `6` is only known to be treated as non-animated.
+8. The numeric encoding and default values of the before/after behaviours are
+   unknown, and the exact reflow rule behind the `Hold&Fetch` dialog was not
+   recovered.
+9. No runtime timeline operation was observed; the timeline commands are
+   evidenced statically.
 
 ---
 
-## 10. What this means for the clean-room build
+## 11. What this means for the clean-room build
 
-The four behaviours are small and well understood:
+The demo-blocked behaviours and the timeline primitives are small and well
+understood:
 
 1. **Save / Save As** — serialize the project model to a file, atomically.
-2. **Export** — render the current frame (and optionally a range) to an image
-   format, with a real result code and a visible error on failure.
+2. **Export** — render the current frame to a PNG, with a real result code and
+   a visible error on failure.
 3. **Recent** — a bounded, de-duplicated, persisted MRU list that is updated
-   only on *successful* open/save/export, and that silently drops entries whose
-   files no longer exist.
+   only on *successful* open/save, and that silently drops entries whose files
+   no longer exist.
+4. **Timeline / animation layers** — store drawings at absolute frames with a
+   hold length, resolve before/after behaviour outside a layer's exposed range,
+   composite visible layers for the current frame, and play at the project
+   frame rate.
 
-`SPEC.md` turns that into testable requirements, and `build/my-version`
-contains an independent implementation with tests.
+TVMini implements these independently. `SPEC.md` turns them into testable
+requirements, and `build/my-version` contains the implementation and tests.

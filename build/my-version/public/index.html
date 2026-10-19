@@ -17,7 +17,7 @@
           <hr />
           <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
           <button role="menuitem" data-action="saveAs">Save As…<span class="key">Ctrl+Shift+S</span></button>
-          <button role="menuitem" data-action="export">Export PNG…</button>
+          <button role="menuitem" data-action="export">Export current frame PNG…</button>
           <hr />
           <div class="submenu">
             <button role="menuitem" aria-haspopup="true" aria-expanded="false">Recent ▸</button>
@@ -53,20 +53,82 @@
           <span>Pen pressure</span>
         </label>
         <div class="meter">Pressure: <output id="pressureValue">—</output></div>
-        <button id="clearButton" class="wide">Clear canvas</button>
+
+        <div class="panel-title">Current layer</div>
+        <label class="field">
+          <span>Name</span>
+          <input id="layerName" type="text" maxlength="80" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span>Opacity <output id="opacityValue">100%</output></span>
+          <input id="opacity" type="range" min="0" max="100" value="100" />
+        </label>
+        <label class="field">
+          <span>Before first drawing</span>
+          <select id="preBehavior">
+            <option value="none">None (empty)</option>
+            <option value="hold">Hold first</option>
+            <option value="repeat">Repeat</option>
+            <option value="pingpong">Ping-pong</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>After last drawing</span>
+          <select id="postBehavior">
+            <option value="none">None (empty)</option>
+            <option value="hold">Hold last</option>
+            <option value="repeat">Repeat</option>
+            <option value="pingpong">Ping-pong</option>
+          </select>
+        </label>
+        <button id="clearButton" class="wide">Clear current drawing</button>
         <div class="hint">
-          Drag on the canvas to draw. A drawing tablet varies the width;
-          a mouse draws a constant width.<br />
-          The eraser removes paint and reveals the canvas or imported image
-          underneath. Press <code>E</code> / <code>B</code> to switch tools.<br />
+          Draw on the canvas. The timeline below shows one row per animation
+          layer and one column per frame. A filled dot is a drawing's first
+          frame; smaller dots are held frames.<br />
+          <code>Space</code> play/pause, <code>←</code>/<code>→</code> change
+          frame, <code>E</code>/<code>B</code> switch tools.<br />
           Opening a Clip Studio <code>.clip</code> file imports its saved
-          canvas preview; the original file is never changed.<br />
-          Recent updates only after a successful save or open.
+          canvas preview; the original file is never changed.
         </div>
       </aside>
 
-      <section class="canvas-wrap">
-        <canvas id="canvas" width="960" height="600"></canvas>
+      <section class="stage">
+        <section class="canvas-wrap">
+          <canvas id="canvas" width="960" height="600"></canvas>
+        </section>
+
+        <section class="timeline-panel" aria-label="Timeline">
+          <div class="timeline-toolbar">
+            <button id="playButton" title="Play or pause (Space)">▶ Play</button>
+            <label class="field checkbox inline">
+              <input id="loop" type="checkbox" checked />
+              <span>Loop</span>
+            </label>
+            <label class="field inline" title="Playback speed">
+              FPS <input id="fps" type="number" min="1" max="120" step="1" value="12" />
+            </label>
+            <label class="field inline" title="First frame number">
+              Start <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
+            </label>
+            <span id="frameLabel" class="frame-label">Frame 1</span>
+            <span class="spacer"></span>
+            <button id="addLayerButton" title="Add an animation layer">+ Layer</button>
+            <button id="deleteLayerButton" title="Delete the current layer">− Layer</button>
+            <button id="layerUpButton" title="Move layer up">↑</button>
+            <button id="layerDownButton" title="Move layer down">↓</button>
+            <button id="addFrameButton" title="Insert a blank drawing at the current frame">+ Drawing</button>
+            <button id="duplicateFrameButton" title="Duplicate the current drawing">Duplicate</button>
+            <button id="holdButton" title="Extend the current exposure by one frame">Hold +1</button>
+            <button id="deleteFrameButton" title="Delete the current drawing">Delete</button>
+            <label class="field inline" title="Exposure length of the current drawing">
+              Exposure <input id="exposure" type="number" min="1" max="10000" step="1" value="1" />
+            </label>
+          </div>
+          <div class="timeline-scroll">
+            <div id="timeline" class="timeline"></div>
+          </div>
+        </section>
       </section>
     </main>
 

@@ -78,9 +78,11 @@ test("export writes a PNG and does not change recent", async () => {
 
 test("invalid project is a 400 with a readable message", async () => {
   await withServer(async (app, dir) => {
+    const bad = createProject(40, 30);
+    bad.width = 0;
     const response = await post(app, "/api/save", {
       path: path.join(dir, "bad.tvmini"),
-      project: { format: "tvmini", version: 1, width: 0, height: 10, background: "#fff", strokes: [] },
+      project: bad,
     });
     assert.equal(response.status, 400);
     const body = await response.json();
@@ -110,7 +112,8 @@ test("import-clip turns a .clip preview into a project without touching recent",
     assert.equal(body.project.height, 24);
     assert.equal(body.project.image.width, 32);
     assert.equal(Buffer.from(body.project.image.data, "base64").equals(png), true);
-    assert.deepEqual(body.project.strokes, []);
+    assert.equal(body.project.layers.length, 1);
+    assert.deepEqual(body.project.layers[0].drawings, []);
 
     const recent = await (await fetch(`${app.url}/api/recent`)).json();
     assert.equal(recent.entries.length, 0);
@@ -141,6 +144,23 @@ test("directory listing returns folders first and rejects traversal", async () =
 
     const traversal = await fetch(`${app.url}/api/list?dir=${encodeURIComponent("../../")}`);
     assert.equal(traversal.status, 400);
+  });
+});
+
+test("stat reports whether a save target already exists", async () => {
+  await withServer(async (app, dir) => {
+    const target = path.join(dir, "existing.tvmini");
+    await fs.writeFile(target, "old");
+
+    const exists = await (await fetch(`${app.url}/api/stat?path=${encodeURIComponent(target)}`)).json();
+    assert.equal(exists.exists, true);
+    assert.equal(exists.dir, false);
+    assert.equal(exists.size, 3);
+
+    const missing = await (
+      await fetch(`${app.url}/api/stat?path=${encodeURIComponent(path.join(dir, "missing.tvmini"))}`)
+    ).json();
+    assert.equal(missing.exists, false);
   });
 });
 

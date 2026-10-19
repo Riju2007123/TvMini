@@ -35,7 +35,11 @@ test("renderProject draws the imported image behind strokes", () => {
     width: 32,
     height: 24,
   };
-  project.strokes = [{ color: "#0000ff", width: 6, points: [[16, 12]] }];
+  project.layers[0].drawings = [{
+    at: 1,
+    hold: 1,
+    strokes: [{ color: "#0000ff", width: 6, points: [[16, 12]] }],
+  }];
 
   const { width, data } = renderProject(project);
   const pixel = (x, y) => [...data.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)];
@@ -51,10 +55,14 @@ test("an eraser reveals the imported image underneath", () => {
     width: 32,
     height: 24,
   };
-  project.strokes = [
-    { color: "#0000ff", width: 20, points: [[16, 12]] },
-    { color: "#000000", width: 20, points: [[16, 12]], eraser: true },
-  ];
+  project.layers[0].drawings = [{
+    at: 1,
+    hold: 1,
+    strokes: [
+      { color: "#0000ff", width: 20, points: [[16, 12]] },
+      { color: "#000000", width: 20, points: [[16, 12]], eraser: true },
+    ],
+  }];
 
   const { width, data } = renderProject(project);
   const pixel = (x, y) => [...data.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)];
