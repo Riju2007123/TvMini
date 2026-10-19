@@ -1,0 +1,14 @@
+{
+  "name": "tvmini",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Clean-room save / export / recent-files demo (independent implementation)",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Untitled — TVMini</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="menubar">
+      <div class="menu">
+        <button id="fileButton" class="menu-title" aria-haspopup="true" aria-expanded="false">File</button>
+        <div id="fileMenu" class="menu-popup" role="menu" hidden>
+          <button role="menuitem" data-action="new">New<span class="key">Ctrl+N</span></button>
+          <button role="menuitem" data-action="open">Open…<span class="key">Ctrl+O</span></button>
+          <hr />
+          <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
+          <button role="menuitem" data-action="saveAs">Save As…<span class="key">Ctrl+Shift+S</span></button>
+          <button role="menuitem" data-action="export">Export PNG…</button>
+          <hr />
+          <div class="submenu">
+            <button role="menuitem" aria-haspopup="true" aria-expanded="false">Recent ▸</button>
+            <div id="recentMenu" class="submenu-popup" role="menu">
+              <button role="menuitem" disabled>No recent projects</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="brand">TVMini</div>
+    </header>
+
+    <main class="workspace">
+      <aside class="tools">
+        <label class="field">
+          <span>Colour</span>
+          <input id="color" type="color" value="#1f2937" />
+        </label>
+        <label class="field">
+          <span>Width <output id="widthValue">6</output></span>
+          <input id="width" type="range" min="1" max="60" value="6" />
+        </label>
+        <button id="clearButton" class="wide">Clear canvas</button>
+        <div class="hint">
+          Drag on the canvas to draw.<br />
+          Recent updates only after a successful save or open.
+        </div>
+      </aside>
+
+      <section class="canvas-wrap">
+        <canvas id="canvas" width="960" height="600"></canvas>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status">Ready</span>
+      <span id="pathLabel" class="path"></span>
+    </footer>
+
+    <div id="modal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <h2 id="modalTitle">Choose a file</h2>
+        <div class="browser">
+          <div class="browser-head">
+            <button id="upButton" title="Parent folder">↑</button>
+            <input id="dirInput" type="text" spellcheck="false" />
+            <button id="goButton">Go</button>
+          </div>
+          <ul id="dirList" class="dir-list"></ul>
+          <label class="field">
+            <span>File name</span>
+            <input id="nameInput" type="text" spellcheck="false" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button id="cancelButton">Cancel</button>
+          <button id="confirmButton" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
