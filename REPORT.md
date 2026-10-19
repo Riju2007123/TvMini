@@ -688,3 +688,69 @@ understood:
 
 TVMini implements these independently. `SPEC.md` turns them into testable
 requirements, and `build/my-version` contains the implementation and tests.
+
+---
+
+## 12. Clip Studio `.clip` export validation
+
+This section is **not** evidence about TVPaint. It records the separate work
+needed for TVMini's "Export layered `.clip`" feature.
+
+### 12.1 Format basis
+
+- **CONFIRMED (file bytes)** — a CSP document is a `CSFCHUNK` container. The
+  8-byte tag is followed by a big-endian total file size and the offset of
+  `CHNKHead`; `CHNKHead` points at the binary section; `CHNKExta` chunks hold
+  external data; `CHNKSQLi` holds a complete SQLite database; `CHNKFoot` ends
+  the file.
+- **CONFIRMED (file bytes)** — image data is stored outside SQLite. Each
+  `Offscreen.BlockData` is a 40-byte external ID, and `ExternalChunk` maps that
+  ID to the `CHNKExta` payload. Block tables inside `Offscreen.Attribute` give
+  the size of each zlib-compressed block record.
+- **CONFIRMED (public clean-room format notes)** — the block record layout,
+  BGRA row order, the folded 64×64 alpha plane, zlib compression, and the
+  “zero `BlockCheckSum` means no checksum” behaviour are documented by the
+  `clipparse` / `clip-tools` clean-room projects. TVMini's writer is an
+  independent JavaScript implementation of those notes.
+- **CONFIRMED (file bytes)** — the blank `emptyimage.clip` sample used as a
+  structural template is a normal CSP document (1600×1200, 5 mip levels, paper
+  plus one raster layer). TVMini replaces its canvas, layer rows, names, mip
+  chains and pixels; no sample artwork is retained.
+
+### 12.2 What the writer produces
+
+- Rebuilt `CSFCHUNK` header and `CHNKHead` binary-section size.
+- Canvas dimensions and mip chains for every layer.
+- Paper layer with the TVMini background colour as its initial fill.
+- One raster layer per TVMini animation layer, in CSP's bottom-to-top order.
+- Layer name, visibility, lock, opacity and UUID.
+- A 100 % offscreen buffer per layer, encoded as zlib block records.
+- Optional imported `.clip` preview as a separate layer under the animation
+  layers.
+- `CanvasPreview` PNG for CSP's canvas/layer previews.
+- One `CHNKExta` chunk per raster layer, with matching `ExternalChunk` offsets.
+
+### 12.3 Runtime result
+
+- **CONFIRMED** — a generated 640×480 file with two raster layers (blue at
+  50 % opacity, red at 100 %) was opened in **Clip Studio Paint EX v3.0.0**.
+  The title bar showed `tvmini-test (640 × 480 px, 72dpi, 100%)`; the layer
+  panel listed `Blue`, `Layer 1` and `Paper`; the red stroke was partially
+  covered by the blue stroke, matching the requested order and opacity. CSP
+  showed no “layer image is corrupted” warning.
+- **CONFIRMED by inspection of the written database** — the file had the
+  requested canvas size, one external chunk per raster layer, offsets that
+  match the container layout, and a `CanvasPreview` of the correct size.
+- **UNKNOWN / not implemented** — CSP animation tracks. TVMini exports the
+  current frame as a layered still image. The CSP `TimeLine`/`Track` binary
+  encoding for animation folders and cels was not reconstructed, so the writer
+  does not claim animated-CSP compatibility.
+- **NOT CLAIMED** — vector, text, mask, group, filter or non-normal blend
+  compatibility.
+
+### 12.4 Why this is still clean-room
+
+The writer contains no TVPaint code and no CSP code. It uses public file-format
+observations and a blank CSP document as a structural template. The project
+model, rendering order, exposure rules and export behaviour remain TVMini's own
+design; see `SPEC.md` FR-17.

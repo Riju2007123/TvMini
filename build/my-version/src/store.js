@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { normalizeProject, projectPath, ValidationError } from "./model.js";
+import { createClipBuffer } from "./clip-write.js";
 import { renderPng } from "./png.js";
 
 function tempName(target) {
@@ -71,4 +72,31 @@ export async function exportPng(filePath, project) {
   const { buffer, width, height } = renderPng(clean);
   await writeAtomic(target, buffer);
   return { path: target, bytes: buffer.length, width, height };
+}
+
+/**
+ * Export the current frame as a layered Clip Studio Paint document.
+ *
+ * The writer uses a blank CSP document as a structural template, then rebuilds
+ * the canvas, layer rows, offscreen block tables, and external image chunks.
+ * TVMini timelines are not encoded as CSP animation tracks; each TVMini layer
+ * becomes one raster layer containing its current-frame drawing.
+ */
+export async function exportClip(filePath, project, sourcePath = null) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  const clean = normalizeProject(project);
+  const target = path.resolve(path.extname(filePath) === "" ? `${filePath}.clip` : filePath);
+  if (
+    typeof sourcePath === "string" &&
+    sourcePath.trim() !== "" &&
+    path.resolve(sourcePath).toLowerCase() === target.toLowerCase()
+  ) {
+    throw new ValidationError("refusing to overwrite the imported .clip file");
+  }
+  const name = path.basename(target, path.extname(target));
+  const { buffer, width, height, layers } = await createClipBuffer(clean, { name });
+  await writeAtomic(target, buffer);
+  return { path: target, bytes: buffer.length, width, height, layers };
 }

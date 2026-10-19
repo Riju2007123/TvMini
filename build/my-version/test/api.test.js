@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { startServer } from "../server.js";
+import { findClipDatabase } from "../src/clip.js";
 import { createProject } from "../src/model.js";
 import { encodePng } from "../src/png.js";
 import { solid, writeClipFixture } from "./clip-fixture.js";
@@ -73,6 +75,76 @@ test("export writes a PNG and does not change recent", async () => {
 
     const recent = await (await fetch(`${app.url}/api/recent`)).json();
     assert.equal(recent.entries.length, 0);
+  });
+});
+
+test("export-clip writes a layered CSP container and does not change recent", async () => {
+  await withServer(async (app, dir) => {
+    const target = path.join(dir, "layers"); // extension added by the server
+    const project = createProject(64, 48);
+    project.layers[0].drawings = [
+      {
+        at: 1,
+        hold: 1,
+        strokes: [
+          { color: "#ff0000", width: 8, points: [[10, 10], [40, 30]] },
+        ],
+      },
+    ];
+
+    const response = await post(app, "/api/export-clip", { path: target, project });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(path.extname(body.path), ".clip");
+    assert.equal(body.width, 64);
+    assert.equal(body.height, 48);
+    assert.equal(body.layers, 2); // paper + one raster layer
+
+    const bytes = await fs.readFile(body.path);
+    assert.equal(bytes.toString("ascii", 0, 8), "CSFCHUNK");
+    assert.equal(Number(bytes.readBigUInt64BE(8)), bytes.length);
+
+    const databaseBytes = findClipDatabase(bytes);
+    const dbPath = path.join(dir, "inspect.db");
+    await fs.writeFile(dbPath, databaseBytes);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const canvas = db.prepare("SELECT CanvasWidth, CanvasHeight FROM Canvas").get();
+      assert.equal(canvas.CanvasWidth, 64);
+      assert.equal(canvas.CanvasHeight, 48);
+      const raster = db
+        .prepare("SELECT COUNT(*) AS count FROM Layer WHERE LayerType = 1")
+        .get();
+      assert.equal(raster.count, 1);
+      const external = db.prepare("SELECT COUNT(*) AS count FROM ExternalChunk").get();
+      assert.equal(external.count, 1);
+      const preview = db
+        .prepare("SELECT ImageWidth, ImageHeight FROM CanvasPreview")
+        .get();
+      assert.equal(preview.ImageWidth, 64);
+      assert.equal(preview.ImageHeight, 48);
+    } finally {
+      db.close();
+    }
+
+    const recent = await (await fetch(`${app.url}/api/recent`)).json();
+    assert.equal(recent.entries.length, 0);
+  });
+});
+
+test("export-clip refuses to overwrite the imported .clip source", async () => {
+  await withServer(async (app, dir) => {
+    const source = path.join(dir, "source.clip");
+    await fs.writeFile(source, "original clip bytes");
+
+    const response = await post(app, "/api/export-clip", {
+      path: source,
+      sourcePath: source,
+      project: createProject(40, 30),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /imported \.clip/);
+    assert.equal(await fs.readFile(source, "utf8"), "original clip bytes");
   });
 });
 

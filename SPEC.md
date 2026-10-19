@@ -25,12 +25,14 @@ TVMini is a local drawing and animation app. You can:
 - save/reopen a project, export the current frame as a PNG, and use a Recent
   list;
 - import the preview image stored inside a Clip Studio Paint `.clip` file,
-  read-only.
+  read-only;
+- export the current frame as a layered Clip Studio Paint `.clip` file.
 
 Deliberately **not** in scope:
 
 - reading or writing TVPaint `.tvpp` / `.tvps` files;
-- writing Clip Studio `.clip` files;
+- writing CSP animation tracks, vector/text layers, masks or groups into
+  `.clip`;
 - matching TVPaint's UI, exact layer types, exposure reflow rules, defaults or
   project format;
 - audio layers, cameras, selection/vector layers, onion skin, blend modes
@@ -80,6 +82,8 @@ Deliberately **not** in scope:
   layer's exposed range.
 - Export does **not** change the project's path and does **not** add to Recent
   (Recent is for projects).
+- A second export action writes the same current frame as a layered Clip Studio
+  `.clip` (FR-17). It also leaves the path and Recent unchanged.
 - On failure: no partial file left behind.
 
 ### FR-6 Recent
@@ -236,6 +240,28 @@ Deliberately **not** in scope:
 - The imported `.clip` preview is behind all animation layers.
 - Export uses the same layer resolution and compositing rules as the screen.
 
+### FR-17 Export a layered Clip Studio `.clip`
+- File → **Export layered .clip (current frame)…** writes a `CSFCHUNK`
+  container with an embedded SQLite database and external zlib-compressed image
+  blocks.
+- The result contains:
+  - the paper/background colour;
+  - the imported `.clip` preview as a separate raster layer, when present;
+  - one raster layer per TVMini animation layer, in the same top-to-bottom
+    order;
+  - each layer's current-frame drawing, name, visibility, lock and opacity.
+- The canvas size, resolution and composed `CanvasPreview` match the project.
+- The output must open in Clip Studio Paint EX v3.0.0 without a corruption
+  warning. The current-frame result is a layered **still image**; TVMini does
+  not write CSP animation folders/tracks, vector/text layers, masks or groups.
+- Export appends `.clip` when the chosen name has no extension, asks before
+  replacing an existing file, and refuses to overwrite the `.clip` imported in
+  the current session.
+- Export does not change the project path and does not add to Recent.
+- On failure: no partial file left behind.
+- Node 22.5+ is required for `node:sqlite`; on older Node the endpoint returns
+  a readable error.
+
 ---
 
 ## 3. Data format
@@ -359,7 +385,8 @@ If any step fails, unlink the temp file and return the error.
 | `POST` | `/api/open` | `{ path }` | `{ project, path, recent }` (v1 migrated) |
 | `POST` | `/api/import-clip` | `{ path }` | `{ project, path, name }` (read-only preview import; one empty animation layer) |
 | `POST` | `/api/save` | `{ path, project }` | `{ path, bytes, recent }` |
-| `POST` | `/api/export` | `{ path, project }` | `{ path, bytes, width, height }` (current frame) |
+| `POST` | `/api/export` | `{ path, project }` | `{ path, bytes, width, height }` (current frame PNG) |
+| `POST` | `/api/export-clip` | `{ path, project }` | `{ path, bytes, width, height, layers }` (current frame layered `.clip`) |
 | `GET` | `/api/recent` | — | `{ entries[] }` |
 | `POST` | `/api/recent/remove` | `{ path }` | `{ entries[] }` |
 
@@ -368,7 +395,7 @@ text; it never fails silently.
 
 ### 4.2 UI
 - File menu: New, Open…, Import .clip preview…, Save, Save As…, Export current
-  frame PNG…, Recent ▸.
+  frame PNG…, Export layered .clip (current frame)…, Recent ▸.
 - Tools: Brush / Eraser buttons (`B` / `E`), colour, width, pen pressure,
   undo / redo.
 - Current layer: name, opacity, before-first behaviour, after-last behaviour,
@@ -431,6 +458,9 @@ Every item below is automated in `build/my-version/test/` unless marked
 | T40 | current-frame export | exporting frame N writes frame N, not frame 1 |
 | T41 | `.clip` import API | returns a version 2 project with one empty animation layer |
 | T42 | stat endpoint | reports `exists`, `dir` and `size` for an existing file and `exists: false` for a missing one |
+| T43 | `.clip` export API | 200; `CSFCHUNK`; file length in header; one raster layer; one `CHNKExta`; preview size matches |
+| T44 | `.clip` canvas/layers | embedded SQLite has the project size, paper, expected raster layer(s) and external offsets |
+| T45 | `.clip` opens in CSP EX v3.0.0 (**manual**) | no corruption warning; layer names/order/opacity and drawings are visible |
 
 Manual browser checks performed for the UI layer:
 
@@ -441,7 +471,9 @@ Manual browser checks performed for the UI layer:
 - add, move, lock, hide and delete layers; verify order and opacity;
 - switch pre/post behaviour and confirm virtual/empty cells;
 - play/pause and step frames;
-- Save As, reopen, export and compare the PNG pixels.
+- Save As, reopen, export and compare the PNG pixels;
+- export a layered `.clip`, open it in Clip Studio Paint EX v3.0.0, and verify
+  the canvas, layer names/order/opacity and current-frame drawings.
 
 ---
 
@@ -451,9 +483,12 @@ Manual browser checks performed for the UI layer:
 - One canvas, 1…100 animation layers; no audio, camera, selection/vector or
   image layers.
 - Only `blend: "normal"`; no per-drawing opacity, masks, groups or onion skin.
-- Export is PNG of the current frame only; no image sequences or movies.
+- Export is PNG or a layered `.clip` of the current frame; no image sequences
+  or movies.
 - `.clip` import reads only the embedded canvas preview: layers, timelines and
-  vector data are not imported, and `.clip` files are never written.
+  vector data are not imported, and the imported file is never written.
+- `.clip` export writes raster layers only. It does not write CSP animation
+  tracks, vector/text layers, masks or groups.
 - TVMini does not read or write `.tvpp`; its timing model is inspired by the
   evidence but its schema and defaults are its own.
 - The exact meanings of TVPaint's layer types, exposure split/reflow rules and

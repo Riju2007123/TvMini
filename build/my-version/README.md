@@ -4,11 +4,12 @@ A small, self-contained drawing and 2D animation app. It implements the four
 behaviours the TVPaint demo blocks **and** a simple timeline/animation-layer
 model. It shares **no code, data or file formats** with TVPaint.
 
-- No dependencies. Node 20+ (Node 22.5+ for `.clip` import).
+- No dependencies. Node 20+ (Node 22.5+ for `.clip` import/export).
 - The UI is plain HTML/CSS/JS served by a loopback-only HTTP server.
 - Project files use `*.tvmini` (JSON), **not** `.tvpp`.
-- Clip Studio `.clip` files can be imported read-only (preview image only).
-- One canvas, up to 100 animation layers, current-frame PNG export.
+- Clip Studio `.clip` files can be imported read-only (preview image only) and
+  exported as layered CSP documents for the current frame.
+- One canvas, up to 100 animation layers, current-frame PNG and `.clip` export.
 
 ## Run
 
@@ -23,6 +24,41 @@ Custom port:
 ```powershell
 node server.js --port 5000
 ```
+
+## Run on GitHub Pages (no server)
+
+The app also runs as a **static site**, so it can be published with GitHub
+Pages:
+
+```powershell
+cd build\my-version
+node scripts\serve-static.mjs 8123
+# open http://127.0.0.1:8123
+```
+
+This serves `public/` with no backend, exactly the way GitHub Pages serves
+it. The repository contains `.github/workflows/pages.yml`, which publishes
+`build/my-version/public` on every push to `master`:
+
+**https://Riju2007123.github.io/tvpaint-save-export-rea/**
+
+### What changes without a server
+
+| Feature | With the Node server | On a static host |
+|---|---|---|
+| Draw, timeline, layers, pen pressure, eraser | same | same |
+| Save / open a project | real file paths, atomic writes | browser download, or the File System Access API to save in place |
+| Export PNG / `.clip` | written straight to disk | browser download |
+| Import a `.clip` preview | same | same |
+| Recent projects | paths on disk, re-opened by path | kept in `localStorage`; a browser cannot re-open a file by path, so the project text is stored |
+| Folder browser | in-app directory browser | the browser's own file picker |
+
+The `.clip` writer runs **entirely in the browser**: SQLite is
+[sql.js](https://github.com/sql-js/sql.js) (WebAssembly), zlib is
+[fflate](https://github.com/101arrowz/fflate), and the `Buffer` API is
+[feross/buffer](https://github.com/feross/buffer). The same format code
+(`public/core/`) runs under Node, so a file exported in the browser and one
+exported by the server are the same format.
 
 ## Test
 
@@ -39,6 +75,7 @@ node --test
 | Save | writes the current path atomically | `src/store.js` `saveProject` |
 | Save As | picks a path, appends `.tvmini`, confirms overwrite | `public/app.js` `saveAs` |
 | Export PNG | renders the current frame and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
+| Export `.clip` | writes the current frame as a layered Clip Studio document | `src/clip-write.js`, `src/store.js` `exportClip` |
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
@@ -55,6 +92,8 @@ Key guarantees:
   failed save leaves the old file intact.
 - **Recent only changes on success.** `POST /api/save` and `POST /api/open`
   update the list only after the file operation succeeds.
+- **The imported `.clip` is never written.** Export refuses the current
+  session's import source; a `.clip` export goes only to a different path.
 
 ## Timeline and animation layers
 
@@ -213,23 +252,84 @@ The original `.clip` is **never written**. Only the flattened preview is
 imported — layers, timelines and vector data are not. Canvases must be within
 16…4096 px. Node 22.5+ is required for the built-in `node:sqlite` reader.
 
+## Clip Studio `.clip` export
+
+File → **Export layered .clip (current frame)…** writes a real `CSFCHUNK`
+document that Clip Studio Paint can open as a normal illustration:
+
+- one raster layer per TVMini animation layer, in the same top-to-bottom order;
+- layer name, visibility, lock and opacity are copied;
+- the panel/paper colour becomes the document background;
+- an imported `.clip` preview becomes a separate raster layer below the
+  animation layers;
+- every layer contains its drawing resolved at the **current frame**.
+
+The timeline itself is **flattened to the current frame**. TVMini does not write
+CSP animation folders or `Track`/`TimeLine` records, so the result is a layered
+still image, not an animated CSP timeline. Vector, text, masks, groups and blend
+modes other than normal are not produced.
+
+How it works: `src/clip-write.js` starts from the blank CSP document in
+`assets/clip-template.clip`, rewrites the canvas size and mip chains, builds a
+block table for each layer, zlib-compresses the RGBA tiles into `CHNKExta`
+chunks, updates `ExternalChunk`, stores the composed preview in
+`CanvasPreview`, and rebuilds the `CSFCHUNK` container. The writer uses
+`node:sqlite`, so it needs Node 22.5+.
+
+The blank template came from the MIT-licensed `clipparse` project's
+`emptyimage.clip` sample. It contains no artwork; TVMini replaces its names,
+canvas, layers and pixels. The format notes are from the public clean-room CLIP
+format descriptions, not from TVPaint.
+
+**Validation:** a generated 640 × 480 file with two layers (blue at 50 % and
+red at 100 %) was opened in **Clip Studio Paint EX v3.0.0**; the title bar
+reported `tvmini-test (640 × 480 px, 72dpi, 100%)`, the layer panel showed
+`Blue`, `Layer 1` and `Paper`, and both strokes rendered with the expected
+order and opacity. There was no corruption warning.
+
 ## Layout
 
 ```
 build/my-version/
   server.js            HTTP API + static server
-  src/model.js         project schema + validation + v1 migration
-  src/store.js         atomic save/load/export
-  src/png.js           rasteriser + PNG encoder/decoder (zlib)
-  src/clip.js          read-only Clip Studio preview import
-  src/recent.js        persistent MRU
-  public/timeline.js   shared frame/exposure/behaviour logic
-  public/app.js        canvas, timeline UI, history
+  scripts/
+    serve-static.mjs   serve public/ with no backend (GitHub Pages preview)
+  public/              the whole web app; this folder is what Pages publishes
+    index.html
+    app.js             canvas, timeline UI, history
+    history.js
+    timeline.js        shared frame/exposure/behaviour logic
+    style.css
+    core/              platform-independent logic, used by Node and the browser
+      model.js         project schema + validation + v1 migration
+      png.js           rasteriser + PNG encoder/decoder
+      clip.js          read-only Clip Studio preview import
+      clip-write.js    layered Clip Studio .clip writer
+      platform.js      file backend: Node server or browser storage
+      storage.js       browser storage (File System Access API, localStorage)
+      sqlite.js        SQLite: node:sqlite under Node, sql.js in the browser
+      bytes.js         Buffer: native under Node, feross/buffer in the browser
+      zlib.js          zlib: node:zlib under Node, fflate in the browser
+    assets/
+      clip-template.clip  blank CSP structural template
+    vendor/            vendored browser libraries (MIT / public domain)
+  src/                 Node-only server side
+    model.js           re-exports public/core/model.js
+    png.js             re-exports public/core/png.js
+    clip.js            re-exports public/core/clip.js, adds file access
+    clip-write.js      re-exports public/core/clip-write.js, adds file access
+    store.js           atomic save/load/export
+    recent.js          persistent MRU
   test/                node:test suites
 ```
 
 `public/timeline.js` is pure logic shared by the browser, the server-side PNG
 renderer and the tests, so exposure lookup has one definition.
+
+`public/core/` is the same idea for the binary formats: the model, the PNG
+codec, the Clip Studio reader and writer, and the SQLite/zlib/Buffer
+dependencies all have one implementation that runs in both Node and the
+browser.
 
 ## Mapping to the report
 
@@ -249,8 +349,15 @@ finding:
 - One canvas, 1…100 animation layers; no audio, camera, selection/vector or
   image layers.
 - Only `blend: "normal"`; no per-drawing opacity, masks, groups or onion skin.
-- PNG export of the current frame only; no sequences or movies.
-- `.clip` import is preview-only and read-only.
+- PNG and `.clip` export of the current frame only; no sequences or movies.
+- `.clip` import is preview-only and read-only. `.clip` export is a layered
+  still image for the current frame; it does not write CSP animation tracks.
+- `.clip` export needs Node 22.5+ under the Node server, because it uses
+  `node:sqlite`. On a static host it uses SQLite compiled to WebAssembly
+  instead, and needs no Node at all.
+- On a static host the browser's security model applies: a project can only be
+  saved to a file the user picks, and a recent project cannot be re-opened
+  from a path.
 - TVMini does not read or write `.tvpp`. The timing model is informed by the
   evidence, but the schema and defaults are its own.
 - The file picker is a simple directory browser, not a native dialog.

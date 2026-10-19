@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProject, normalizeProject, ValidationError } from "./src/model.js";
 import { readClipPreview } from "./src/clip.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
-import { exportPng, openProject, saveProject } from "./src/store.js";
+import { exportClip, exportPng, openProject, saveProject } from "./src/store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "public");
@@ -210,6 +210,12 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       if (route === "POST /api/export") {
         const body = await readJson(req);
         sendJson(res, 200, await exportPng(body.path, body.project));
+        return;
+      }
+
+      if (route === "POST /api/export-clip") {
+        const body = await readJson(req);
+        sendJson(res, 200, await exportClip(body.path, body.project, body.sourcePath));
         return;
       }
 

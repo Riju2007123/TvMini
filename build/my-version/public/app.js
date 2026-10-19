@@ -1,4 +1,5 @@
 import { History } from "./history.js";
+import { detectBackend } from "./core/platform.js";
 import {
   contentEnd,
   deleteDrawing,
@@ -79,6 +80,7 @@ const state = {
   project: blankProject(960, 600),
   currentPath: null,
   suggestedName: null,
+  clipSourcePath: null,
   dirty: false,
   recent: [],
   drawing: null,
@@ -244,27 +246,26 @@ function withTvminiExtension(filePath) {
   return /\.[^\\/]*$/.test(trimmed) ? trimmed : `${trimmed}.tvmini`;
 }
 
-/* -------------------------------------------------------------- api calls */
-
-async function api(method, endpoint, body) {
-  const response = await fetch(endpoint, {
-    method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  let payload = {};
-  try {
-    payload = await response.json();
-  } catch {
-    payload = {};
-  }
-
-  if (!response.ok) {
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  }
-  return payload;
+function withClipExtension(filePath) {
+  const trimmed = filePath.trim();
+  if (!/\.[^\\/]*$/.test(trimmed)) return `${trimmed}.clip`;
+  return /\.clip$/i.test(trimmed) ? trimmed : `${trimmed}.clip`;
 }
+
+/** Windows paths are case-insensitive; this only guards the imported source. */
+function samePath(left, right) {
+  const clean = (value) =>
+    value.replace(/\//g, "\\").replace(/\\+/g, "\\").replace(/\\$/, "").toLowerCase();
+  return clean(left) === clean(right);
+}
+
+/* --------------------------------------------------------------- backend */
+
+/**
+ * The file backend. This is the Node server when one is running, and the
+ * browser's own storage on a static host such as GitHub Pages.
+ */
+let backend = null;
 
 /* ------------------------------------------------------------------- view */
 
@@ -1266,11 +1267,9 @@ function renderRecent() {
     recentMenu.append(button);
   }
 }
-
 async function refreshRecent() {
   try {
-    const data = await api("GET", "/api/recent");
-    state.recent = data.entries;
+    state.recent = await backend.listRecent();
     renderRecent();
   } catch (error) {
     setStatus(error.message, true);
@@ -1287,6 +1286,7 @@ async function handleAction(action) {
     if (action === "save") return save();
     if (action === "saveAs") return saveAs();
     if (action === "export") return exportPng();
+    if (action === "exportClip") return exportClip();
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -1303,6 +1303,7 @@ function newProject() {
   state.project = blankProject(960, 600);
   state.currentPath = null;
   state.suggestedName = null;
+  state.clipSourcePath = null;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
@@ -1315,27 +1316,31 @@ async function openPath(filePath) {
   if (!confirmDiscard()) return;
   if (/\.clip$/i.test(filePath)) return importClip(filePath);
 
-  const data = await api("POST", "/api/open", { path: filePath });
+  const data = await backend.open(filePath);
+  if (!data) return;
   stopPlayback();
   state.project = data.project;
-  state.currentPath = data.path;
+  state.currentPath = data.name;
   state.suggestedName = null;
+  state.clipSourcePath = null;
   state.dirty = false;
-  state.recent = data.recent;
+  if (data.recent) state.recent = data.recent;
   history.reset();
   updateHistoryButtons();
   resizeCanvas();
   refreshTitle();
   renderRecent();
-  setStatus(`Opened ${baseName(data.path)}`);
+  setStatus(`Opened ${baseName(data.name)}`);
 }
 
 async function importClip(filePath) {
-  const data = await api("POST", "/api/import-clip", { path: filePath });
+  const data = await backend.importClip(filePath);
+  if (!data) return;
   stopPlayback();
   state.project = data.project;
   state.currentPath = null;
   state.suggestedName = `${data.name.replace(/\.clip$/i, "")}.tvmini`;
+  state.clipSourcePath = data.path || filePath;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
@@ -1349,77 +1354,85 @@ async function importClip(filePath) {
 
 async function chooseAndImportClip() {
   if (!confirmDiscard()) return;
-  const filePath = await choosePath({ mode: "open", title: "Import .clip preview" });
+  const filePath = await backend.chooseAndImportClip();
   if (!filePath) return;
-  if (!/\.clip$/i.test(filePath)) {
-    setStatus("Choose a Clip Studio .clip file", true);
-    return;
-  }
-  await importClip(filePath);
 }
 
 async function chooseAndOpen() {
   if (!confirmDiscard()) return;
-  const filePath = await choosePath({ mode: "open", title: "Open project" });
-  if (!filePath) return;
-  await openPath(filePath);
+  const data = await backend.chooseAndOpen();
+  if (!data) return;
+  stopPlayback();
+  state.project = data.project;
+  state.currentPath = data.name;
+  state.suggestedName = null;
+  state.clipSourcePath = null;
+  state.dirty = false;
+  if (data.recent) state.recent = data.recent;
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  renderRecent();
+  setStatus(`Opened ${baseName(data.name)}`);
 }
 
 async function save() {
-  if (!state.currentPath) return saveAs();
-  const data = await api("POST", "/api/save", {
-    path: state.currentPath,
-    project: state.project,
-  });
-  state.currentPath = data.path;
+  const data = await backend.saveProject(
+    state.project,
+    state.currentPath ? baseName(state.currentPath) : null,
+  );
+  if (!data) return;
+  state.currentPath = data.name;
   state.dirty = false;
-  state.recent = data.recent;
+  if (data.recent) state.recent = data.recent;
   refreshTitle();
   renderRecent();
-  setStatus(`Saved ${baseName(data.path)} (${data.bytes} bytes)`);
+  setStatus(`Saved ${baseName(data.name)} (${data.bytes} bytes)`);
 }
 
 async function saveAs() {
-  const filePath = await choosePath({
-    mode: "save",
-    title: "Save project as",
-    name: state.currentPath
+  const data = await backend.saveProject(
+    state.project,
+    state.currentPath
       ? baseName(state.currentPath)
       : state.suggestedName || "untitled.tvmini",
-  });
-  if (!filePath) return;
-
-  const target = withTvminiExtension(filePath);
-  const info = await api("GET", `/api/stat?path=${encodeURIComponent(target)}`);
-  if (info.dir) {
-    setStatus("That path is a folder, not a file", true);
-    return;
-  }
-  if (info.exists && !confirm(`Replace existing file?\n\n${target}`)) {
-    setStatus("Save cancelled");
-    return;
-  }
-
-  const data = await api("POST", "/api/save", { path: target, project: state.project });
-  state.currentPath = data.path;
+    { saveAs: true },
+  );
+  if (!data) return;
+  state.currentPath = data.name;
   state.dirty = false;
-  state.recent = data.recent;
+  if (data.recent) state.recent = data.recent;
   refreshTitle();
   renderRecent();
-  setStatus(`Saved ${baseName(data.path)} (${data.bytes} bytes)`);
+  setStatus(`Saved ${baseName(data.name)} (${data.bytes} bytes)`);
 }
 
 async function exportPng() {
-  const filePath = await choosePath({
-    mode: "save",
-    title: "Export current frame PNG",
-    name: `${state.currentPath ? baseName(state.currentPath).replace(/\.[^.]+$/, "") : "untitled"}.png`,
-  });
-  if (!filePath) return;
-
   stopPlayback();
-  const data = await api("POST", "/api/export", { path: filePath, project: state.project });
-  setStatus(`Exported frame ${state.project.currentFrame} as ${data.width}×${data.height} PNG (${data.bytes} bytes)`);
+  const stem = state.currentPath
+    ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
+    : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
+  const data = await backend.exportPng(state.project, stem);
+  if (!data) return;
+  setStatus(
+    `Exported frame ${state.project.currentFrame} as ${data.width}×${data.height} PNG (${data.bytes} bytes)`,
+  );
+  refreshTitle();
+}
+
+async function exportClip() {
+  const stem = state.currentPath
+    ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
+    : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
+  stopPlayback();
+  setStatus("Building layered .clip…");
+  const data = await backend.exportClip(state.project, stem, state.clipSourcePath);
+  if (!data) return;
+  setStatus(
+    `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
+      `to ${baseName(data.path)} (${data.bytes} bytes). Timeline frames are flattened to the current frame.`,
+  );
   refreshTitle();
 }
 
@@ -1455,7 +1468,7 @@ function finishPicker(value) {
 async function loadDir(dir) {
   const current = picker;
   try {
-    const data = await api("GET", `/api/list?dir=${encodeURIComponent(dir)}`);
+    const data = await backend.listDirectory(dir);
     if (!current || picker !== current) return;
     picker.dir = data.dir;
     dirInput.value = data.dir;
@@ -1606,25 +1619,29 @@ document.addEventListener("keydown", (event) => {
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
-  let serverReady = true;
+  backend = await detectBackend({ pickPath: choosePath });
+
+  if (backend.mode !== "server") {
+    // Without a server there is no directory to browse, so the built-in
+    // file dialog is hidden and the browser's own picker is used.
+    document.body.classList.add("browser-mode");
+  }
+
   try {
-    const data = await api("GET", "/api/state");
-    state.recent = data.recent;
-    state.homeDir = data.home;
+    state.recent = await backend.listRecent();
     renderRecent();
   } catch (error) {
-    serverReady = false;
-    setStatus(`Cannot reach the local server: ${error.message}`, true);
+    setStatus(error.message, true);
   }
 
   resizeCanvas();
   refreshTitle();
   updateHistoryButtons();
-  if (serverReady) {
-    setStatus(
-      "Ready — draw on the canvas, then use the timeline to add layers and drawings",
-    );
-  }
+  setStatus(
+    backend.mode === "server"
+      ? "Ready — draw on the canvas, then use the timeline to add layers and drawings"
+      : "Ready — running in the browser. Files are saved to this device.",
+  );
 }
 
 boot();
