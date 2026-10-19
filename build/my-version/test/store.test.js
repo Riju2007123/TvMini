@@ -100,6 +100,37 @@ test("render fills the background and paints the stroke", () => {
   assert.deepEqual(at(10, 10), [255, 0, 0]);
 });
 
+test("pressure tapers the rendered stroke", () => {
+  const light = createProject(41, 41);
+  light.strokes.push({ color: "#0000ff", width: 20, points: [[20, 20, 0.05]] });
+
+  const lightImage = renderProject(light);
+  const atLight = (x, y) =>
+    Array.from(lightImage.data.subarray((y * 41 + x) * 3, (y * 41 + x) * 3 + 3));
+
+  assert.deepEqual(atLight(20, 20), [0, 0, 255]);
+  assert.deepEqual(atLight(20, 25), [255, 255, 255]);
+
+  const full = createProject(41, 41);
+  full.strokes.push({ color: "#0000ff", width: 20, points: [[20, 20]] });
+  const fullImage = renderProject(full);
+  const atFull = (x, y) =>
+    Array.from(fullImage.data.subarray((y * 41 + x) * 3, (y * 41 + x) * 3 + 3));
+
+  assert.deepEqual(atFull(20, 25), [0, 0, 255]);
+});
+
+test("a pressured project survives save and open", async () => {
+  const dir = await tempDir();
+  const file = path.join(dir, "pressure.tvmini");
+  const project = createProject(50, 50);
+  project.strokes.push({ color: "#123456", width: 9, points: [[1, 2, 0.1], [3, 4, 0.9]] });
+
+  await saveProject(file, project);
+  const opened = await openProject(file);
+  assert.deepEqual(opened.project.strokes[0].points, [[1, 2, 0.1], [3, 4, 0.9]]);
+});
+
 test("export writes a valid PNG with the project size", async () => {
   const dir = await tempDir();
   const file = path.join(dir, "out.png");

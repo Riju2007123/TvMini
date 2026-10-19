@@ -65,6 +65,18 @@ Deliberately **not** in scope:
 ### FR-7 Unsaved-changes guard
 - New / Open / Quit must ask before discarding unsaved strokes.
 
+### FR-8 Pen pressure
+- When the pointer is a pen (`pointerType === "pen"`) and "Pen pressure" is on,
+  record `pressure` (0…1) with every point.
+- Stroke width is `width × (0.2 + 0.8 × pressure)`: 20 % of the slider value at
+  zero pressure, full width at 1.0.
+- The on-screen canvas and the PNG export must taper identically.
+- A mouse or touch pointer records plain `[x, y]` points and keeps a constant
+  width.
+- Turning the checkbox off forces constant width for new strokes; existing
+  strokes keep their recorded pressure.
+- Files written before this feature (2-element points) stay valid.
+
 ---
 
 ## 3. Data format
@@ -79,10 +91,15 @@ Project file: UTF-8 JSON, extension `.tvmini`.
   "height": 600,
   "background": "#ffffff",
   "strokes": [
-    { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] }
+    { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] },
+    { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] }
   ]
 }
 ```
+
+A point is `[x, y]` or `[x, y, pressure]`. The third value is optional and,
+when present, must be between 0 and 1. `width` is the diameter at full
+pressure.
 
 Validation rules:
 
@@ -93,7 +110,7 @@ Validation rules:
 | `width`, `height` | integer 16…4096 |
 | `background`, `color` | `#rrggbb` |
 | `width` (stroke) | number 1…200 |
-| `points` | array of `[x, y]` number pairs, at least 1 |
+| `points` | array of `[x, y]` or `[x, y, p]`; `p` is 0…1 |
 | `strokes` | array, max 10000 |
 
 Unknown fields are ignored so the format can grow.
@@ -158,6 +175,8 @@ Every item below is automated in `build/my-version/test/`.
 | T14 | HTTP save/open/export | 200 + correct payload |
 | T15 | HTTP bad path | 4xx + `error` string |
 | T16 | HTTP path traversal in `/api/list` | rejected |
+| T17 | pressure 0.05 with width 20 | core painted, 5 px away stays background |
+| T18 | pressured project save → open | pressure values preserved |
 
 ---
 

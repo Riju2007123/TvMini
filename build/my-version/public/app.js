@@ -12,6 +12,8 @@ const recentMenu = document.getElementById("recentMenu");
 const colorInput = document.getElementById("color");
 const widthInput = document.getElementById("width");
 const widthValue = document.getElementById("widthValue");
+const pressureInput = document.getElementById("pressure");
+const pressureValue = document.getElementById("pressureValue");
 const clearButton = document.getElementById("clearButton");
 
 const modal = document.getElementById("modal");
@@ -30,6 +32,8 @@ const state = {
   dirty: false,
   recent: [],
   drawing: null,
+  pressureEnabled: true,
+  homeDir: ".",
 };
 
 /* ------------------------------------------------------------------ model */
@@ -110,23 +114,50 @@ function render() {
   for (const stroke of state.project.strokes) {
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
+
+    const radii = stroke.points.map((point) => strokeRadius(stroke, point));
 
     if (stroke.points.length === 1) {
-      const [x, y] = stroke.points[0];
       ctx.beginPath();
-      ctx.arc(x, y, Math.max(0.5, stroke.width / 2), 0, Math.PI * 2);
+      ctx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
       ctx.fill();
       continue;
     }
 
-    ctx.beginPath();
-    ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+    const tapered = stroke.points.some((point) => point.length === 3);
+    if (!tapered) {
+      ctx.lineWidth = stroke.width;
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+      for (let i = 1; i < stroke.points.length; i += 1) {
+        ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+      }
+      ctx.stroke();
+      continue;
     }
-    ctx.stroke();
+
+    // Pressure strokes are drawn segment by segment with an interpolated width.
+    for (let i = 1; i < stroke.points.length; i += 1) {
+      const from = stroke.points[i - 1];
+      const to = stroke.points[i];
+      ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+      ctx.beginPath();
+      ctx.moveTo(from[0], from[1]);
+      ctx.lineTo(to[0], to[1]);
+      ctx.stroke();
+    }
   }
+}
+
+const MIN_PRESSURE_SCALE = 0.2;
+
+function strokeRadius(stroke, point) {
+  const base = stroke.width / 2;
+  const radius =
+    point.length === 3
+      ? base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * point[2])
+      : base;
+  return Math.max(0.5, radius);
 }
 
 /* ---------------------------------------------------------------- drawing */
@@ -139,14 +170,36 @@ function canvasPoint(event) {
   ];
 }
 
+function pressureFor(event) {
+  if (!state.pressureEnabled) return null;
+  if (event.pointerType !== "pen") return null;
+
+  const value = Number(event.pressure);
+  if (!Number.isFinite(value)) return null;
+  // A pen touching the tablet can briefly report 0; keep a visible hairline.
+  return Math.min(1, Math.max(0.05, value));
+}
+
+function drawPoint(event) {
+  const [x, y] = canvasPoint(event);
+  const pressure = pressureFor(event);
+  if (pressure === null) return [x, y];
+  pressureValue.textContent = pressure.toFixed(2);
+  return [x, y, pressure];
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
-  canvas.setPointerCapture(event.pointerId);
+  try {
+    canvas.setPointerCapture(event.pointerId);
+  } catch {
+    // Synthetic or already-released pointers have nothing to capture.
+  }
 
   const stroke = {
     color: colorInput.value,
     width: Number(widthInput.value),
-    points: [canvasPoint(event)],
+    points: [drawPoint(event)],
   };
 
   state.project.strokes.push(stroke);
@@ -158,7 +211,7 @@ canvas.addEventListener("pointerdown", (event) => {
 
 canvas.addEventListener("pointermove", (event) => {
   if (!state.drawing) return;
-  const point = canvasPoint(event);
+  const point = drawPoint(event);
   const last = state.drawing.points[state.drawing.points.length - 1];
   if (Math.hypot(point[0] - last[0], point[1] - last[1]) < 1.5) return;
   state.drawing.points.push(point);
@@ -176,6 +229,15 @@ canvas.addEventListener("pointercancel", endStroke);
 
 widthInput.addEventListener("input", () => {
   widthValue.textContent = widthInput.value;
+});
+
+pressureInput.addEventListener("change", () => {
+  state.pressureEnabled = pressureInput.checked;
+  setStatus(
+    state.pressureEnabled
+      ? "Pen pressure on — width follows the stylus"
+      : "Pen pressure off — constant width",
+  );
 });
 
 clearButton.addEventListener("click", () => {

@@ -39,9 +39,15 @@
           <span>Width <output id="widthValue">6</output></span>
           <input id="width" type="range" min="1" max="60" value="6" />
         </label>
+        <label class="field checkbox">
+          <input id="pressure" type="checkbox" checked />
+          <span>Pen pressure</span>
+        </label>
+        <div class="meter">Pressure: <output id="pressureValue">—</output></div>
         <button id="clearButton" class="wide">Clear canvas</button>
         <div class="hint">
-          Drag on the canvas to draw.<br />
+          Drag on the canvas to draw. A drawing tablet varies the width;
+          a mouse draws a constant width.<br />
           Recent updates only after a successful save or open.
         </div>
       </aside>

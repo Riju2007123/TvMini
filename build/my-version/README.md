@@ -37,6 +37,7 @@ node --test test/
 | Save As | picks a path, appends `.tvmini`, saves | `public/app.js` `saveAs` |
 | Export PNG | rasterises the canvas and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
+| Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
 
 Key guarantees:
 
@@ -46,6 +47,22 @@ Key guarantees:
   failed save leaves the old file intact.
 - **Recent only changes on success.** `POST /api/save` and `POST /api/open`
   update the list only after the file operation succeeds.
+
+## Pen pressure
+
+A stylus reports `PointerEvent.pressure` between 0 and 1. When "Pen pressure"
+is on (the default), every point stores that value as a third coordinate:
+
+```json
+"points": [[100, 20, 0.15], [140, 90, 0.85]]
+```
+
+Stroke diameter = `width × (0.2 + 0.8 × pressure)`, so light strokes stay
+visible at 20 % of the slider value and full pressure reaches 100 %.
+
+The same formula is used by `src/png.js`, so the exported PNG matches what you
+see on screen. Mouse and touch input keep plain `[x, y]` points and a constant
+width. Old files with 2-element points still load unchanged.
 
 ## Layout
 

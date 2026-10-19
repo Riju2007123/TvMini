@@ -53,6 +53,36 @@ test("normalizeProject rejects bad colours, points and widths", () => {
   );
 });
 
+test("normalizeProject accepts an optional pressure per point", () => {
+  const base = createProject(100, 100);
+  const clean = normalizeProject({
+    ...base,
+    strokes: [{ color: "#000000", width: 8, points: [[1, 2, 0.25], [3, 4]] }],
+  });
+  assert.deepEqual(clean.strokes[0].points, [[1, 2, 0.25], [3, 4]]);
+});
+
+test("normalizeProject rejects pressure outside 0..1", () => {
+  const base = createProject(100, 100);
+  const stroke = (pressure) => ({
+    ...base,
+    strokes: [{ color: "#000000", width: 8, points: [[0, 0, pressure]] }],
+  });
+  assert.throws(() => normalizeProject(stroke(1.5)), /between 0 and 1/);
+  assert.throws(() => normalizeProject(stroke(-0.1)), /between 0 and 1/);
+});
+
+test("normalizeProject rejects a fourth coordinate", () => {
+  const base = createProject(100, 100);
+  assert.throws(
+    () => normalizeProject({
+      ...base,
+      strokes: [{ color: "#000000", width: 8, points: [[0, 0, 0.5, 9]] }],
+    }),
+    /\[x, y, pressure\]/,
+  );
+});
+
 test("projectPath appends the extension only when missing", () => {
   assert.equal(path.basename(projectPath("C:/tmp/demo")), "demo.tvmini");
   assert.equal(path.basename(projectPath("C:/tmp/demo.tvmini")), "demo.tvmini");

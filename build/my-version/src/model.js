@@ -45,17 +45,24 @@ function points(value, label) {
     throw new ValidationError(`${label} has too many points`);
   }
   return value.map((point, index) => {
-    if (!Array.isArray(point) || point.length !== 2) {
-      throw new ValidationError(`${label}[${index}] must be [x, y]`);
+    if (!Array.isArray(point) || (point.length !== 2 && point.length !== 3)) {
+      throw new ValidationError(`${label}[${index}] must be [x, y] or [x, y, pressure]`);
     }
     const x = finiteNumber(point[0], `${label}[${index}][0]`);
     const y = finiteNumber(point[1], `${label}[${index}][1]`);
     if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) {
       throw new ValidationError(`${label}[${index}] is out of range`);
     }
-    return [x, y];
+    if (point.length === 2) return [x, y];
+
+    const pressure = finiteNumber(point[2], `${label}[${index}][2]`);
+    if (pressure < 0 || pressure > 1) {
+      throw new ValidationError(`${label}[${index}][2] must be between 0 and 1`);
+    }
+    return [x, y, pressure];
   });
 }
+
 
 /** Create a blank project. */
 export function createProject(width = 960, height = 600, background = "#ffffff") {

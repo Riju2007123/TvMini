@@ -35,17 +35,30 @@ function disc(data, width, height, cx, cy, radius, rgb) {
   }
 }
 
-/** Paint a segment by sampling discs along it. */
-function segment(data, width, height, [x0, y0], [x1, y1], radius, rgb) {
+/** Smallest fraction of the brush width used at zero pressure. */
+export const MIN_PRESSURE_SCALE = 0.2;
+
+/** Radius of one point: constant, or tapered by the optional pressure value. */
+function pointRadius(stroke, point) {
+  const base = stroke.width / 2;
+  const radius =
+    point.length === 3
+      ? base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * point[2])
+      : base;
+  return Math.max(0.5, radius);
+}
+
+/** Paint a segment by sampling discs with linearly interpolated radius. */
+function segment(data, width, height, [x0, y0], [x1, y1], r0, r1, rgb) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const length = Math.hypot(dx, dy);
-  const step = Math.max(0.5, radius / 2);
+  const step = Math.max(0.5, Math.min(r0, r1) / 2);
   const steps = Math.max(1, Math.ceil(length / step));
 
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
-    disc(data, width, height, x0 + dx * t, y0 + dy * t, radius, rgb);
+    disc(data, width, height, x0 + dx * t, y0 + dy * t, r0 + (r1 - r0) * t, rgb);
   }
 }
 
@@ -63,13 +76,23 @@ export function renderProject(project) {
 
   for (const stroke of project.strokes) {
     const rgb = parseHex(stroke.color);
-    const radius = Math.max(0.5, stroke.width / 2);
+    const radii = stroke.points.map((point) => pointRadius(stroke, point));
+
     if (stroke.points.length === 1) {
-      disc(data, width, height, stroke.points[0][0], stroke.points[0][1], radius, rgb);
+      disc(data, width, height, stroke.points[0][0], stroke.points[0][1], radii[0], rgb);
       continue;
     }
     for (let i = 1; i < stroke.points.length; i += 1) {
-      segment(data, width, height, stroke.points[i - 1], stroke.points[i], radius, rgb);
+      segment(
+        data,
+        width,
+        height,
+        stroke.points[i - 1],
+        stroke.points[i],
+        radii[i - 1],
+        radii[i],
+        rgb,
+      );
     }
   }
 
