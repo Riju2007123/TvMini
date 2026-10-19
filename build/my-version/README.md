@@ -38,6 +38,7 @@ node --test test/
 | Export PNG | rasterises the canvas and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
+| Undo / redo | 100-step snapshot history, toolbar + shortcuts | `public/history.js` |
 
 Key guarantees:
 
@@ -63,6 +64,17 @@ visible at 20 % of the slider value and full pressure reaches 100 %.
 The same formula is used by `src/png.js`, so the exported PNG matches what you
 see on screen. Mouse and touch input keep plain `[x, y]` points and a constant
 width. Old files with 2-element points still load unchanged.
+
+## Undo / redo
+
+Each finished stroke (pointer up) and each "Clear canvas" records the strokes
+as they were *before* the change. The toolbar buttons and `Ctrl+Z` / `Ctrl+Y` /
+`Ctrl+Shift+Z` walk that stack.
+
+- 100 steps are kept; the oldest is dropped.
+- A new stroke after an undo throws away the redo branch (standard behaviour).
+- New and Open reset the history.
+- Undo/redo mark the document unsaved; Save still goes to the same path.
 
 ## Layout
 

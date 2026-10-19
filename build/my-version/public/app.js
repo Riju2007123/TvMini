@@ -1,3 +1,5 @@
+import { History } from "./history.js";
+
 const FORMAT = "tvmini";
 const VERSION = 1;
 
@@ -15,6 +17,8 @@ const widthValue = document.getElementById("widthValue");
 const pressureInput = document.getElementById("pressure");
 const pressureValue = document.getElementById("pressureValue");
 const clearButton = document.getElementById("clearButton");
+const undoButton = document.getElementById("undoButton");
+const redoButton = document.getElementById("redoButton");
 
 const modal = document.getElementById("modal");
 const modalTitle = document.getElementById("modalTitle");
@@ -32,9 +36,50 @@ const state = {
   dirty: false,
   recent: [],
   drawing: null,
+  strokeBefore: null,
   pressureEnabled: true,
   homeDir: ".",
 };
+
+const history = new History({ limit: 100 });
+
+function cloneStrokes() {
+  return structuredClone(state.project.strokes);
+}
+
+function updateHistoryButtons() {
+  undoButton.disabled = !history.canUndo;
+  redoButton.disabled = !history.canRedo;
+}
+
+function recordHistory(before) {
+  history.record(before);
+  updateHistoryButtons();
+}
+
+function undo() {
+  if (state.drawing) return;
+  const previous = history.undo(cloneStrokes());
+  if (!previous) return;
+  state.project.strokes = structuredClone(previous);
+  state.dirty = true;
+  render();
+  refreshTitle();
+  updateHistoryButtons();
+  setStatus("Undo");
+}
+
+function redo() {
+  if (state.drawing) return;
+  const next = history.redo(cloneStrokes());
+  if (!next) return;
+  state.project.strokes = structuredClone(next);
+  state.dirty = true;
+  render();
+  refreshTitle();
+  updateHistoryButtons();
+  setStatus("Redo");
+}
 
 /* ------------------------------------------------------------------ model */
 
@@ -202,6 +247,7 @@ canvas.addEventListener("pointerdown", (event) => {
     points: [drawPoint(event)],
   };
 
+  state.strokeBefore = cloneStrokes();
   state.project.strokes.push(stroke);
   state.drawing = stroke;
   state.dirty = true;
@@ -221,6 +267,11 @@ canvas.addEventListener("pointermove", (event) => {
 function endStroke() {
   if (!state.drawing) return;
   state.drawing = null;
+
+  const before = state.strokeBefore;
+  state.strokeBefore = null;
+  if (before) recordHistory(before);
+
   setStatus(`${state.project.strokes.length} stroke(s)`);
 }
 
@@ -243,11 +294,16 @@ pressureInput.addEventListener("change", () => {
 clearButton.addEventListener("click", () => {
   if (state.project.strokes.length === 0) return;
   if (!confirm("Clear every stroke on this canvas?")) return;
+  const before = cloneStrokes();
   state.project.strokes = [];
+  recordHistory(before);
   state.dirty = true;
   refreshTitle();
   render();
 });
+
+undoButton.addEventListener("click", undo);
+redoButton.addEventListener("click", redo);
 
 /* --------------------------------------------------------------- menu bar */
 
@@ -351,6 +407,8 @@ function newProject() {
   state.project = blankProject(960, 600);
   state.currentPath = null;
   state.dirty = false;
+  history.reset();
+  updateHistoryButtons();
   resizeCanvas();
   refreshTitle();
   setStatus("New project");
@@ -363,6 +421,8 @@ async function openPath(filePath) {
   state.currentPath = data.path;
   state.dirty = false;
   state.recent = data.recent;
+  history.reset();
+  updateHistoryButtons();
   resizeCanvas();
   refreshTitle();
   renderRecent();
@@ -536,16 +596,29 @@ document.addEventListener("keydown", (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   if (!modifier) return;
 
-  if (event.key.toLowerCase() === "s" && event.shiftKey) {
+  const key = event.key.toLowerCase();
+  const typing =
+    event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+
+  if (!typing && key === "z" && event.shiftKey) {
+    event.preventDefault();
+    redo();
+  } else if (!typing && key === "z") {
+    event.preventDefault();
+    undo();
+  } else if (!typing && key === "y") {
+    event.preventDefault();
+    redo();
+  } else if (key === "s" && event.shiftKey) {
     event.preventDefault();
     saveAs();
-  } else if (event.key.toLowerCase() === "s") {
+  } else if (key === "s") {
     event.preventDefault();
     save();
-  } else if (event.key.toLowerCase() === "o") {
+  } else if (key === "o") {
     event.preventDefault();
     chooseAndOpen();
-  } else if (event.key.toLowerCase() === "n") {
+  } else if (key === "n") {
     event.preventDefault();
     newProject();
   }
@@ -566,6 +639,7 @@ async function boot() {
 
   resizeCanvas();
   refreshTitle();
+  updateHistoryButtons();
 }
 
 boot();

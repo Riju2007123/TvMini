@@ -33,7 +33,8 @@ about licence enforcement is reported as documentation only.
 - **Step 5 — REPORT:** done — `REPORT.md`.
 - **Step 6 — BUILD:** done — `SPEC.md` + `build/my-version` (independent app + tests).
   - Follow-up: pen pressure support (per-point `[x, y, pressure]`, tapered
-    canvas + PNG export). 34/34 tests pass.
+    canvas + PNG export) and undo/redo (100-step snapshot history).
+    40/40 tests pass.
 - **Step 7 — REPO:** private repo
   `https://github.com/Riju2007123/tvpaint-save-export-rea` (branch `master`).
 

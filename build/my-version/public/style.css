@@ -186,6 +186,18 @@ button {
   cursor: pointer;
 }
 
+.tools button:disabled {
+  color: #9ca3af;
+  background: #f3f4f6;
+  cursor: default;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .tools button:hover, .modal-actions button:hover, .browser-head button:hover {
   background: #f3f4f6;
 }

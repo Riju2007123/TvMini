@@ -77,6 +77,15 @@ Deliberately **not** in scope:
   strokes keep their recorded pressure.
 - Files written before this feature (2-element points) stay valid.
 
+### FR-9 Undo / redo
+- One history step per completed stroke and per "Clear canvas".
+- At least 100 steps; older steps are dropped.
+- Undo/redo buttons are disabled when there is nothing to do.
+- `Ctrl+Z` undoes; `Ctrl+Y` and `Ctrl+Shift+Z` redo.
+- Making a new change after an undo discards the redo branch.
+- New and Open reset the history.
+- Undo/redo never changes the project path; they mark the document unsaved.
+
 ---
 
 ## 3. Data format
@@ -177,6 +186,10 @@ Every item below is automated in `build/my-version/test/`.
 | T16 | HTTP path traversal in `/api/list` | rejected |
 | T17 | pressure 0.05 with width 20 | core painted, 5 px away stays background |
 | T18 | pressured project save → open | pressure values preserved |
+| T19 | history undo/redo | states restored in order |
+| T20 | new change after undo | redo branch discarded |
+| T21 | history limit | oldest state dropped |
+| T22 | reset | both directions cleared |
 
 ---
 
