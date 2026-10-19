@@ -11,12 +11,14 @@ described in `REPORT.md` was used as a requirement.
 ## 1. Product statement
 
 TVMini is a local drawing app. You can draw strokes on a canvas, keep the work
-in a project file, reopen it later, export the current canvas as a PNG, and
-pick recently used projects from a menu.
+in a project file, reopen it later, export the current canvas as a PNG, pick
+recently used projects from a menu, and import the preview image stored inside
+a Clip Studio Paint `.clip` file.
 
 Deliberately **not** in scope:
 
 - reading or writing TVPaint `.tvpp` / `.tvps` files
+- writing Clip Studio `.clip` files
 - matching TVPaint's UI, tool set or layer model
 - any interaction with TVPaint's licence or demo checks
 
@@ -86,6 +88,19 @@ Deliberately **not** in scope:
 - New and Open reset the history.
 - Undo/redo never changes the project path; they mark the document unsaved.
 
+### FR-10 Import a Clip Studio `.clip`
+- Opening a `.clip` file (via Open… or "Import .clip preview…") reads it
+  read-only and loads its embedded canvas preview as the new canvas.
+- The original `.clip` file is never written or modified.
+- The new document has no path and is offered a `.tvmini` name on Save As.
+- The preview image is stored inside the `.tvmini` project, so reopening the
+  project does not need the `.clip` file.
+- PNG export composites the preview image first, then the strokes.
+- A file that is not a `CSFCHUNK` container, has no embedded SQLite database,
+  has no `CanvasPreview` row, or has a canvas outside 16…4096 px is rejected
+  with a readable error and leaves the current project untouched.
+- Importing does not add anything to Recent (Recent is for project files).
+
 ---
 
 ## 3. Data format
@@ -99,6 +114,7 @@ Project file: UTF-8 JSON, extension `.tvmini`.
   "width": 960,
   "height": 600,
   "background": "#ffffff",
+  "image": null,
   "strokes": [
     { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] },
     { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] }
@@ -110,6 +126,14 @@ A point is `[x, y]` or `[x, y, pressure]`. The third value is optional and,
 when present, must be between 0 and 1. `width` is the diameter at full
 pressure.
 
+`image` is optional. When present it is a base64 PNG drawn under the strokes;
+its pixel size must equal the canvas. It is produced by `.clip` import and
+then travels with the project:
+
+```json
+"image": { "width": 2136, "height": 1418, "data": "iVBORw0KGgo..." }
+```
+
 Validation rules:
 
 | field | rule |
@@ -118,6 +142,7 @@ Validation rules:
 | `version` | integer `1` |
 | `width`, `height` | integer 16…4096 |
 | `background`, `color` | `#rrggbb` |
+| `image` | optional; `{ data, width, height }` where `data` is base64 PNG (max 8,000,000 chars) and the size equals the canvas |
 | `width` (stroke) | number 1…200 |
 | `points` | array of `[x, y]` or `[x, y, p]`; `p` is 0…1 |
 | `strokes` | array, max 10000 |
@@ -146,6 +171,7 @@ If any step fails, unlink the temp file and return the error.
 | `GET` | `/api/state` | — | `{ recent, cwd, platform }` |
 | `GET` | `/api/list?dir=` | — | `{ dir, parent, entries[] }` |
 | `POST` | `/api/open` | `{ path }` | `{ project, path }` |
+| `POST` | `/api/import-clip` | `{ path }` | `{ project, path, name }` (read-only preview import) |
 | `POST` | `/api/save` | `{ path, project }` | `{ path, bytes, recent }` |
 | `POST` | `/api/export` | `{ path, project }` | `{ path, bytes, width, height }` |
 | `GET` | `/api/recent` | — | `{ entries[] }` |
@@ -155,7 +181,8 @@ Errors: HTTP 4xx/5xx with `{ "error": "human readable" }`. The UI shows this
 text; it never fails silently.
 
 ### 4.2 UI
-- File menu: New, Open…, Save, Save As…, Export PNG…, Recent ▸, Exit.
+- File menu: New, Open…, Import .clip preview…, Save, Save As…, Export PNG…,
+  Recent ▸, Exit.
 - Canvas: drag to draw; stroke colour and width controls.
 - Status bar: last result or error.
 - Title bar: `name — TVMini` with `*` while unsaved.
@@ -190,6 +217,9 @@ Every item below is automated in `build/my-version/test/`.
 | T20 | new change after undo | redo branch discarded |
 | T21 | history limit | oldest state dropped |
 | T22 | reset | both directions cleared |
+| T23 | `.clip` import | preview PNG, size and base64 match the source |
+| T24 | `.clip` rejection | foreign file and damaged database give a readable error |
+| T25 | image + strokes export | imported pixels and stroke pixels appear in the PNG |
 
 ---
 
@@ -198,4 +228,6 @@ Every item below is automated in `build/my-version/test/`.
 - Browser UI is served locally; it is not a hosted service.
 - One canvas, one layer, no animation timeline.
 - Export is PNG only.
+- `.clip` import reads only the embedded canvas preview: layers, timelines and
+  vector data are not imported, and `.clip` files are never written.
 - No cloud sync, no telemetry, no network access beyond loopback.

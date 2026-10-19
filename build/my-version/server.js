@@ -3,7 +3,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ValidationError } from "./src/model.js";
+import { FORMAT, VERSION, normalizeProject, ValidationError } from "./src/model.js";
+import { readClipPreview } from "./src/clip.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
 import { exportPng, openProject, saveProject } from "./src/store.js";
 
@@ -160,6 +161,26 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         const body = await readJson(req);
         const result = await openProject(body.path);
         sendJson(res, 200, { ...result, recent: await recent.add(result.path) });
+        return;
+      }
+
+      if (route === "POST /api/import-clip") {
+        const body = await readJson(req);
+        const preview = await readClipPreview(body.path);
+        const project = normalizeProject({
+          format: FORMAT,
+          version: VERSION,
+          width: preview.width,
+          height: preview.height,
+          background: "#ffffff",
+          image: {
+            data: preview.png.toString("base64"),
+            width: preview.width,
+            height: preview.height,
+          },
+          strokes: [],
+        });
+        sendJson(res, 200, { path: preview.path, name: preview.name, project });
         return;
       }
 

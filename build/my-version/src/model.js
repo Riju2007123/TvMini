@@ -72,8 +72,39 @@ export function createProject(width = 960, height = 600, background = "#ffffff")
     width: integerInRange(width, "width", MIN_SIZE, MAX_SIZE),
     height: integerInRange(height, "height", MIN_SIZE, MAX_SIZE),
     background: color(background, "background"),
+    image: null,
     strokes: [],
   };
+}
+
+function normalizeImage(value, width, height) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError("image must be an object");
+  }
+
+  const imageWidth = integerInRange(value.width, "image.width", MIN_SIZE, MAX_SIZE);
+  const imageHeight = integerInRange(value.height, "image.height", MIN_SIZE, MAX_SIZE);
+
+  if (imageWidth !== width || imageHeight !== height) {
+    throw new ValidationError("image size must match the canvas");
+  }
+  if (typeof value.data !== "string" || value.data.length === 0) {
+    throw new ValidationError("image.data must be base64 text");
+  }
+  if (value.data.length > 8_000_000) {
+    throw new ValidationError("image.data is too large");
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) {
+    throw new ValidationError("image.data must be base64 text");
+  }
+
+  const bytes = Buffer.from(value.data, "base64");
+  if (bytes.length < 8 || bytes.readUInt32BE(0) !== 0x89504e47) {
+    throw new ValidationError("image.data must be a PNG");
+  }
+
+  return { data: value.data, width: imageWidth, height: imageHeight };
 }
 
 /**
@@ -94,6 +125,7 @@ export function normalizeProject(input) {
   const width = integerInRange(input.width, "width", MIN_SIZE, MAX_SIZE);
   const height = integerInRange(input.height, "height", MIN_SIZE, MAX_SIZE);
   const background = color(input.background, "background");
+  const image = normalizeImage(input.image, width, height);
 
   if (!Array.isArray(input.strokes)) {
     throw new ValidationError("strokes must be an array");
@@ -119,7 +151,7 @@ export function normalizeProject(input) {
     }
   }
 
-  return { format: FORMAT, version: VERSION, width, height, background, strokes };
+  return { format: FORMAT, version: VERSION, width, height, background, image, strokes };
 }
 
 /** Normalize a user-supplied project path. */

@@ -33,6 +33,7 @@ const confirmButton = document.getElementById("confirmButton");
 const state = {
   project: blankProject(960, 600),
   currentPath: null,
+  suggestedName: null,
   dirty: false,
   recent: [],
   drawing: null,
@@ -90,6 +91,7 @@ function blankProject(width, height) {
     width,
     height,
     background: "#ffffff",
+    image: null,
     strokes: [],
   };
 }
@@ -149,9 +151,36 @@ function resizeCanvas() {
   render();
 }
 
+let previewKey = null;
+let previewImage = null;
+
+/** Lazily decode the imported .clip preview and redraw once it is ready. */
+function projectImage() {
+  const data = state.project.image?.data;
+  if (!data) {
+    previewKey = null;
+    previewImage = null;
+    return null;
+  }
+
+  if (data !== previewKey) {
+    previewKey = data;
+    previewImage = new Image();
+    previewImage.onload = () => render();
+    previewImage.src = `data:image/png;base64,${data}`;
+  }
+
+  return previewImage?.complete ? previewImage : null;
+}
+
 function render() {
   ctx.fillStyle = state.project.background;
   ctx.fillRect(0, 0, state.project.width, state.project.height);
+
+  const image = projectImage();
+  if (image) {
+    ctx.drawImage(image, 0, 0, state.project.width, state.project.height);
+  }
 
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -389,6 +418,7 @@ async function handleAction(action) {
   try {
     if (action === "new") return newProject();
     if (action === "open") return chooseAndOpen();
+    if (action === "importClip") return chooseAndImportClip();
     if (action === "save") return save();
     if (action === "saveAs") return saveAs();
     if (action === "export") return exportPng();
@@ -406,6 +436,7 @@ function newProject() {
   if (!confirmDiscard()) return;
   state.project = blankProject(960, 600);
   state.currentPath = null;
+  state.suggestedName = null;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
@@ -416,9 +447,12 @@ function newProject() {
 
 async function openPath(filePath) {
   if (!confirmDiscard()) return;
+  if (/\.clip$/i.test(filePath)) return importClip(filePath);
+
   const data = await api("POST", "/api/open", { path: filePath });
   state.project = data.project;
   state.currentPath = data.path;
+  state.suggestedName = null;
   state.dirty = false;
   state.recent = data.recent;
   history.reset();
@@ -427,6 +461,33 @@ async function openPath(filePath) {
   refreshTitle();
   renderRecent();
   setStatus(`Opened ${baseName(data.path)}`);
+}
+
+async function importClip(filePath) {
+  const data = await api("POST", "/api/import-clip", { path: filePath });
+  state.project = data.project;
+  state.currentPath = null;
+  state.suggestedName = `${data.name.replace(/\.clip$/i, "")}.tvmini`;
+  state.dirty = false;
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  setStatus(
+    `Imported the preview from ${data.name} (${data.project.width}×${data.project.height}). ` +
+      "Save as .tvmini to keep it — the .clip itself is never changed.",
+  );
+}
+
+async function chooseAndImportClip() {
+  if (!confirmDiscard()) return;
+  const filePath = await choosePath({ mode: "open", title: "Import .clip preview" });
+  if (!filePath) return;
+  if (!/\.clip$/i.test(filePath)) {
+    setStatus("Choose a Clip Studio .clip file", true);
+    return;
+  }
+  await importClip(filePath);
 }
 
 async function chooseAndOpen() {
@@ -454,7 +515,9 @@ async function saveAs() {
   const filePath = await choosePath({
     mode: "save",
     title: "Save project as",
-    name: state.currentPath ? baseName(state.currentPath) : "untitled.tvmini",
+    name: state.currentPath
+      ? baseName(state.currentPath)
+      : state.suggestedName || "untitled.tvmini",
   });
   if (!filePath) return;
 
@@ -510,8 +573,10 @@ function finishPicker(value) {
 }
 
 async function loadDir(dir) {
+  const current = picker;
   try {
     const data = await api("GET", `/api/list?dir=${encodeURIComponent(dir)}`);
+    if (!current || picker !== current) return;
     picker.dir = data.dir;
     dirInput.value = data.dir;
     upButton.disabled = !data.parent;
@@ -552,7 +617,7 @@ async function loadDir(dir) {
       dirList.append(item);
     }
   } catch (error) {
-    setStatus(error.message, true);
+    if (current && picker === current) setStatus(error.message, true);
   }
 }
 

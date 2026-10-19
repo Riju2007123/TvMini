@@ -62,6 +62,121 @@ function segment(data, width, height, [x0, y0], [x1, y1], r0, r1, rgb) {
   }
 }
 
+function paeth(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  return pb <= pc ? b : c;
+}
+
+function unfilter(type, line, previous, bpp) {
+  switch (type) {
+    case 0:
+      break;
+    case 1:
+      for (let i = bpp; i < line.length; i += 1) line[i] = (line[i] + line[i - bpp]) & 0xff;
+      break;
+    case 2:
+      for (let i = 0; i < line.length; i += 1) line[i] = (line[i] + previous[i]) & 0xff;
+      break;
+    case 3:
+      for (let i = 0; i < line.length; i += 1) {
+        const left = i >= bpp ? line[i - bpp] : 0;
+        line[i] = (line[i] + ((left + previous[i]) >> 1)) & 0xff;
+      }
+      break;
+    case 4:
+      for (let i = 0; i < line.length; i += 1) {
+        const left = i >= bpp ? line[i - bpp] : 0;
+        const upLeft = i >= bpp ? previous[i - bpp] : 0;
+        line[i] = (line[i] + paeth(left, previous[i], upLeft)) & 0xff;
+      }
+      break;
+    default:
+      throw new Error(`unsupported PNG filter ${type}`);
+  }
+}
+
+/**
+ * Decode a non-interlaced 8-bit RGB/RGBA PNG into RGBA bytes.
+ * This is the subset produced by this app and by Clip Studio previews.
+ */
+export function decodePng(buffer) {
+  if (buffer.length < 8 || buffer.readUInt32BE(0) !== 0x89504e47) {
+    throw new Error("not a PNG");
+  }
+
+  let offset = 8;
+  let header = null;
+  const idat = [];
+
+  while (offset + 8 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") header = data;
+    else if (type === "IDAT") idat.push(data);
+    else if (type === "IEND") break;
+    offset += 12 + length;
+  }
+
+  if (!header) throw new Error("PNG has no header");
+  const width = header.readUInt32BE(0);
+  const height = header.readUInt32BE(4);
+  const depth = header[8];
+  const colorType = header[9];
+  const interlace = header[12];
+
+  if (depth !== 8 || (colorType !== 2 && colorType !== 6) || interlace !== 0) {
+    throw new Error("unsupported PNG (need 8-bit RGB/RGBA, non-interlaced)");
+  }
+
+  const channels = colorType === 6 ? 4 : 3;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const out = Buffer.alloc(width * height * 4);
+  let previous = Buffer.alloc(stride);
+  let cursor = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    const filter = raw[cursor];
+    cursor += 1;
+    const line = Buffer.from(raw.subarray(cursor, cursor + stride));
+    cursor += stride;
+    unfilter(filter, line, previous, channels);
+
+    for (let x = 0; x < width; x += 1) {
+      const source = x * channels;
+      const target = (y * width + x) * 4;
+      out[target] = line[source];
+      out[target + 1] = line[source + 1];
+      out[target + 2] = line[source + 2];
+      out[target + 3] = channels === 4 ? line[source + 3] : 255;
+    }
+
+    previous = line;
+  }
+
+  return { width, height, data: out };
+}
+
+/** Alpha-composite an RGBA image over an RGB buffer. */
+function composite(data, width, height, image) {
+  if (image.width !== width || image.height !== height) {
+    throw new Error("image size must match the canvas");
+  }
+
+  for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
+    const alpha = image.data[j + 3] / 255;
+    if (alpha === 0) continue;
+    data[i] = Math.round(image.data[j] * alpha + data[i] * (1 - alpha));
+    data[i + 1] = Math.round(image.data[j + 1] * alpha + data[i + 1] * (1 - alpha));
+    data[i + 2] = Math.round(image.data[j + 2] * alpha + data[i + 2] * (1 - alpha));
+  }
+}
+
 /** Render a validated project to an RGB byte buffer. */
 export function renderProject(project) {
   const { width, height } = project;
@@ -72,6 +187,10 @@ export function renderProject(project) {
     data[i] = background[0];
     data[i + 1] = background[1];
     data[i + 2] = background[2];
+  }
+
+  if (project.image) {
+    composite(data, width, height, decodePng(Buffer.from(project.image.data, "base64")));
   }
 
   for (const stroke of project.strokes) {

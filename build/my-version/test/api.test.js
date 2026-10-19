@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { startServer } from "../server.js";
 import { createProject } from "../src/model.js";
+import { encodePng } from "../src/png.js";
+import { solid, writeClipFixture } from "./clip-fixture.js";
 
 async function withServer(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tvmini-api-"));
@@ -90,6 +92,39 @@ test("unknown endpoint is a 404", async () => {
   await withServer(async (app) => {
     const response = await fetch(`${app.url}/api/nope`);
     assert.equal(response.status, 404);
+  });
+});
+
+test("import-clip turns a .clip preview into a project without touching recent", async () => {
+  await withServer(async (app, dir) => {
+    const clip = path.join(dir, "Animation15.clip");
+    const png = encodePng(32, 24, solid(32, 24, [12, 34, 56]));
+    await writeClipFixture(clip, { width: 32, height: 24, png });
+
+    const response = await post(app, "/api/import-clip", { path: clip });
+    assert.equal(response.status, 200);
+
+    const body = await response.json();
+    assert.equal(body.name, "Animation15.clip");
+    assert.equal(body.project.width, 32);
+    assert.equal(body.project.height, 24);
+    assert.equal(body.project.image.width, 32);
+    assert.equal(Buffer.from(body.project.image.data, "base64").equals(png), true);
+    assert.deepEqual(body.project.strokes, []);
+
+    const recent = await (await fetch(`${app.url}/api/recent`)).json();
+    assert.equal(recent.entries.length, 0);
+  });
+});
+
+test("import-clip rejects a non-clip file with 400", async () => {
+  await withServer(async (app, dir) => {
+    const other = path.join(dir, "notes.txt");
+    await fs.writeFile(other, "hello");
+
+    const response = await post(app, "/api/import-clip", { path: other });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /\.clip/);
   });
 });
 
