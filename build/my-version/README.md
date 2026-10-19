@@ -68,8 +68,8 @@ width. Old files with 2-element points still load unchanged.
 ## Undo / redo
 
 Each finished stroke (pointer up) and each "Clear canvas" records the strokes
-as they were *before* the change. The toolbar buttons and `Ctrl+Z` / `Ctrl+Y` /
-`Ctrl+Shift+Z` walk that stack.
+as they were *before* the change. The toolbar buttons and `Ctrl+Z` (undo) /
+`Ctrl+A`, `Ctrl+Y`, `Ctrl+Shift+Z` (redo) walk that stack.
 
 - 100 steps are kept; the oldest is dropped.
 - A new stroke after an undo throws away the redo branch (standard behaviour).

@@ -606,7 +606,7 @@ document.addEventListener("keydown", (event) => {
   } else if (!typing && key === "z") {
     event.preventDefault();
     undo();
-  } else if (!typing && key === "y") {
+  } else if (!typing && (key === "a" || key === "y")) {
     event.preventDefault();
     redo();
   } else if (key === "s" && event.shiftKey) {

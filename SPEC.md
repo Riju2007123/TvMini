@@ -81,7 +81,7 @@ Deliberately **not** in scope:
 - One history step per completed stroke and per "Clear canvas".
 - At least 100 steps; older steps are dropped.
 - Undo/redo buttons are disabled when there is nothing to do.
-- `Ctrl+Z` undoes; `Ctrl+Y` and `Ctrl+Shift+Z` redo.
+- `Ctrl+Z` undoes; `Ctrl+A`, `Ctrl+Y` and `Ctrl+Shift+Z` redo.
 - Making a new change after an undo discards the redo branch.
 - New and Open reset the history.
 - Undo/redo never changes the project path; they mark the document unsaved.
