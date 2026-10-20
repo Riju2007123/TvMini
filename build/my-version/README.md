@@ -24,6 +24,13 @@ model. It shares **no code, data or file formats** with TVPaint.
   move it up or down, and then the tree of the layers and the folders that
   hold them. A layer can be shown or hidden, renamed with a double-click, and
   dragged to another place — dropped on a folder it goes inside it.
+- **Folders are layers too**: a folder carries its own name, opacity, lock
+  and visibility, and its row shows the number of layers inside it. A layer
+  is added inside a folder by selecting the folder and adding one, a folder
+  is added around a layer (so a folder inside a folder is a folder in a
+  folder), a folder slides up and down among the layers beside it, and a
+  layer is taken out of its folder with the **− Folder** button or by
+  dragging it out.
 - **Named cells**: a cell of the timeline carries a name, and a new cell is
   named after the frame it sits on the way Clip Studio Paint names the cells
   of an animation folder (`1`, `1a`, `2`, `2a`). A double-click on a cell

@@ -763,8 +763,8 @@ body.hide-inspector.hide-stage .workspace {
   display: flex;
   align-items: center;
   gap: 3px;
-  height: 26px;
-  padding-right: 6px;
+  min-height: 34px;
+  padding: 2px 6px 2px 0;
   /* The layers inside a folder are indented under it. */
   padding-left: calc(4px + var(--depth, 0) * 14px);
   box-shadow: inset 0 -1px 0 var(--seam);
@@ -841,6 +841,29 @@ body.hide-inspector.hide-stage .workspace {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+}
+
+/* The name of a layer, and under it what is set on it. */
+.layer-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.2;
+}
+
+.layer-detail {
+  padding-left: 2px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layer-row.selected .layer-detail {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .layer-name:hover {
@@ -1085,6 +1108,84 @@ canvas.picking {
   min-width: 66px;
 }
 
+/* The button that opens the settings of the timeline. */
+.tl-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px 0 5px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.tl-menu-button:hover {
+  background: var(--surface-3);
+}
+
+.tl-menu-icon {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.tl-menu-caret {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.timeline-menu {
+  position: absolute;
+  top: 26px;
+  left: 6px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 190px;
+  padding: 8px;
+}
+
+.timeline-menu hr {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+  border: 0;
+  background: var(--seam-strong);
+}
+
+.timeline-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+/* The frame numbers and the keys above them, the way Clip Studio Paint
+   draws the ruler of a timeline. */
+.frame-readout {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.tl-toolbar-toggle {
+  color: var(--muted);
+}
+
+.toolbar-group button.toggle {
+  color: var(--muted);
+}
+
+.toolbar-group button.toggle.on {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .timeline-toolbar {
   display: flex;
   align-items: center;
@@ -1151,24 +1252,62 @@ canvas.picking {
 .tl-corner {
   display: flex;
   align-items: center;
-  height: 20px;
+  gap: 4px;
+  height: 36px;
   padding: 0 8px;
-  color: var(--faint);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
+.tl-corner .tl-corner-caret {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+/* The ruler: the keys of the timeline above the frame numbers. */
+.tl-ruler {
+  display: grid;
+  grid-template-rows: 15px 21px;
+  background: var(--surface);
+}
+
+.tl-keys,
 .tl-numbers,
 .tl-cells {
   display: grid;
   grid-template-columns: repeat(var(--frames), minmax(20px, 1fr));
 }
 
+.tl-keys {
+  align-items: end;
+  overflow: hidden;
+}
+
+.tl-key {
+  grid-row: 1;
+  height: 15px;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tl-key:hover {
+  color: var(--text);
+}
+
+.tl-key.current {
+  color: var(--danger, #e5484d);
+  font-weight: 700;
+}
+
 .tl-number {
-  height: 20px;
-  line-height: 20px;
+  height: 21px;
+  line-height: 21px;
   overflow: hidden;
   color: var(--faint);
   font-size: var(--fs-xs);
@@ -1176,6 +1315,50 @@ canvas.picking {
   text-align: center;
   box-shadow: inset -1px 0 0 var(--seam);
   white-space: nowrap;
+}
+
+.tl-number.current {
+  color: var(--danger, #e5484d);
+  font-weight: 700;
+}
+
+/* The column the playhead is in, drawn over every row. */
+.tl-playhead {
+  grid-row: 1;
+  z-index: 3;
+  align-self: stretch;
+  background: rgba(229, 72, 77, 0.14);
+  box-shadow: inset 1px 0 0 rgba(229, 72, 77, 0.85);
+  pointer-events: none;
+}
+
+/* The column the first frame is in. */
+.tl-start-line {
+  grid-row: 1;
+  z-index: 2;
+  align-self: stretch;
+  box-shadow: inset 1px 0 0 var(--accent);
+  pointer-events: none;
+}
+
+/* The empty area under the rows, with the columns of the frames in it. */
+.tl-grid-bg {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  min-height: 60px;
+  min-width: 100%;
+}
+
+.tl-grid-lines {
+  display: grid;
+  grid-column: 2;
+  grid-template-columns: repeat(var(--frames), minmax(20px, 1fr));
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--seam) 0 1px,
+    transparent 1px 100%
+  );
+  background-size: calc(100% / var(--frames)) 100%;
 }
 
 .tl-row {
@@ -1206,6 +1389,41 @@ canvas.picking {
   color: var(--accent);
   font-size: 10px;
   line-height: 1;
+}
+
+/* The kind of a layer: a folder, a drawing layer or the imported picture. */
+.tl-kind {
+  flex: none;
+  width: 14px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.tl-kind.folder {
+  color: var(--text-dim);
+}
+
+/* The button that adds a layer next to the row it sits on. */
+.tl-add {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tl-add:hover {
+  background: var(--surface-3);
+  color: var(--accent);
 }
 
 .tl-icon {
@@ -1258,7 +1476,7 @@ canvas.picking {
   border: 0;
   border-radius: 0;
   background: transparent;
-  box-shadow: inset -1px 0 0 var(--seam);
+  box-shadow: none;
   color: var(--accent);
   font-size: var(--fs-sm);
   line-height: 26px;
@@ -1270,21 +1488,30 @@ canvas.picking {
   background: rgba(255, 255, 255, 0.045);
 }
 
+/* The first frame of a cell: the name of the cell sits on it. */
 .tl-cell.head {
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent), inset -1px 0 0 var(--seam);
+  box-shadow: inset 2px 0 0 var(--accent);
   color: #a9d6f7;
   font-weight: 600;
 }
 
 .tl-cell.hold {
   background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset -1px 0 0 var(--seam);
   color: var(--faint);
 }
 
 .tl-cell.virtual {
   background: rgba(255, 255, 255, 0.018);
   color: #6b7178;
+}
+
+/* The name of a cell is only written out when the timeline is asked for
+   the names, the way Clip Studio Paint can hide them. */
+.tl-cells.no-names .tl-cell.head {
+  color: var(--accent);
+  font-weight: 400;
 }
 
 .tl-cell.image {

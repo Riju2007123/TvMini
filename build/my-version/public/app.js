@@ -1971,17 +1971,46 @@ function renderTimeline() {
   timelineEl.replaceChildren();
 
   const header = element("div", "tl-header");
-  header.append(element("div", "tl-corner", "Layers"));
+  const corner = element("div", "tl-corner");
+  const cornerName = element("span", "tl-corner-name", "Timeline 1");
+  corner.title = "The frames of the timeline";
+  corner.append(cornerName, element("span", "tl-corner-caret", "▾"));
+  header.append(corner);
+
+  const ruler = element("div", "tl-ruler");
+  ruler.style.setProperty("--frames", String(columns));
+
+  // The keys of the timeline sit above the frame numbers, the way Clip
+  // Studio Paint draws them.
+  const keys = element("div", "tl-keys");
+  keys.style.setProperty("--frames", String(columns));
+  if (state.showKeyMarkers) {
+    for (const key of keyframes(project)) {
+      const column = key - start + 1;
+      if (column < 1 || column > columns) continue;
+      const marker = element("div", `tl-key${key === project.currentFrame ? " current" : ""}`, String(key));
+      marker.style.gridColumn = `${column} / span 1`;
+      marker.title = `Key on frame ${key}`;
+      marker.addEventListener("click", () => selectFrame(key));
+      keys.append(marker);
+    }
+  }
+  ruler.append(keys);
+
   const numbers = element("div", "tl-numbers");
   numbers.style.setProperty("--frames", String(columns));
+  // The numbers are thinned out when there are many frames, so they do not
+  // run into one another.
+  const interval = Math.max(1, Math.ceil(columns / 40));
   for (let i = 0; i < columns; i += 1) {
     const frame = start + i;
-    const showNumber = columns <= 40 || i === 0 || i === columns - 1 || i % 5 === 0;
-    const cell = element("div", "tl-number", showNumber ? String(frame) : "");
+    const showNumber = i % interval === 0 || i === 0 || frame === project.currentFrame;
+    const cell = element("div", `tl-number${frame === project.currentFrame ? " current" : ""}`, showNumber ? String(frame) : "");
     cell.title = `Frame ${frame}`;
     numbers.append(cell);
   }
-  header.append(numbers);
+  ruler.append(numbers);
+  header.append(ruler);
   timelineEl.append(header);
 
   timelineEl.append(renderCameraRow(columns, start));
@@ -2015,6 +2044,10 @@ function renderTimeline() {
       toggleVisibility(index);
     });
 
+    // A folder, a drawing layer or the picture that was imported.
+    const kind = element("span", `tl-kind${isGroup(layer) ? " folder" : ""}`, isGroup(layer) ? "▤" : "▦");
+    kind.title = isGroup(layer) ? "A folder that holds other layers" : "A drawing layer";
+
     const name = element("button", "tl-name", layer.name);
     if (isGroup(layer)) {
       const count = childrenOf(project, index).length;
@@ -2036,13 +2069,25 @@ function renderTimeline() {
       toggleLock(index);
     });
 
-    head.append(visibility, name, lock);
+    head.append(visibility, kind, name, lock);
 
     if (layer.clip) {
       const clip = element("span", "tl-clip", "✂");
       clip.title = "This layer is cut by the layer below it";
       head.append(clip);
     }
+
+    // The button that adds a layer next to this one, the way Clip Studio
+    // Paint has one on every row of its layer palette.
+    const add = element("button", "tl-add", "⊞");
+    add.title = isGroup(layer)
+      ? "Add a layer inside this folder"
+      : "Add a layer above this one";
+    add.addEventListener("click", (event) => {
+      event.stopPropagation();
+      addLayerBeside(index);
+    });
+    head.append(add);
 
     head.addEventListener("click", (event) => {
       if (event.target === head) selectLayer(index);
@@ -2056,6 +2101,7 @@ function renderTimeline() {
 
     const cells = element("div", "tl-cells");
     cells.style.setProperty("--frames", String(columns));
+    if (!state.showCellNames) cells.classList.add("no-names");
 
     // A folder shows the cells of the layers inside it, the way an animation
     // folder shows the cells of an animation.
@@ -2067,6 +2113,9 @@ function renderTimeline() {
       const cell = element("button", `tl-cell ${info.kind}`);
       cell.dataset.frame = String(frame);
       cell.type = "button";
+      // Every cell is placed by hand, so the column of the playhead can sit
+      // over the row.
+      cell.style.gridColumn = `${i + 1} / span 1`;
       if (frame === project.currentFrame) cell.classList.add("current");
       if (i === 0) cell.classList.add("first");
 
@@ -2118,6 +2167,7 @@ function renderTimeline() {
       cells.append(cell);
     }
 
+    appendPlayhead(cells, project, columns, start);
     row.append(head, cells);
     timelineEl.append(row);
   }
@@ -2265,9 +2315,15 @@ function renderLayerPanel() {
 
     row.append(layerThumbnail(project, index));
 
-    const name = element("button", "layer-name", layer.name);
+    // The name of the layer, and under it what is set on it, the way
+    // Clip Studio Paint shows a row: the opacity and the way it is blended.
+    const percent = Math.round((layer.opacity ?? 1) * 100);
+    const count = childrenOf(project, index).length;
+    const text = element("div", "layer-text");
+
+    const name = element("button", "layer-name", folder ? `${layer.name} : ${count}` : layer.name);
     name.title = folder
-      ? `Folder with ${childrenOf(project, index).length} layer(s) (double-click to rename)`
+      ? `Folder with ${count} layer(s) (double-click to rename)`
       : "Select this layer (double-click to rename)";
     name.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2278,7 +2334,14 @@ function renderLayerPanel() {
       event.stopPropagation();
       renameLayer(index);
     });
-    row.append(name);
+
+    const detail = element("div", "layer-detail");
+    detail.textContent = folder
+      ? `${percent}%`
+      : `${percent}% · ${layer.blend === "normal" ? "Normal" : layer.blend}`;
+
+    text.append(name, detail);
+    row.append(text);
 
     if (index === project.currentLayer) {
       row.append(element("span", "layer-current", "✎"));
@@ -2307,23 +2370,48 @@ function syncLayerPanelControls() {
   const layer = project.layers[project.currentLayer];
   if (!layer) return;
 
-  layerKindSelect.value = isGroup(layer) ? "group" : "anim";
+  const folder = isGroup(layer);
+  const parent = layer.parent ?? -1;
+
+  layerKindSelect.value = folder ? "group" : "anim";
   const percent = Math.round((layer.opacity ?? 1) * 100);
   layerOpacityInput.value = String(percent);
   layerOpacityOut.textContent = String(percent);
   layerLockButton.setAttribute("aria-pressed", layer.locked ? "true" : "false");
   layerLockButton.textContent = layer.locked ? "🔒" : "🔓";
   layerLockButton.title = layer.locked ? "Unlock this layer" : "Lock this layer";
-
-  // A folder cannot be locked or made transparent on its own.
-  const folder = isGroup(layer);
-  layerOpacityInput.disabled = false;
-  panelUnfoldButton.disabled = (layer.parent ?? -1) < 0;
-  panelUnfoldButton.title = (layer.parent ?? -1) < 0
-    ? "This layer is not in a folder"
-    : "Take this layer out of its folder";
-  panelDeleteLayerButton.disabled = false;
   layerKindSelect.title = folder ? "This layer is a folder" : "This layer holds drawings";
+
+  // The buttons say what they will do to the layer that is selected.
+  const siblings = childrenOf(project, parent);
+  const position = siblings.indexOf(project.currentLayer);
+  const up = position > 0;
+  const down = position >= 0 && position < siblings.length - 1;
+
+  panelLayerUpButton.disabled = !up;
+  panelLayerDownButton.disabled = !down;
+  panelLayerUpButton.title = up
+    ? `Move ${layer.name} up among the ${siblings.length} layer(s) beside it`
+    : "There is no layer above this one";
+  panelLayerDownButton.title = down
+    ? `Move ${layer.name} down among the ${siblings.length} layer(s) beside it`
+    : "There is no layer below this one";
+
+  panelUnfoldButton.disabled = parent < 0;
+  panelUnfoldButton.title = parent < 0
+    ? "This layer is not in a folder"
+    : `Take ${layer.name} out of the folder it is in`;
+
+  panelAddLayerButton.title = folder
+    ? `Add a layer inside ${layer.name}`
+    : "Add a drawing layer";
+  // A new folder is put around the layer that is selected, so the layer
+  // goes inside it. For a folder that makes a folder inside a folder.
+  panelAddFolderButton.title = `Add a folder around ${layer.name}`;
+  panelDeleteLayerButton.disabled = project.layers.length <= 1;
+  panelDeleteLayerButton.title = folder
+    ? `Delete ${layer.name} and the layers inside it`
+    : `Delete ${layer.name}`;
 }
 
 /** The sound row: the name, a remove button and the waveform. */
