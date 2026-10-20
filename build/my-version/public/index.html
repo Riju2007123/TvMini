@@ -51,6 +51,7 @@
             <button role="menuitemcheckbox" data-pane-toggle="stage" aria-checked="true">Stage</button>
             <button role="menuitemcheckbox" data-pane-toggle="layers" aria-checked="true">Layers</button>
             <button role="menuitemcheckbox" data-pane-toggle="inspector" aria-checked="true">Inspector</button>
+            <button role="menuitemcheckbox" data-pane-toggle="properties" aria-checked="true">Properties</button>
             <button role="menuitemcheckbox" data-pane-toggle="timeline" aria-checked="true">Timeline</button>
             <hr />
             <button role="menuitem" data-shell-action="resetLayout">Reset layout</button>
@@ -67,8 +68,6 @@
       </nav>
 
       <div class="topbar-spacer"></div>
-
-      <div class="doc-tab-bar" id="docTabBar" role="tablist" aria-label="Open documents"></div>
 
       <div class="topbar-actions">
         <button class="bar-action" type="button" data-shell-action="open" title="Open a project (Ctrl+O)" aria-label="Open">
@@ -89,6 +88,98 @@
       </div>
     </header>
 
+    <div class="doc-tab-strip">
+      <div class="doc-tab-bar" id="docTabBar" role="tablist" aria-label="Open documents"></div>
+    </div>
+
+    <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
+      <div class="pane-header timeline-header">
+        <button id="timelineMenuButton" class="tl-menu-button" title="The settings of the timeline" aria-haspopup="menu" aria-expanded="false">
+          <span class="tl-menu-icon" aria-hidden="true">▦</span>
+          <span>Timeline</span>
+          <span class="tl-menu-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="timelineMenu" class="menu-popup timeline-menu" role="menu" hidden>
+          <label class="field">
+            <span>Frames per second</span>
+            <input id="menuFps" type="number" min="1" max="120" step="1" value="12" />
+          </label>
+          <label class="field">
+            <span>First frame</span>
+            <input id="menuStartFrame" type="number" min="1" max="100000" step="1" value="1" />
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuLoop" type="checkbox" checked />
+            <span>Loop the playback</span>
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuOnion" type="checkbox" />
+            <span>Onion skin</span>
+          </label>
+          <hr />
+          <button id="menuAddFolder" type="button" role="menuitem">New animation folder</button>
+          <button id="menuFirstFrame" type="button" role="menuitem">Go to the first frame</button>
+          <button id="menuLastFrame" type="button" role="menuitem">Go to the last frame</button>
+        </div>
+        <button id="firstFrameButton" class="transport" title="Go to the first frame">⏮</button>
+        <button id="previousKeyButton" class="transport" title="Go to the key before this frame">⏪</button>
+        <button id="playButton" class="transport" title="Play or pause (Space)">▶ Play</button>
+        <button id="nextKeyButton" class="transport" title="Go to the key after this frame">⏩</button>
+        <button id="lastFrameButton" class="transport" title="Go to the last frame">⏭</button>
+        <label class="field checkbox inline">
+          <input id="loop" type="checkbox" checked />
+          <span>Loop</span>
+        </label>
+        <label class="field inline" title="Frames per second">
+          <span class="chip-label">FPS</span> <input id="fps" type="number" min="1" max="120" step="1" value="12" />
+        </label>
+        <label class="field inline" title="Playback speed multiplier">
+          <span class="chip-label">Speed</span>
+          <select id="speed">
+            <option value="0.25">¼×</option>
+            <option value="0.5">½×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+        <label class="field inline" title="First frame number">
+          <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
+        </label>
+        <span class="pane-header-spacer"></span>
+        <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
+        <button class="ghost-btn" type="button" data-pane-toggle="timeline" title="Hide the Timeline panel" aria-label="Hide the Timeline panel">
+          <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+        </button>
+      </div>
+      <div class="timeline-toolbar">
+        <div class="toolbar-group">
+          <button id="addLayerButton" title="Add an animation layer">+ Layer</button>
+          <button id="addGroupButton" title="Add a folder and put the current layer inside it">+ Folder</button>
+          <button id="removeGroupButton" title="Take the current folder apart">− Folder</button>
+          <button id="deleteLayerButton" title="Delete the current layer">− Layer</button>
+          <button id="layerUpButton" title="Move layer up">↑</button>
+          <button id="layerDownButton" title="Move layer down">↓</button>
+        </div>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-group">
+          <button id="addFrameButton" title="Insert a blank drawing at the current frame">+ Drawing</button>
+          <button id="duplicateFrameButton" title="Duplicate the current drawing">Duplicate</button>
+          <button id="holdButton" title="Extend the current exposure by one frame">Hold +1</button>
+          <button id="deleteFrameButton" title="Delete the current drawing">Delete</button>
+        </div>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-group">
+          <button id="cellNamesButton" class="toggle on" title="Show the name of every cell in the timeline">Cell names</button>
+          <button id="keyMarkersButton" class="toggle on" title="Show the keys of the timeline above the frame numbers">Keys</button>
+        </div>
+      </div>
+      <div class="timeline-scroll">
+        <div id="timeline" class="timeline"></div>
+      </div>
+    </section>
+
+    <div id="timelineGrip" class="pane-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="-1"></div>
+
     <main class="workspace">
       <aside class="pane tools-pane" data-pane="tools">
         <div class="pane-header">
@@ -99,32 +190,81 @@
           </button>
         </div>
         <div class="pane-body tools">
-          <div class="tool-row">
-            <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)">Brush</button>
-            <button id="eraserButton" aria-pressed="false" title="Eraser (E)">Eraser</button>
-            <button id="pickButton" aria-pressed="false" title="Pick a colour from the canvas (I)">Pick</button>
-          </div>
-          <div class="tool-row four">
-            <button id="lineTool" aria-pressed="false" title="Line — drag between two points (L)">Line</button>
-            <button id="rectTool" aria-pressed="false" title="Rectangle — drag opposite corners (R)">Rect</button>
-            <button id="ellipseTool" aria-pressed="false" title="Ellipse — drag the outline (V)">Oval</button>
-            <button id="fillTool" aria-pressed="false" title="Fill — click a region to flood it (F)">Fill</button>
-          </div>
-          <div class="tool-row single">
-            <button id="cameraTool" aria-pressed="false" title="Camera — drag the frame to aim the shot (C)">Camera</button>
-          </div>
-          <div class="history-row">
-            <button id="undoButton" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
-            <button id="redoButton" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z / Ctrl+A)">Redo ↷</button>
+          <div class="tool-section-title">Tools</div>
+          <div class="tool-grid">
+            <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)" aria-label="Brush">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11.5 2.5 13.5 4.5 6 12 3.5 12.5 4 10z" />
+                <path d="M10 4 12 6" />
+              </svg>
+            </button>
+            <button id="eraserButton" aria-pressed="false" title="Eraser (E)" aria-label="Eraser">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 12.5h7.5" />
+                <path d="M2.8 9.7 7.6 4.9l3.6 3.6-4.1 4.1H5.4z" />
+              </svg>
+            </button>
+            <button id="pickButton" aria-pressed="false" title="Pick a colour from the canvas (I)" aria-label="Pick a colour">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11.5 2.5 13.5 4.5 8 10l-2.5.5.5-2.5z" />
+                <path d="M2 14l1.8-1.8" />
+              </svg>
+            </button>
+            <button id="lineTool" aria-pressed="false" title="Line — drag between two points (L)" aria-label="Line">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                <path d="M2.5 13.5 13.5 2.5" />
+              </svg>
+            </button>
+            <button id="rectTool" aria-pressed="false" title="Rectangle — drag opposite corners (R)" aria-label="Rectangle">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <rect x="2.5" y="3.5" width="11" height="9" />
+              </svg>
+            </button>
+            <button id="ellipseTool" aria-pressed="false" title="Ellipse — drag the outline (V)" aria-label="Ellipse">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <ellipse cx="8" cy="8" rx="5.5" ry="4.5" />
+              </svg>
+            </button>
+            <button id="fillTool" aria-pressed="false" title="Fill — click a region to flood it (F)" aria-label="Fill">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 2.5 12 8.5 7.5 13 2 7.5z" />
+                <path d="M13.5 10.5c0 1-.7 1.8-1.6 1.8s-1.6-.8-1.6-1.8 1.6-2.6 1.6-2.6 1.6 1.6 1.6 2.6z" />
+              </svg>
+            </button>
+            <button id="cameraTool" aria-pressed="false" title="Camera — drag the frame to aim the shot (C)" aria-label="Camera">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="1.5" y="4.5" width="13" height="8" rx="1" />
+                <path d="M6 4.5 7 2.5h2l1 2" />
+                <circle cx="8" cy="8.5" r="2.2" />
+              </svg>
+            </button>
           </div>
 
-          <div class="panel-title">Colour</div>
-          <label class="field">
-            <span>Colour</span>
-            <input id="color" type="color" value="#1f2937" />
-          </label>
-          <div class="field">
-            <button id="wheelButton" type="button" title="Hue ring + saturation/value picker">HSV wheel…</button>
+          <div class="tool-section-title">History</div>
+          <div class="tool-grid">
+            <button id="undoButton" disabled title="Undo (Ctrl+Z)" aria-label="Undo">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 4.5 3 7.5l3 3" />
+                <path d="M3 7.5h6a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+            </button>
+            <button id="redoButton" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z / Ctrl+A)" aria-label="Redo">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 4.5l3 3-3 3" />
+                <path d="M13 7.5H7a3.5 3.5 0 0 0 0 7h3" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="tool-section-title">Colours</div>
+          <div class="tool-swatches">
+            <input id="color" type="color" value="#1f2937" title="The colour of the strokes" />
+            <button id="wheelButton" class="tool-swatch" type="button" title="Hue ring + saturation/value picker" aria-label="Hue ring and saturation picker">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none" />
+              </svg>
+            </button>
           </div>
           <div id="wheelPanel" class="wheel-panel" hidden>
             <canvas id="wheelCanvas" width="214" height="214"></canvas>
@@ -133,54 +273,6 @@
               <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
             </div>
           </div>
-
-          <div class="panel-title">Brush</div>
-
-          <div class="brush-image-row">
-
-            <button id="brushImageButton" type="button" title="Use a picture as the shape of the brush. A PNG works, and so does a Clip Studio Paint brush.">Brush image…</button>
-
-            <span id="brushImageName" class="brush-image-name">the round tip</span>
-            <select id="brushLibrary" title="The brushes you have saved"></select>
-            <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
-            <button id="brushRemove" type="button" title="Remove the brush that is picked">Remove</button>
-
-          </div>
-
-          <input id="brushImageInput" type="file" accept="image/png,.sut" hidden />
-          <label class="field">
-            <span>Width <output id="widthValue">6</output></span>
-            <input id="width" type="range" min="1" max="60" value="6" />
-          </label>
-          <label class="field checkbox">
-            <input id="pressure" type="checkbox" checked />
-            <span>Pen pressure</span>
-          </label>
-          <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
-            <span>Stabiliser <output id="stabilizerValue">0</output></span>
-            <input id="stabilizer" type="range" min="0" max="10" step="1" value="0" />
-          </label>
-          <label class="field" title="Transparency of the whole stroke (100 = solid)">
-            <span>Stroke opacity</span>
-            <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />
-          </label>
-          <label class="field" title="How new strokes mix with the paint under them">
-            <span>Blend</span>
-            <select id="strokeBlend">
-              <option value="normal" selected>Normal</option>
-              <option value="multiply">Multiply</option>
-              <option value="screen">Screen</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Pressure gain <output id="pressureGainValue">100%</output></span>
-            <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
-          </label>
-          <label class="field checkbox">
-            <input id="touchDraw" type="checkbox" checked />
-            <span>Draw with touch</span>
-          </label>
-          <div class="meter">Pressure: <output id="pressureValue">—</output></div>
         </div>
       </aside>
 
@@ -365,93 +457,66 @@
       </div>
     </main>
 
-    <div id="timelineGrip" class="pane-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="-1"></div>
-
-    <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
-      <div class="pane-header timeline-header">
-        <button id="timelineMenuButton" class="tl-menu-button" title="The settings of the timeline" aria-haspopup="menu" aria-expanded="false">
-          <span class="tl-menu-icon" aria-hidden="true">▦</span>
-          <span>Timeline</span>
-          <span class="tl-menu-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="timelineMenu" class="menu-popup timeline-menu" role="menu" hidden>
-          <label class="field">
-            <span>Frames per second</span>
-            <input id="menuFps" type="number" min="1" max="120" step="1" value="12" />
-          </label>
-          <label class="field">
-            <span>First frame</span>
-            <input id="menuStartFrame" type="number" min="1" max="100000" step="1" value="1" />
-          </label>
-          <label class="field checkbox inline">
-            <input id="menuLoop" type="checkbox" checked />
-            <span>Loop the playback</span>
-          </label>
-          <label class="field checkbox inline">
-            <input id="menuOnion" type="checkbox" />
-            <span>Onion skin</span>
-          </label>
-          <hr />
-          <button id="menuAddFolder" type="button" role="menuitem">New animation folder</button>
-          <button id="menuFirstFrame" type="button" role="menuitem">Go to the first frame</button>
-          <button id="menuLastFrame" type="button" role="menuitem">Go to the last frame</button>
-        </div>
-        <button id="firstFrameButton" class="transport" title="Go to the first frame">⏮</button>
-        <button id="previousKeyButton" class="transport" title="Go to the key before this frame">⏪</button>
-        <button id="playButton" class="transport" title="Play or pause (Space)">▶ Play</button>
-        <button id="nextKeyButton" class="transport" title="Go to the key after this frame">⏩</button>
-        <button id="lastFrameButton" class="transport" title="Go to the last frame">⏭</button>
-        <label class="field checkbox inline">
-          <input id="loop" type="checkbox" checked />
-          <span>Loop</span>
-        </label>
-        <label class="field inline" title="Frames per second">
-          <span class="chip-label">FPS</span> <input id="fps" type="number" min="1" max="120" step="1" value="12" />
-        </label>
-        <label class="field inline" title="Playback speed multiplier">
-          <span class="chip-label">Speed</span>
-          <select id="speed">
-            <option value="0.25">¼×</option>
-            <option value="0.5">½×</option>
-            <option value="1" selected>1×</option>
-            <option value="2">2×</option>
-          </select>
-        </label>
-        <label class="field inline" title="First frame number">
-          <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
-        </label>
+    <section class="pane properties-pane" data-pane="properties" aria-label="Properties">
+      <div class="pane-header">
+        <span class="pane-title">Properties</span>
         <span class="pane-header-spacer"></span>
-        <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
-        <button class="ghost-btn" type="button" data-pane-toggle="timeline" title="Hide the Timeline panel" aria-label="Hide the Timeline panel">
+        <button class="ghost-btn" type="button" data-pane-toggle="properties" title="Hide the Properties panel" aria-label="Hide the Properties panel">
           <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
         </button>
       </div>
-      <div class="timeline-toolbar">
-        <div class="toolbar-group">
-          <button id="addLayerButton" title="Add an animation layer">+ Layer</button>
-          <button id="addGroupButton" title="Add a folder and put the current layer inside it">+ Folder</button>
-          <button id="removeGroupButton" title="Take the current folder apart">− Folder</button>
-          <button id="deleteLayerButton" title="Delete the current layer">− Layer</button>
-          <button id="layerUpButton" title="Move layer up">↑</button>
-          <button id="layerDownButton" title="Move layer down">↓</button>
+      <div class="pane-body properties">
+        <div class="property-group">
+          <div class="panel-title">Brush</div>
+          <div class="brush-image-row">
+            <button id="brushImageButton" type="button" title="Use a picture as the shape of the brush. A PNG works, and so does a Clip Studio Paint brush.">Brush image…</button>
+            <span id="brushImageName" class="brush-image-name">the round tip</span>
+            <select id="brushLibrary" title="The brushes you have saved"></select>
+            <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
+            <button id="brushRemove" type="button" title="Remove the brush that is picked">Remove</button>
+          </div>
+          <input id="brushImageInput" type="file" accept="image/png,.sut" hidden />
         </div>
-        <span class="toolbar-sep" aria-hidden="true"></span>
-        <div class="toolbar-group">
-          <button id="addFrameButton" title="Insert a blank drawing at the current frame">+ Drawing</button>
-          <button id="duplicateFrameButton" title="Duplicate the current drawing">Duplicate</button>
-          <button id="holdButton" title="Extend the current exposure by one frame">Hold +1</button>
-          <button id="deleteFrameButton" title="Delete the current drawing">Delete</button>
+        <div class="property-group">
+          <label class="field">
+            <span>Width <output id="widthValue">6</output></span>
+            <input id="width" type="range" min="1" max="60" value="6" />
+          </label>
+          <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
+            <span>Stabiliser <output id="stabilizerValue">0</output></span>
+            <input id="stabilizer" type="range" min="0" max="10" step="1" value="0" />
+          </label>
+          <label class="field" title="Transparency of the whole stroke (100 = solid)">
+            <span>Stroke opacity</span>
+            <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />
+          </label>
+          <label class="field" title="How new strokes mix with the paint under them">
+            <span>Blend</span>
+            <select id="strokeBlend">
+              <option value="normal" selected>Normal</option>
+              <option value="multiply">Multiply</option>
+              <option value="screen">Screen</option>
+            </select>
+          </label>
         </div>
-        <span class="toolbar-sep" aria-hidden="true"></span>
-        <div class="toolbar-group">
-          <button id="cellNamesButton" class="toggle on" title="Show the name of every cell in the timeline">Cell names</button>
-          <button id="keyMarkersButton" class="toggle on" title="Show the keys of the timeline above the frame numbers">Keys</button>
+        <div class="property-group">
+          <label class="field checkbox">
+            <input id="pressure" type="checkbox" checked />
+            <span>Pen pressure</span>
+          </label>
+          <label class="field">
+            <span>Pressure gain <output id="pressureGainValue">100%</output></span>
+            <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
+          </label>
+          <label class="field checkbox">
+            <input id="touchDraw" type="checkbox" checked />
+            <span>Draw with touch</span>
+          </label>
+          <div class="meter">Pressure: <output id="pressureValue">—</output></div>
         </div>
-      </div>
-      <div class="timeline-scroll">
-        <div id="timeline" class="timeline"></div>
       </div>
     </section>
+
 
     <footer class="statusbar">
       <span id="status">Ready</span>

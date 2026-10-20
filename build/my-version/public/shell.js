@@ -7,10 +7,10 @@
  * is where app.js binds them.
  */
 
-const STORAGE_KEY = "tvmini.shell.v1";
-const PANES = ["tools", "stage", "inspector", "timeline"];
-const DEFAULT_HEIGHT = 184;
-const MIN_HEIGHT = 110;
+const STORAGE_KEY = "tvmini.shell.v2";
+const PANES = ["tools", "stage", "layers", "inspector", "timeline", "properties"];
+const DEFAULT_HEIGHT = 132;
+const MIN_HEIGHT = 90;
 
 function readState() {
   const fallback = { hidden: [], timelineHeight: DEFAULT_HEIGHT };
@@ -163,8 +163,10 @@ grip?.addEventListener("pointerdown", (event) => {
 grip?.addEventListener("pointermove", (event) => {
   if (!drag || event.pointerId !== drag.id) return;
   const max = Math.max(MIN_HEIGHT, window.innerHeight - 240);
+  // The timeline is above the grip, so pulling the grip down gives it more
+  // room.
   const height = Math.round(
-    Math.min(Math.max(drag.height - (event.clientY - drag.y), MIN_HEIGHT), max),
+    Math.min(Math.max(drag.height + (event.clientY - drag.y), MIN_HEIGHT), max),
   );
   state.timelineHeight = height;
   applyPanes();

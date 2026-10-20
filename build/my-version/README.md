@@ -6,6 +6,13 @@ model. It shares **no code, data or file formats** with TVPaint.
 
 - No dependencies. Node 20+ (Node 22.5+ for `.clip` import/export).
 - The UI is plain HTML/CSS/JS served by a loopback-only HTTP server.
+- **The window is the shell of Macromedia Flash Professional 8**: a menu bar,
+  a strip of document tabs, the **timeline above the stage**, the stage on a
+  grey pasteboard, a narrow column of tool icons on the left, the layers and
+  the inspector in a dock on the right, and the properties of the tool along
+  the bottom. The measurements and the colours were read out of the running
+  program; see `docs/flash8-study.md`. No Flash artwork, code or markup is
+  reused.
 - Project files use `*.tvmini` (JSON), **not** `.tvpp`.
 - Clip Studio `.clip` files can be imported read-only and exported as layered
   CSP documents for the current frame. An import brings in the **whole

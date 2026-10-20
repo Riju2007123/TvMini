@@ -1,40 +1,45 @@
 /* ==========================================================================
    TVMini shell
-   Visual language: mid-grey, borderless volume. Panels are separated by dark
-   seams and a 1px top-edge light, not by drawn outlines. One accent colour is
-   used for selection, focus and the playhead.
+   Visual language: the classic light grey of Macromedia Flash Professional 8.
+   The window is a menu bar, a strip of document tabs, the timeline above the
+   stage, the stage itself on a grey pasteboard, and a dock on the right. The
+   parts are separated by the gap between them and by a raised bevel, the way
+   Windows drew them.
+
+   The measurements came from the running program; see
+   `docs/flash8-study.md`.
    ========================================================================== */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
   /* surfaces */
-  --ground: #303336;
-  --well: #292c2f;
-  --surface: #43464a;
-  --surface-2: #4e5257;
-  --surface-3: #575b61;
-  --surface-sunken: #3c3f43;
+  --ground: #d0d0d0;
+  --well: #c0c0c0;
+  --surface: #f0f0f0;
+  --surface-2: #e6e6e6;
+  --surface-3: #f8f8f8;
+  --surface-sunken: #ffffff;
 
   /* seams and edges */
-  --seam: #26292b;
-  --seam-strong: #1f2224;
-  --edge: rgba(255, 255, 255, 0.075);
-  --edge-strong: rgba(255, 255, 255, 0.11);
+  --seam: #a8a8a8;
+  --seam-strong: #808080;
+  --edge: rgba(255, 255, 255, 0.85);
+  --edge-strong: rgba(0, 0, 0, 0.2);
 
   /* text */
-  --text: #e9ebed;
-  --text-dim: #c6cbd0;
-  --muted: #a9aeb4;
-  --faint: #868c92;
+  --text: #000000;
+  --text-dim: #333333;
+  --muted: #555555;
+  --faint: #808080;
 
   /* accent */
-  --accent: #3fa3ec;
-  --accent-soft: rgba(63, 163, 236, 0.18);
-  --accent-softer: rgba(63, 163, 236, 0.1);
+  --accent: #64647e;
+  --accent-soft: rgba(100, 100, 126, 0.18);
+  --accent-softer: rgba(100, 100, 126, 0.1);
   --accent-ink: #ffffff;
-  --danger: #e06a6a;
-  --violet: #b48ae0;
+  --danger: #a31515;
+  --violet: #6b3fa0;
 
   /* type */
   --font-ui: "Yu Gothic UI", "Yu Gothic", Meiryo, "Hiragino Kaku Gothic ProN",
@@ -46,17 +51,19 @@
   --fs-lg: 13px;
 
   /* metrics */
-  --topbar-h: 34px;
-  --pane-header-h: 26px;
+  --topbar-h: 26px;
+  --tabstrip-h: 28px;
+  --pane-header-h: 24px;
   --ctl-h: 20px;
   --btn-h: 22px;
-  --r-sm: 3px;
-  --r-btn: 4px;
-  --r-panel: 6px;
+  --r-sm: 2px;
+  --r-btn: 2px;
+  --r-panel: 0px;
   --seam-w: 1px;
-  --timeline-h: 184px;
-  --left-w: 214px;
-  --right-w: 252px;
+  --timeline-h: 150px;
+  --properties-h: 116px;
+  --left-w: 68px;
+  --right-w: 236px;
 
   /* depth */
   --elev: inset 0 1px 0 var(--edge);
@@ -82,7 +89,9 @@ body {
 
 body.shell {
   display: grid;
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) 5px var(--timeline-h) 24px;
+  grid-template-rows:
+    var(--topbar-h) var(--tabstrip-h) var(--timeline-h) 5px minmax(0, 1fr)
+    var(--properties-h) 24px;
   height: 100vh;
   overflow: hidden;
   background: var(--ground);
@@ -104,7 +113,16 @@ body.hide-timeline #timelineGrip {
 }
 
 body.hide-timeline {
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) 0 0 24px;
+  grid-template-rows: var(--topbar-h) var(--tabstrip-h) 0 0 minmax(0, 1fr) var(--properties-h) 24px;
+}
+
+body.hide-properties {
+  grid-template-rows:
+    var(--topbar-h) var(--tabstrip-h) var(--timeline-h) 5px minmax(0, 1fr) 0 24px;
+}
+
+body.hide-properties .properties-pane {
+  display: none;
 }
 
 body.hide-stage .workspace {
@@ -132,11 +150,35 @@ body.hide-inspector.hide-stage .workspace {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 8px;
-  background: linear-gradient(180deg, #474b4f 0%, #43464a 100%);
+  padding: 0 6px;
+  /* The menu bar of Flash is a white bar with the items written on it. */
+  background: var(--surface-3);
   box-shadow: inset 0 1px 0 var(--edge), 0 1px 0 var(--seam-strong);
   position: relative;
   z-index: 20;
+}
+
+/* The strip of document tabs, under the menu bar. */
+.doc-tab-strip {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  padding: 2px 0 0 2px;
+  background: #b8b8b8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.doc-tab-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.doc-tab-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .brand {
@@ -155,8 +197,8 @@ body.hide-inspector.hide-stage .workspace {
   width: 20px;
   height: 20px;
   border-radius: var(--r-btn);
-  background: linear-gradient(160deg, #565b61, #3b3e42);
-  box-shadow: inset 0 1px 0 var(--edge-strong), 0 1px 2px rgba(0, 0, 0, 0.25);
+  background: linear-gradient(180deg, #ffffff, #dcdcdc);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 1px rgba(0, 0, 0, 0.25);
   color: var(--accent);
 }
 
@@ -215,35 +257,25 @@ body.hide-inspector.hide-stage .workspace {
 
 /* project tab strip */
 
-.doc-tab-bar {
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  min-width: 0;
-  max-width: 40vw;
-  align-self: stretch;
-  padding-top: 5px;
-}
-
 .doc-tab {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   max-width: 260px;
-  height: calc(var(--topbar-h) - 5px);
+  height: 24px;
   padding: 0 10px;
-  border-radius: var(--r-btn) var(--r-btn) 0 0;
-  background: var(--surface-2);
-  box-shadow: inset 0 1px 0 var(--edge);
-  color: var(--muted);
+  border-radius: 3px 3px 0 0;
+  background: #d4d4d4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  color: #000000;
   font-size: var(--fs-sm);
 }
 
 .doc-tab.active {
-  background: var(--ground);
+  background: var(--surface-3);
   color: var(--text);
-  box-shadow: inset 0 2px 0 var(--accent);
+  box-shadow: inset 0 1px 0 var(--edge);
 }
 
 .doc-tab-dot {
@@ -569,10 +601,10 @@ body.hide-inspector.hide-stage .workspace {
 .right-column {
   display: flex;
   flex-direction: column;
-  gap: var(--seam-w);
+  gap: 1px;
   min-width: 0;
   min-height: 0;
-  background: var(--seam-strong);
+  background: var(--seam);
 }
 
 .right-column > .pane {
@@ -591,8 +623,9 @@ body.hide-inspector.hide-stage .workspace {
   flex: none;
   height: var(--pane-header-h);
   padding: 0 6px 0 8px;
-  background: linear-gradient(180deg, #484c50, #43464a);
-  box-shadow: inset 0 1px 0 var(--edge), 0 1px 0 var(--seam);
+  /* The heading of a panel in Flash is a raised bar with a dark band. */
+  background: linear-gradient(180deg, #fbfbfb 0%, #dcdcdc 100%);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 0 var(--seam-strong);
   position: relative;
   z-index: 3;
 }
@@ -601,7 +634,7 @@ body.hide-inspector.hide-stage .workspace {
   font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--text-dim);
+  color: var(--text);
   white-space: nowrap;
 }
 
@@ -747,7 +780,7 @@ body.hide-inspector.hide-stage .workspace {
 
 .layer-actions button:hover {
   color: var(--text);
-  background: #565b61;
+  background: #ffffff;
 }
 
 .layer-actions button:active {
@@ -890,6 +923,147 @@ body.hide-inspector.hide-stage .workspace {
 }
 
 /* tools pane ------------------------------------------------------------- */
+
+.tools {
+  padding: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* The heading of a part of the tool bar, written across it. */
+.tool-section-title {
+  flex: none;
+  padding: 5px 4px 3px;
+  border-top: 1px solid var(--seam);
+  background: linear-gradient(180deg, #fbfbfb, #e2e2e2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: center;
+}
+
+.tool-section-title:first-child {
+  border-top: 0;
+}
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 24px);
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 0 7px;
+}
+
+.tool-grid button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tool-grid button:hover:not(:disabled) {
+  border-color: #b0b0b0;
+  background: #ffffff;
+}
+
+.tool-grid button.active,
+.tool-grid button[aria-pressed="true"] {
+  border-color: #8f8f9f;
+  background: #cdcddd;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.tool-grid button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.tool-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* The colour of the strokes, and the wheel that picks it. */
+.tool-swatches {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 0 8px;
+}
+
+.tool-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #8f8f8f;
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 var(--edge);
+  cursor: pointer;
+}
+
+.tool-swatch canvas {
+  width: 40px;
+  height: 40px;
+}
+
+.tool-swatches input[type="color"] {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #8f8f8f;
+  background: none;
+  cursor: pointer;
+}
+
+/* The properties of the tool, along the bottom of the window. */
+.properties-pane {
+  background: var(--surface);
+  min-height: 0;
+}
+
+.properties {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 6px 10px;
+  overflow: auto;
+}
+
+.property-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 168px;
+  padding-right: 14px;
+  border-right: 1px solid var(--seam);
+}
+
+.property-group:last-child {
+  border-right: 0;
+}
+
+.property-group .panel-title {
+  margin: 0;
+}
+
+.property-group .field {
+  margin: 0;
+}
 
 .tools {
   gap: 9px;
@@ -1056,14 +1230,9 @@ body.hide-inspector.hide-stage .workspace {
   justify-content: center;
   overflow: auto;
   padding: 18px;
-  background-color: var(--well);
-  background-image:
-    linear-gradient(45deg, rgba(255, 255, 255, 0.022) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(255, 255, 255, 0.022) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.022) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.022) 75%);
-  background-size: 22px 22px;
-  background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+  /* The pasteboard of Flash is a flat grey, and the page sits on it. */
+  background-color: var(--ground);
+  background-image: none;
 }
 
 canvas {
@@ -1096,7 +1265,7 @@ canvas.picking {
 }
 
 .timeline-pane {
-  background: var(--well);
+  background: var(--surface);
   min-height: 0;
 }
 
@@ -1656,8 +1825,8 @@ button:hover:not(:disabled) {
 }
 
 button:active:not(:disabled) {
-  background: #3e4246;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  background: #cfcfcf;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 
 button:disabled {
@@ -1829,7 +1998,7 @@ input[type="range"] {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #656a70;
+  background: #9a9a9a;
   background-clip: content-box;
 }
 
@@ -2155,7 +2324,6 @@ input[type="range"] {
 
 @media (max-width: 1080px) {
   :root {
-    --left-w: 196px;
     --right-w: 226px;
   }
 }
