@@ -10,29 +10,45 @@ import {
   cameraCorners,
   cameraKeyAt,
   cameraView,
+  cellName,
+  childrenOf,
+  clipSourceOf,
   contentEnd,
   deleteCameraKey,
   deleteDrawing,
   drawingAt,
   duplicateDrawing,
+  effectiveOpacity,
   exposureInfo,
   holdDrawing,
   insertDrawing,
+  insertLayer,
+  isGroup,
+  keyframes,
   layerBounds,
+  layerDepth,
+  layerIsVisible,
+  layerTree,
+  moveBlock,
+  nextKeyframe,
+  packLayers,
+  previousKeyframe,
+  removeLayers,
   resolveDrawing,
   setCameraKey,
   setExposure,
   shiftStartFrame,
   timelineColumns,
+  blockSize,
 } from "./timeline.js";
 
 const FORMAT = "tvmini";
-const VERSION = 2;
+const VERSION = 3;
 const MAX_COLUMNS = 1000;
 // Keep these in sync with src/model.js.
-const MAX_LAYERS = 100;
-const MAX_DRAWINGS_PER_LAYER = 1000;
-const MAX_TOTAL_DRAWINGS = 5000;
+const MAX_LAYERS = 500;
+const MAX_DRAWINGS_PER_LAYER = 2000;
+const MAX_TOTAL_DRAWINGS = 20000;
 const MAX_HOLD = 10000;
 const MAX_START_FRAME = 100000;
 const MAX_FRAME = 10_000_000;
@@ -104,7 +120,14 @@ const fpsInput = document.getElementById("fps");
 const startFrameInput = document.getElementById("startFrame");
 const frameLabel = document.getElementById("frameLabel");
 const addLayerButton = document.getElementById("addLayerButton");
+const addGroupButton = document.getElementById("addGroupButton");
+const removeGroupButton = document.getElementById("removeGroupButton");
 const deleteLayerButton = document.getElementById("deleteLayerButton");
+const firstFrameButton = document.getElementById("firstFrameButton");
+const previousKeyButton = document.getElementById("previousKeyButton");
+const nextKeyButton = document.getElementById("nextKeyButton");
+const lastFrameButton = document.getElementById("lastFrameButton");
+const clipLayerInput = document.getElementById("clipLayer");
 const layerUpButton = document.getElementById("layerUpButton");
 const layerDownButton = document.getElementById("layerDownButton");
 const addFrameButton = document.getElementById("addFrameButton");
@@ -167,6 +190,8 @@ const state = {
   homeDir: ".",
   playing: false,
   playTimer: null,
+  // The folders that are closed in the timeline.
+  collapsed: new Set(),
   opacityBefore: null,
   tvppSourcePath: null,
   // Remembered preferences (pressure gain, touch drawing, start screen).
@@ -193,7 +218,17 @@ function createLayer(name) {
     blend: "normal",
     preBehavior: "none",
     postBehavior: "hold",
+    clip: false,
+    parent: -1,
     drawings: [],
+  };
+}
+
+/** A folder holds other layers. */
+function createGroup(name) {
+  return {
+    ...createLayer(name),
+    type: "group",
   };
 }
 
@@ -656,6 +691,12 @@ const paintCtx = paintCanvas.getContext("2d", { willReadFrequently: true });
 // opaque here first, then applied to the paint canvas in a single pass.
 const blendCanvas = document.createElement("canvas");
 const blendCtx = blendCanvas.getContext("2d");
+// Scratch canvas that holds the picture of the layer below a clipped one.
+const maskCanvas = document.createElement("canvas");
+const maskCtx = maskCanvas.getContext("2d");
+// Scratch canvas where a clipped layer is cut by the layer below it.
+const clipCanvas = document.createElement("canvas");
+const clipCtx = clipCanvas.getContext("2d");
 
 /* Raster bases (imported .tvpp frames) as <img> elements, cached by data. */
 const drawingImages = new Map();
@@ -837,15 +878,25 @@ function drawStrokesToPaint(strokes) {
   drawStrokesInto(paintCtx, strokes);
 }
 
-/** Paint one drawing (raster base + strokes) into paintCanvas and return it. */
-function drawDrawingToPaint(project, drawing, alpha = 1) {
-  paintCtx.clearRect(0, 0, project.width, project.height);
-  paintCtx.globalAlpha = alpha;
+/** Paint one drawing (raster base + strokes) into a scratch canvas. */
+function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targetCanvas = paintCanvas) {
+  target.clearRect(0, 0, project.width, project.height);
+  target.globalAlpha = alpha;
   const base = drawingImageElement(drawing);
-  if (base) paintCtx.drawImage(base, 0, 0, project.width, project.height);
-  drawStrokesInto(paintCtx, drawing.strokes);
-  paintCtx.globalAlpha = 1;
-  return paintCanvas;
+  if (base) target.drawImage(base, 0, 0, project.width, project.height);
+  drawStrokesInto(target, drawing.strokes);
+  target.globalAlpha = 1;
+  return targetCanvas;
+}
+
+/** Make a scratch canvas the size of the canvas. */
+function fitScratch(scratch, scratchCtx, width, height) {
+  if (scratch.width !== width || scratch.height !== height) {
+    scratch.width = width;
+    scratch.height = height;
+  }
+  scratchCtx.clearRect(0, 0, width, height);
+  return scratch;
 }
 
 const ONION_TINT = { before: "#e5484d", after: "#2da44e" };
@@ -913,10 +964,14 @@ function renderCanvas(frame = state.project.currentFrame) {
     paintCanvas.height = height;
   }
 
-  // Layers are stored top-to-bottom, so paint them in reverse order.
+  // Layers are stored top-to-bottom, so paint them in reverse order. A
+  // folder is not painted itself; the layers inside it are.
   for (let index = project.layers.length - 1; index >= 0; index -= 1) {
     const layer = project.layers[index];
-    if (!layer.visible || layer.opacity <= 0) continue;
+    if (isGroup(layer)) continue;
+    if (!layerIsVisible(project, index)) continue;
+    const opacity = effectiveOpacity(project, index);
+    if (opacity <= 0) continue;
 
     // Onion skins sit just under the current layer's own drawing and are
     // hidden during playback so they never flicker.
@@ -927,9 +982,43 @@ function renderCanvas(frame = state.project.currentFrame) {
     const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
 
+    // A clipped layer is cut by the picture of the layer below it.
+    if (layer.clip) {
+      const source = clipSourceOf(project, index);
+      const sourceResolved = source >= 0 ? resolveDrawing(project.layers[source], frame) : null;
+      if (sourceResolved) {
+        drawDrawingToPaint(project, resolved.drawing, 1, paintCtx, paintCanvas);
+        const sourceOpacity = effectiveOpacity(project, source);
+        drawDrawingToPaint(project, sourceResolved.drawing, sourceOpacity, maskCtx, maskCanvas);
+        fitScratch(clipCanvas, clipCtx, width, height);
+        clipCtx.globalCompositeOperation = "source-over";
+        clipCtx.drawImage(maskCanvas, 0, 0);
+        clipCtx.globalCompositeOperation = "destination-in";
+        clipCtx.drawImage(paintCanvas, 0, 0);
+        clipCtx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(clipCanvas, 0, 0);
+        ctx.globalAlpha = 1;
+        continue;
+      }
+    }
+
+    // A layer that is only a picture does not have to be drawn into a
+    // scratch canvas and copied from there: the picture can go onto the
+    // canvas as it is. On a big canvas that saves two passes over every
+    // pixel, and a document that is opened rather than drawn is mostly
+    // layers like this.
+    const base = drawingImageElement(resolved.drawing);
+    if (base && !resolved.drawing.strokes.length) {
+      ctx.globalAlpha = opacity;
+      ctx.drawImage(base, 0, 0, width, height);
+      ctx.globalAlpha = 1;
+      continue;
+    }
+
     drawDrawingToPaint(project, resolved.drawing);
 
-    ctx.globalAlpha = layer.opacity;
+    ctx.globalAlpha = opacity;
     ctx.drawImage(paintCanvas, 0, 0);
     ctx.globalAlpha = 1;
   }
@@ -1788,6 +1877,65 @@ function renderCameraRow(columns, start) {
   return row;
 }
 
+/**
+ * The layers that are on screen.
+ *
+ * The list is depth first, so a folder is followed by the layers it holds,
+ * and a folder that is closed hides the layers inside it.
+ */
+function visibleLayers(project) {
+  const out = [];
+  const walk = (parent, hidden) => {
+    for (const child of childrenOf(project, parent)) {
+      if (hidden) {
+        walk(child, true);
+        continue;
+      }
+      out.push(child);
+      walk(child, state.collapsed.has(project.layers[child].name));
+    }
+  };
+  walk(-1, false);
+  return out;
+}
+
+/**
+ * The cells a folder shows.
+ *
+ * A folder has no cells of its own: its row shows the cells of the layers
+ * inside it, the way an animation folder shows the cells of an animation.
+ * The map is keyed by the frame a cell sits on.
+ */
+function folderCells(project, groupIndex) {
+  const cells = new Map();
+  for (const child of childrenOf(project, groupIndex)) {
+    const layer = project.layers[child];
+    for (const drawing of layer.drawings ?? []) {
+      for (let offset = 0; offset < drawing.hold; offset += 1) {
+        const frame = drawing.at + offset;
+        if (cells.has(frame)) continue;
+        cells.set(frame, {
+          layer: child,
+          name: offset === 0 ? drawing.name : null,
+          count: drawing.hold,
+          remaining: drawing.at + drawing.hold - frame,
+        });
+      }
+    }
+  }
+  return cells;
+}
+
+/** Open or close a folder. */
+function toggleFolder(name) {
+  if (state.collapsed.has(name)) {
+    state.collapsed.delete(name);
+  } else {
+    state.collapsed.add(name);
+  }
+  renderTimeline();
+}
+
 function renderTimeline() {
   const project = state.project;
   const columns = timelineColumnCount();
@@ -1811,12 +1959,27 @@ function renderTimeline() {
 
   timelineEl.append(renderCameraRow(columns, start));
 
-  project.layers.forEach((layer, index) => {
+  for (const index of visibleLayers(project)) {
+    const layer = project.layers[index];
+    const depth = layerDepth(project, index);
     const row = element("div", "tl-row");
     row.dataset.layer = String(index);
+    row.style.setProperty("--depth", String(depth));
     if (index === project.currentLayer) row.classList.add("selected");
 
     const head = element("div", "tl-head");
+
+    if (isGroup(layer)) {
+      const toggle = element("button", "tl-icon tl-fold", state.collapsed.has(layer.name) ? "▸" : "▾");
+      toggle.title = state.collapsed.has(layer.name)
+        ? "Open this folder"
+        : "Close this folder";
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleFolder(layer.name);
+      });
+      head.append(toggle);
+    }
 
     const visibility = element("button", "tl-icon", layer.visible ? "👁" : "🚫");
     visibility.title = layer.visible ? "Hide layer" : "Show layer";
@@ -1826,7 +1989,13 @@ function renderTimeline() {
     });
 
     const name = element("button", "tl-name", layer.name);
-    name.title = "Select this layer (double-click to rename)";
+    if (isGroup(layer)) {
+      const count = childrenOf(project, index).length;
+      name.textContent = `${layer.name} : ${count}`;
+      name.title = `Folder with ${count} layer${count === 1 ? "" : "s"} (double-click to rename)`;
+    } else {
+      name.title = "Select this layer (double-click to rename)";
+    }
     name.addEventListener("click", () => selectLayer(index));
     name.addEventListener("dblclick", (event) => {
       event.preventDefault();
@@ -1841,6 +2010,13 @@ function renderTimeline() {
     });
 
     head.append(visibility, name, lock);
+
+    if (layer.clip) {
+      const clip = element("span", "tl-clip", "✂");
+      clip.title = "This layer is cut by the layer below it";
+      head.append(clip);
+    }
+
     head.addEventListener("click", (event) => {
       if (event.target === head) selectLayer(index);
     });
@@ -1854,6 +2030,10 @@ function renderTimeline() {
     const cells = element("div", "tl-cells");
     cells.style.setProperty("--frames", String(columns));
 
+    // A folder shows the cells of the layers inside it, the way an animation
+    // folder shows the cells of an animation.
+    const folder = isGroup(layer) ? folderCells(project, index) : null;
+
     for (let i = 0; i < columns; i += 1) {
       const frame = start + i;
       const info = exposureInfo(layer, frame);
@@ -1863,9 +2043,35 @@ function renderTimeline() {
       if (frame === project.currentFrame) cell.classList.add("current");
       if (i === 0) cell.classList.add("first");
 
+      let owner = index;
+      if (folder) {
+        const entry = folder.get(frame);
+        if (!entry) {
+          cell.textContent = "";
+          cell.title = `Empty frame ${frame}`;
+          cell.addEventListener("click", () => selectFrame(frame));
+          cells.append(cell);
+          continue;
+        }
+        owner = entry.layer;
+        cell.classList.remove(info.kind);
+        cell.classList.add(entry.name ? "head" : "hold");
+        cell.textContent = entry.name || "·";
+        cell.title = entry.name
+          ? `Cell "${entry.name}" on frame ${frame} — ${entry.count} frame${entry.count === 1 ? "" : "s"}`
+          : `Held frame — ${entry.remaining} of ${entry.count} remaining`;
+        cell.addEventListener("click", () => selectFrame(frame, owner));
+        cells.append(cell);
+        continue;
+      }
+
       if (info.kind === "head") {
-        cell.textContent = "●";
-        cell.title = `Drawing starts here — ${info.count} frame${info.count === 1 ? "" : "s"}`;
+        const drawing = info.drawing;
+        const label = drawing?.name;
+        cell.textContent = label || "●";
+        cell.title = label
+          ? `Cell "${label}" — ${info.count} frame${info.count === 1 ? "" : "s"}`
+          : `Drawing starts here — ${info.count} frame${info.count === 1 ? "" : "s"}`;
       } else if (info.kind === "hold") {
         cell.textContent = "·";
         cell.title = `Held frame — ${info.remaining} of ${info.count} remaining`;
@@ -1878,12 +2084,16 @@ function renderTimeline() {
       }
 
       cell.addEventListener("click", () => selectFrame(frame, index));
+      cell.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        renameCell(index, frame);
+      });
       cells.append(cell);
     }
 
     row.append(head, cells);
     timelineEl.append(row);
-  });
+  }
 
   if (project.image) {
     const row = element("div", "tl-row");
@@ -1999,7 +2209,12 @@ function syncLayerControls() {
   startFrameInput.value = String(project.startFrame);
   loopInput.checked = project.loop;
 
-  const info = exposureInfo(layer, project.currentFrame);
+  const folder = isGroup(layer);
+  clipLayerInput.checked = Boolean(layer.clip);
+  clipLayerInput.disabled = folder;
+  removeGroupButton.disabled = !folder;
+
+  const info = folder ? { kind: "empty", count: 0 } : exposureInfo(layer, project.currentFrame);
   const editable = info.kind === "head" || info.kind === "hold";
   exposureInput.value = String(info.count || 1);
   exposureInput.disabled = !editable;
@@ -2007,10 +2222,13 @@ function syncLayerControls() {
   duplicateFrameButton.disabled = !editable;
   holdButton.disabled = !editable;
   deleteFrameButton.disabled = !editable;
+  addFrameButton.disabled = folder;
 
   deleteLayerButton.disabled = project.layers.length <= 1;
-  layerUpButton.disabled = project.currentLayer <= 0;
-  layerDownButton.disabled = project.currentLayer >= project.layers.length - 1;
+  const siblings = childrenOf(project, layer.parent ?? -1);
+  const position = siblings.indexOf(project.currentLayer);
+  layerUpButton.disabled = position <= 0;
+  layerDownButton.disabled = position < 0 || position >= siblings.length - 1;
 
   syncCameraControls();
 }
@@ -2033,6 +2251,43 @@ function selectFrame(frame, layerIndex) {
   syncLayerControls();
   renderCanvas();
   setStatus(`Frame ${project.currentFrame} — ${currentLayer().name}`);
+}
+
+/**
+ * Go to the first frame of the animation.
+ *
+ * The timeline has the buttons a timeline needs: the first frame, the frame
+ * before the next key, the frame after the last key and the last frame.
+ */
+function gotoFirstFrame() {
+  selectFrame(state.project.startFrame);
+}
+
+function gotoLastFrame() {
+  const project = state.project;
+  const keys = keyframes(project);
+  const last = keys.length ? keys[keys.length - 1] : contentEnd(project);
+  selectFrame(Math.max(project.startFrame, last));
+}
+
+function gotoPreviousKey() {
+  const project = state.project;
+  const key = previousKeyframe(project, project.currentFrame);
+  if (key === null) {
+    setStatus("There is no key before this frame");
+    return;
+  }
+  selectFrame(key);
+}
+
+function gotoNextKey() {
+  const project = state.project;
+  const key = nextKeyframe(project, project.currentFrame);
+  if (key === null) {
+    setStatus("There is no key after this frame");
+    return;
+  }
+  selectFrame(key);
 }
 
 function afterChange({ timeline = true } = {}) {
@@ -2090,6 +2345,12 @@ function renameLayer(index) {
   setStatus(`Renamed layer to ${layer.name}`);
 }
 
+/**
+ * Add a layer.
+ *
+ * The new layer goes above the current one, or inside it when the current
+ * layer is a folder.
+ */
 function addLayer() {
   const project = state.project;
   if (project.layers.length >= MAX_LAYERS) {
@@ -2099,44 +2360,166 @@ function addLayer() {
 
   stopPlayback();
   const before = snapshot();
-  project.layers.unshift(createLayer(`Layer ${project.layers.length + 1}`));
-  project.currentLayer = 0;
+  const current = project.currentLayer;
+  const layer = project.layers[current];
+  const inside = isGroup(layer);
+  const parent = inside ? current : (layer.parent ?? -1);
+  const index = inside ? current + 1 : current;
+  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  insertLayer(project, index, created, parent);
+  project.currentLayer = index;
   recordHistory(before);
   markDirty();
   afterChange();
   setStatus(`Added ${currentLayer().name}`);
 }
 
-function deleteLayer() {
+/**
+ * Add a folder.
+ *
+ * The folder is put above the current layer and the current layer goes
+ * inside it, the way a folder is made in Clip Studio Paint.
+ */
+function addGroup() {
   const project = state.project;
-  if (project.layers.length <= 1) {
-    setStatus("At least one layer is required", true);
+  if (project.layers.length >= MAX_LAYERS) {
+    setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
     return;
   }
-  const layer = currentLayer();
-  if (!confirm(`Delete layer "${layer.name}" and all of its drawings?`)) return;
 
   stopPlayback();
   const before = snapshot();
-  project.layers.splice(project.currentLayer, 1);
-  project.currentLayer = Math.min(project.currentLayer, project.layers.length - 1);
+  const current = project.currentLayer;
+  const layer = project.layers[current];
+  const parent = layer.parent ?? -1;
+  const group = createGroup(`Folder ${project.layers.length + 1}`);
+  insertLayer(project, current, group, parent);
+  // The layer that was selected now sits inside the new folder.
+  project.layers[current + 1].parent = current;
+  project.currentLayer = current;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Added ${currentLayer().name}`);
+}
+
+/**
+ * Take a folder apart.
+ *
+ * The layers inside it move up to the place the folder had.
+ */
+function removeGroup() {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  if (!isGroup(layer)) {
+    setStatus("Select a folder to take apart", true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const children = childrenOf(project, index);
+  const parent = layer.parent ?? -1;
+
+  const removed = removeLayers(project, [index]);
+  // The children are one row higher now, and they take the place of the
+  // folder they were in.
+  const newParent = parent === -1 ? -1 : (removed.get(parent) ?? -1);
+  const firstChild = children.length ? (removed.get(children[0]) ?? 0) : 0;
+  for (const child of children) {
+    const at = removed.get(child);
+    if (at !== undefined) project.layers[at].parent = newParent;
+  }
+  project.currentLayer = Math.min(firstChild, project.layers.length - 1);
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Took ${layer.name} apart — ${children.length} layer(s) moved up`);
+}
+
+/** Cut a layer by the picture of the layer below it. */
+function toggleClip() {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  if (isGroup(layer)) {
+    setStatus("A folder cannot be clipped", true);
+    return;
+  }
+  if (layer.clip) {
+    const before = snapshot();
+    layer.clip = false;
+    recordHistory(before);
+    markDirty();
+    afterChange();
+    setStatus(`${layer.name} is no longer clipped`);
+    return;
+  }
+  const source = clipSourceOf(project, index);
+  if (source < 0) {
+    setStatus("There is no layer below to clip this one to", true);
+    return;
+  }
+  const before = snapshot();
+  layer.clip = true;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`${layer.name} is clipped to ${project.layers[source].name}`);
+}
+
+function deleteLayer() {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  const size = blockSize(project, index);
+  if (project.layers.length - size < 1) {
+    setStatus("At least one layer is required", true);
+    return;
+  }
+  const message =
+    size > 1
+      ? `Delete folder "${layer.name}" and the ${size - 1} layer(s) inside it?`
+      : `Delete layer "${layer.name}" and all of its drawings?`;
+  if (!confirm(message)) return;
+
+  stopPlayback();
+  const before = snapshot();
+  const block = [];
+  for (let offset = 0; offset < size; offset += 1) block.push(index + offset);
+  const mapping = removeLayers(project, block);
+  project.currentLayer = Math.min(index, project.layers.length - 1);
   recordHistory(before);
   markDirty();
   afterChange();
   setStatus(`Deleted ${layer.name}`);
 }
 
+/**
+ * Move the current layer up or down.
+ *
+ * A layer moves among its siblings, and a folder moves with the layers
+ * inside it.
+ */
 function moveLayer(delta) {
   const project = state.project;
-  const from = project.currentLayer;
-  const to = from + delta;
-  if (to < 0 || to >= project.layers.length) return;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  const parent = layer.parent ?? -1;
+  const siblings = childrenOf(project, parent);
+  const position = siblings.indexOf(index);
+  const target = siblings[position + delta];
+  if (target === undefined) return;
 
   stopPlayback();
   const before = snapshot();
-  const [layer] = project.layers.splice(from, 1);
-  project.layers.splice(to, 0, layer);
-  project.currentLayer = to;
+  const size = blockSize(project, index);
+  const targetSize = blockSize(project, target);
+  // Moving down puts the layer below the target one, moving up above it.
+  const to = delta < 0 ? target : target - size + targetSize;
+  const indexOf = moveBlock(project, index, size, to);
+  project.currentLayer = indexOf?.get(layer) ?? index;
   recordHistory(before);
   markDirty();
   afterChange();
@@ -2151,21 +2534,41 @@ let layerDrag = null;
 /**
  * Move a layer to a new place in the list.
  *
- * The list is drawn top first, so a smaller index is a higher layer.
+ * The list is drawn top first, so a smaller index is a higher layer. A
+ * folder and the layers inside it are one block, so they move together, and
+ * a layer dropped on a folder goes inside it.
  */
 function reorderLayer(from, to) {
   const project = state.project;
-  if (from === to || to < 0 || to >= project.layers.length) return;
+  if (from === to) return;
+  const layer = project.layers[from];
+  const target = project.layers[to];
+  if (!layer || !target) return;
 
   stopPlayback();
   const before = snapshot();
-  const [layer] = project.layers.splice(from, 1);
-  project.layers.splice(to, 0, layer);
-  project.currentLayer = to;
+  const size = blockSize(project, from);
+  const intoFolder = isGroup(target);
+
+  // The block lands above the row it was dropped on, or inside it when
+  // that row is a folder.
+  const landing = intoFolder
+    ? (from < to ? to - size + 1 : to + 1)
+    : (from < to ? to - size : to);
+
+  const indexOf = moveBlock(project, from, size, landing);
+  if (!indexOf) return;
+
+  const moved = indexOf.get(layer);
+  project.layers[moved].parent = intoFolder
+    ? (indexOf.get(target) ?? -1)
+    : (target.parent ?? -1);
+
+  project.currentLayer = moved;
   recordHistory(before);
   markDirty();
   afterChange();
-  setStatus(`Moved ${layer.name} to position ${to + 1} of ${project.layers.length}`);
+  setStatus(`Moved ${layer.name} to position ${moved + 1} of ${project.layers.length}`);
 }
 
 /**
@@ -2223,6 +2626,10 @@ function onLayerDragEnd() {
 
 function addDrawing() {
   const layer = currentLayer();
+  if (isGroup(layer)) {
+    setStatus("A folder holds other layers — add a layer inside it instead", true);
+    return;
+  }
   if (layer.locked) {
     setStatus("This layer is locked — unlock it first", true);
     return;
@@ -2234,11 +2641,53 @@ function addDrawing() {
 
   stopPlayback();
   const before = snapshot();
-  insertDrawing(layer, state.project.currentFrame);
+  // The name is worked out before the cell is added, because the cells that
+  // are already on the frame decide the letter.
+  const name = cellName(layer, state.project.currentFrame);
+  const drawing = insertDrawing(layer, state.project.currentFrame);
+  // A new cell is named after the frame it sits on, the way Clip Studio
+  // Paint names the cells of an animation folder.
+  if (drawing && !drawing.name) drawing.name = name;
   recordHistory(before);
   markDirty();
   afterChange();
   setStatus(`Inserted a blank drawing at frame ${state.project.currentFrame}`);
+}
+
+/**
+ * Give a cell a new name.
+ *
+ * The name is what the timeline shows in the cell, and it is how a cell of
+ * an animation folder is recognised, the way Clip Studio Paint names its
+ * cells after the frame they sit on.
+ */
+function renameCell(index, frame) {
+  const layer = state.project.layers[index];
+  if (!layer || isGroup(layer)) return;
+  const info = exposureInfo(layer, frame);
+  if (info.kind !== "head" && info.kind !== "hold") {
+    setStatus("There is no cell at this frame", true);
+    return;
+  }
+
+  const value = prompt("Cell name", info.drawing?.name ?? String(frame));
+  if (value === null) return;
+  const name = value.trim();
+  if (name.length > 80) {
+    setStatus("A cell name must be 80 characters or fewer", true);
+    return;
+  }
+
+  const before = snapshot();
+  if (name.length === 0) {
+    delete info.drawing.name;
+  } else {
+    info.drawing.name = name;
+  }
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(name ? `Renamed the cell to ${name}` : "Removed the cell name");
 }
 
 function duplicateFrame() {
@@ -2650,6 +3099,10 @@ function drawPoint(event) {
 function layerForDrawing() {
   const layer = currentLayer();
   if (!layer) return null;
+  if (isGroup(layer)) {
+    setStatus("A folder holds other layers — select a layer inside it to draw", true);
+    return null;
+  }
   if (!layer.visible) {
     setStatus("This layer is hidden — show it before drawing", true);
     return null;
@@ -2668,6 +3121,9 @@ function ensureDrawing(layer, frame) {
   // The frame is empty (a gap or outside the exposed range), so a new
   // one-frame drawing can be added without moving existing drawings.
   const drawing = { at: frame, hold: 1, strokes: [] };
+  // A new cell is named after the frame it sits on, the way Clip Studio
+  // Paint names the cells of an animation folder.
+  drawing.name = cellName(layer, frame);
   layer.drawings.push(drawing);
   layer.drawings.sort((a, b) => a.at - b.at);
   return drawing;
@@ -3049,13 +3505,20 @@ preBehaviorInput.addEventListener("change", () => changeBehavior("pre"));
 postBehaviorInput.addEventListener("change", () => changeBehavior("post"));
 
 playButton.addEventListener("click", togglePlayback);
+firstFrameButton.addEventListener("click", gotoFirstFrame);
+previousKeyButton.addEventListener("click", gotoPreviousKey);
+nextKeyButton.addEventListener("click", gotoNextKey);
+lastFrameButton.addEventListener("click", gotoLastFrame);
 loopInput.addEventListener("change", toggleLoop);
 fpsInput.addEventListener("change", changeFps);
 startFrameInput.addEventListener("change", changeStartFrame);
 addLayerButton.addEventListener("click", addLayer);
+addGroupButton.addEventListener("click", addGroup);
+removeGroupButton.addEventListener("click", removeGroup);
 deleteLayerButton.addEventListener("click", deleteLayer);
 layerUpButton.addEventListener("click", () => moveLayer(-1));
 layerDownButton.addEventListener("click", () => moveLayer(1));
+clipLayerInput.addEventListener("change", toggleClip);
 addFrameButton.addEventListener("click", addDrawing);
 duplicateFrameButton.addEventListener("click", duplicateFrame);
 holdButton.addEventListener("click", holdFrame);
@@ -3258,9 +3721,12 @@ function applyImportedProject(data, extension) {
         `${images} frame${images === 1 ? "" : "s"}${warnings}. Save as .tvmini to keep it.`,
     );
   } else {
+    const layers = data.project.layers.length;
+    const cells = data.project.layers.reduce((n, l) => n + l.drawings.length, 0);
+    const folders = data.project.layers.filter((l) => l.type === "group").length;
     setStatus(
-      `Imported ${data.name} (${data.project.width}x${data.project.height}), ` +
-        `${data.project.layers.length} layer(s) at ${data.project.fps} fps. ` +
+      `Imported ${data.name} (${data.project.width}x${data.project.height}): ` +
+        `${layers} layer(s), ${folders} folder(s), ${cells} cell(s) at ${data.project.fps} fps. ` +
         "Save as .tvmini to keep it, or export a .clip - the .clip itself is never changed.",
     );
   }
@@ -4047,6 +4513,26 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       selectLayer(Math.min(state.project.layers.length - 1, state.project.currentLayer + 1));
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      gotoFirstFrame();
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      gotoLastFrame();
+      return;
+    }
+    if (event.key === "PageUp") {
+      event.preventDefault();
+      gotoPreviousKey();
+      return;
+    }
+    if (event.key === "PageDown") {
+      event.preventDefault();
+      gotoNextKey();
       return;
     }
     if (key === "o") {
