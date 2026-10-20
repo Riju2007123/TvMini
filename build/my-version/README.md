@@ -15,8 +15,12 @@ model. It shares **no code, data or file formats** with TVPaint.
   "Transparent" chip that switches to the eraser) next to the native colour
   input, and `.tvpp` (TVPaint Animation) import/export — see
   `docs/moart-study.md` for how the formats were mapped.
-- Onion skin: faint previous/next frames of the current layer under the
-  drawing, toggled in the timeline toolbar; hold `S` for a 160 ms flipbook
+- Onion skin: tinted neighbouring drawings (red = before, green = after) of the
+  current layer under the drawing, with independent before/after counts
+  (0–5 each); toggled in the timeline toolbar or with `O`. Ghosts follow
+  drawings, so a drawing held for several frames counts once. Playback speed
+  (¼×–2×) multiplies the FPS, and the clock-driven playback keeps its tempo
+  even when a frame renders slowly. Hold `S` for a 160 ms flipbook
   preview of the current layer's frames.
 
 ## Keyboard shortcuts
@@ -28,6 +32,7 @@ model. It shares **no code, data or file formats** with TVPaint.
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
 | Timeline | Flip preview of the current layer (hold) | `S` |
+| Timeline | Toggle onion skin | `O` |
 | Timeline | Frame step | `←` / `→` |
 | Timeline | Layer select | `↑` / `↓` |
 | Timeline | Exposure longer / shorter | `5` / `Shift+5` |
@@ -39,7 +44,8 @@ model. It shares **no code, data or file formats** with TVPaint.
 | Project | This list in the app | `F1` |
 
 `F1` (or the Help menu) always shows the current list, and `Esc` closes any
-dialog. Preferences — pressure gain, touch drawing, the start screen — are
+dialog. Preferences — pressure gain, touch drawing, the start screen, onion
+skin counts and the playback speed — are
 remembered in `localStorage` (`tvmini.settings.v1`).
 
 ## Run

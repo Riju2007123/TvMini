@@ -136,9 +136,15 @@
         <section class="timeline-panel" aria-label="Timeline">
           <div class="timeline-toolbar">
             <button id="playButton" title="Play or pause (Space)">▶ Play</button>
-            <label class="field checkbox inline" title="Faint previous/next frames of the current layer">
+            <label class="field checkbox inline" title="Onion skin: ghost neighbouring drawings (O)">
               <input id="onion" type="checkbox" />
-              <span>Onion skin</span>
+              <span>Onion</span>
+            </label>
+            <label class="field inline" title="Drawings ghosted before the current one (red)">
+              ◀ <input id="onionBefore" type="number" min="0" max="5" step="1" value="2" />
+            </label>
+            <label class="field inline" title="Drawings ghosted after the current one (green)">
+              ▶ <input id="onionAfter" type="number" min="0" max="5" step="1" value="1" />
             </label>
             <label class="field checkbox inline">
               <input id="loop" type="checkbox" checked />
@@ -146,6 +152,15 @@
             </label>
             <label class="field inline" title="Playback speed">
               FPS <input id="fps" type="number" min="1" max="120" step="1" value="12" />
+            </label>
+            <label class="field inline" title="Playback speed multiplier">
+              Speed
+              <select id="speed">
+                <option value="0.25">¼×</option>
+                <option value="0.5">½×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+              </select>
             </label>
             <label class="field inline" title="First frame number">
               Start <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />

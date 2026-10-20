@@ -1,4 +1,5 @@
 import { History } from "./history.js";
+import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import {
   contentEnd,
@@ -116,7 +117,8 @@ const state = {
   pressureGain: 1,
   touchDraw: true,
   showStart: true,
-  onionSkin: false,
+  playSpeed: 1,
+  onion: { enabled: false, before: 2, after: 1 },
 };
 
 const history = new History({ limit: 100 });
@@ -440,6 +442,28 @@ function drawDrawingToPaint(project, drawing, alpha = 1) {
   return paintCanvas;
 }
 
+const ONION_TINT = { before: "#e5484d", after: "#2da44e" };
+const ONION_BASE_ALPHA = 0.45;
+
+function drawOnionSkins(project, layer, frame) {
+  const { width, height } = project;
+  const targets = onionTargets(layer, frame, state.onion);
+  // Furthest first, so the nearest ghost ends up on top.
+  for (const target of [...targets].reverse()) {
+    drawDrawingToPaint(project, target.drawing);
+
+    // Tint only the pixels that were drawn.
+    paintCtx.globalCompositeOperation = "source-atop";
+    paintCtx.fillStyle = ONION_TINT[target.side];
+    paintCtx.fillRect(0, 0, width, height);
+    paintCtx.globalCompositeOperation = "source-over";
+
+    ctx.globalAlpha = layer.opacity * ONION_BASE_ALPHA * target.weight;
+    ctx.drawImage(paintCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+}
+
 function renderCanvas(frame = state.project.currentFrame) {
   const project = state.project;
   const { width, height } = project;
@@ -461,29 +485,13 @@ function renderCanvas(frame = state.project.currentFrame) {
     const layer = project.layers[index];
     if (!layer.visible || layer.opacity <= 0) continue;
 
-    const resolved = resolveDrawing(layer, frame);
-
-    // Onion skin: faint neighbours of this layer's frame under the real one
-    // (per-layer, like a genga stack).
-    if (state.onionSkin) {
-      for (const [offset, ghostAlpha] of [
-        [-2, 0.1],
-        [-1, 0.3],
-        [1, 0.3],
-        [2, 0.1],
-      ]) {
-        const ghostFrame = frame + offset;
-        if (ghostFrame < 1) continue;
-        const ghost = resolveDrawing(layer, ghostFrame);
-        if (!ghost) continue;
-        if (ghost.drawing === resolved?.drawing) continue;
-        drawDrawingToPaint(project, ghost.drawing, ghostAlpha);
-        ctx.globalAlpha = ghostAlpha * layer.opacity;
-        ctx.drawImage(paintCanvas, 0, 0);
-        ctx.globalAlpha = 1;
-      }
+    // Onion skins sit just under the current layer's own drawing and are
+    // hidden during playback so they never flicker.
+    if (state.onion.enabled && !state.playing && index === project.currentLayer) {
+      drawOnionSkins(project, layer, frame);
     }
 
+    const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
 
     drawDrawingToPaint(project, resolved.drawing);
@@ -1027,35 +1035,62 @@ function startPlayback() {
 
   state.playing = true;
   playButton.textContent = "⏸ Pause";
+  renderCanvas(); // hides the onion skins
 
-  const tick = () => {
+  // Clock-driven playback: the frame is derived from elapsed time, so a slow
+  // render skips frames instead of slowing the animation down, and changing
+  // the fps or speed takes effect immediately.
+  let last = performance.now();
+  let carry = 0;
+
+  const step = (now) => {
+    if (!state.playing) return;
+    state.playTimer = requestAnimationFrame(step);
+
+    const elapsed = now - last;
+    last = now;
+    // After a long stall (hidden tab, debugger) resume gently, not in a jump.
+    carry += elapsed > 500 ? 0 : (elapsed / 1000) * project.fps * state.playSpeed;
+    const advance = Math.floor(carry);
+    if (advance < 1) return;
+    carry -= advance;
+
     const end = playbackEnd();
-    if (project.currentFrame >= end) {
+    const span = end - project.startFrame + 1;
+    let next = project.currentFrame + advance;
+    if (next > end) {
       if (project.loop) {
-        project.currentFrame = project.startFrame;
+        next = project.startFrame + ((next - project.startFrame) % span);
       } else {
+        project.currentFrame = end;
+        updateFrameLabel();
+        updatePlayhead();
+        renderCanvas();
         stopPlayback();
         setStatus("Playback finished");
         return;
       }
-    } else {
-      project.currentFrame += 1;
     }
+    project.currentFrame = next;
     updateFrameLabel();
     updatePlayhead();
     renderCanvas();
   };
 
-  state.playTimer = setInterval(tick, Math.max(16, Math.round(1000 / project.fps)));
-  setStatus(`Playing at ${project.fps} fps`);
+  state.playTimer = requestAnimationFrame(step);
+  setStatus(`Playing at ${project.fps} fps${state.playSpeed === 1 ? "" : ` × ${state.playSpeed}`}`);
 }
 
 function stopPlayback() {
-  if (state.playTimer) clearInterval(state.playTimer);
+  const wasPlaying = state.playing;
+  if (state.playTimer) cancelAnimationFrame(state.playTimer);
   state.playTimer = null;
   state.playing = false;
   playButton.textContent = "▶ Play";
-  if (state.project?.layers?.length) syncLayerControls();
+  if (state.project?.layers?.length) {
+    syncLayerControls();
+    if (wasPlaying) renderCanvas(); // bring the onion skins back
+  }
 }
 
 function togglePlayback() {
@@ -1298,6 +1333,11 @@ function shrinkExposure() {
 
 const SETTINGS_KEY = "tvmini.settings.v1";
 
+function clampOnion(value, fallback) {
+  const number = Math.trunc(Number(value));
+  return Number.isFinite(number) ? Math.min(5, Math.max(0, number)) : fallback;
+}
+
 function loadSettings() {
   try {
     const data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null") || {};
@@ -1306,6 +1346,12 @@ function loadSettings() {
     }
     state.touchDraw = data.touchDraw !== false;
     state.showStart = data.showStart !== false;
+    if ([0.25, 0.5, 1, 2].includes(data.playSpeed)) state.playSpeed = data.playSpeed;
+    if (data.onion && typeof data.onion === "object") {
+      state.onion.enabled = data.onion.enabled === true;
+      state.onion.before = clampOnion(data.onion.before, 2);
+      state.onion.after = clampOnion(data.onion.after, 1);
+    }
   } catch {
     // A blocked or broken store only loses the remembered preferences.
   }
@@ -1319,6 +1365,8 @@ function saveSettings() {
         pressureGain: state.pressureGain,
         touchDraw: state.touchDraw,
         showStart: state.showStart,
+        playSpeed: state.playSpeed,
+        onion: { ...state.onion },
       }),
     );
   } catch {
@@ -1332,6 +1380,17 @@ function syncSettingsUI() {
   pressureGainValue.textContent = `${percent}%`;
   touchDrawInput.checked = state.touchDraw;
   showStartInput.checked = state.showStart;
+  speedInput.value = String(state.playSpeed);
+  onionInput.checked = state.onion.enabled;
+  onionBeforeInput.value = String(state.onion.before);
+  onionAfterInput.value = String(state.onion.after);
+}
+
+function setOnion(patch) {
+  Object.assign(state.onion, patch);
+  syncSettingsUI();
+  saveSettings();
+  renderCanvas();
 }
 
 pressureGainInput.addEventListener("input", () => {
@@ -1842,6 +1901,9 @@ const wheelCanvas = document.getElementById("wheelCanvas");
 const wheelHex = document.getElementById("wheelHex");
 const wheelTransparent = document.getElementById("wheelTransparent");
 const onionInput = document.getElementById("onion");
+const speedInput = document.getElementById("speed");
+const onionBeforeInput = document.getElementById("onionBefore");
+const onionAfterInput = document.getElementById("onionAfter");
 
 /* Matches the reference layout: hue ring around an inscribed SV square. */
 const WHEEL_SIZE = 214;
@@ -2013,9 +2075,19 @@ wheelTransparent.addEventListener("click", () => {
 });
 
 onionInput.addEventListener("change", () => {
-  state.onionSkin = onionInput.checked;
-  renderCanvas();
-  setStatus(state.onionSkin ? "Onion skin on (this layer)" : "Onion skin off");
+  setOnion({ enabled: onionInput.checked });
+  setStatus(state.onion.enabled ? "Onion skin on" : "Onion skin off");
+});
+onionBeforeInput.addEventListener("change", () => {
+  setOnion({ before: clampOnion(onionBeforeInput.value, state.onion.before) });
+});
+onionAfterInput.addEventListener("change", () => {
+  setOnion({ after: clampOnion(onionAfterInput.value, state.onion.after) });
+});
+speedInput.addEventListener("change", () => {
+  state.playSpeed = Number(speedInput.value) || 1;
+  saveSettings();
+  setStatus(`Playback speed ${speedInput.options[speedInput.selectedIndex].text}`);
 });
 
 /* ------------------------------------------------- flip preview (hold S) */
@@ -2102,6 +2174,7 @@ const KEYS = [
     rows: [
       ["Play / pause", "Space"],
       ["Flip preview of the current layer (hold)", "S"],
+      ["Toggle onion skin", "O"],
       ["Previous / next frame", "← / →"],
       ["Select layer above / below", "↑ / ↓"],
       ["Extend the exposure one frame", "5"],
@@ -2295,6 +2368,12 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       selectLayer(Math.min(state.project.layers.length - 1, state.project.currentLayer + 1));
+      return;
+    }
+    if (key === "o") {
+      event.preventDefault();
+      setOnion({ enabled: !state.onion.enabled });
+      setStatus(state.onion.enabled ? "Onion skin on" : "Onion skin off");
       return;
     }
     if (key === "b") {
