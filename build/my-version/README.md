@@ -170,6 +170,7 @@ node --test
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
 | Inspect `.clip` | the container, every table, the layers, the timeline and the external blobs | `src/clip.js` `readClipDocument` |
 | Read `.clip` pixels | the raster of every layer, decoded out of the `CHNKExta` blobs | `src/clip.js` `readClipLayers` |
+| Read `.clip` animation | the timeline, the tracks and the properties each track animates | `src/clip.js` `readClipDocument` |
 | Inspect `.clip` | read-only report of the tables, layers and limits inside a `.clip` | `src/clip.js` `readClipDocument` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |

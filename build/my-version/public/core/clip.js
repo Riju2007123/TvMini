@@ -2,6 +2,7 @@ import { Buffer } from "./bytes.js";
 import { openDatabase } from "./sqlite.js";
 import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
+import { actionProperties, readActionBlob } from "./clip-animation.js";
 
 /** Every Clip Studio Paint document starts with this 8-byte tag. */
 export const CLIP_MAGIC = "CSFCHUNK";
@@ -371,14 +372,37 @@ export async function readClipDocumentFromBytes(data) {
           currentFrame: Number(timelineRow.CurrentFrame ?? 0),
         }
       : null;
-    const tracks = allRows("Track").map((track) => ({
-      mainId: Number(track.MainId ?? 0),
-      itemId: Number(track.ItemId ?? 0),
-      kind: Number(track.TrackKind ?? 0),
-      actionMixerSize: Number(track.TrackActionMixerSize ?? 0),
-      actionMixer2Size: Number(track.TrackActionMixer2Size ?? 0),
-      valueMapSize: track.TrackValueMap == null ? 0 : asText(track.TrackValueMap).length,
-    }));
+    const tracks = allRows("Track").map((track) => {
+      // The two mixers are pointers to blobs outside the database. Unpacking
+      // one gives the names of the properties the track animates.
+      const action = (column) => {
+        const id = asText(track[column]);
+        const chunk = externalById.get(id);
+        if (!chunk) return null;
+        const document = readActionBlob(chunk.payload);
+        if (!document) return null;
+        return {
+          version: document.version,
+          codec: document.codec,
+          types: document.types.length,
+          properties: actionProperties(document),
+        };
+      };
+      return {
+        mainId: Number(track.MainId ?? 0),
+        itemId: Number(track.ItemId ?? 0),
+        kind: Number(track.TrackKind ?? 0),
+        nextIndex: Number(track.TrackNextIndex ?? 0),
+        layerUuid: track.LayerUuidWithTrack == null
+          ? null
+          : Buffer.from(track.LayerUuidWithTrack).toString("hex"),
+        actionMixerSize: Number(track.TrackActionMixerSize ?? 0),
+        actionMixer2Size: Number(track.TrackActionMixer2Size ?? 0),
+        valueMapSize: track.TrackValueMap == null ? 0 : asText(track.TrackValueMap).length,
+        action: action("TrackActionMixer"),
+        action2: action("TrackActionMixer2"),
+      };
+    });
 
     // The blobs that live outside the database were resolved above; the
     // table is reported as it stands in the document.

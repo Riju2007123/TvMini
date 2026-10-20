@@ -264,6 +264,82 @@ mixers. The writer writes a static document: the bundled template has no
 `TimeLine` table at all, so an export carries the timing of the template
 rather than the timing of the project.
 
+## The animation
+
+`TimeLine` holds the frame rate and the frame range. `Track` holds the
+keyframes, in two opaque blobs, `TrackActionMixer` and `TrackActionMixer2`,
+with a `TrackKind` that says what the track animates.
+
+The tracks of a timeline form a list: `TimeLine.FirstTrack` points at the
+first one and each `Track.TrackNextIndex` points at the next. The kinds that
+were seen are 1000, 2000, 2001, 2003 and 2005 (a plain track, an animation
+track, a track with one more property, a track on a layer and one more), and
+3000, 3103, 3104, 3106 and 4000 in the documents that use the 3D and the
+comic features.
+
+### The mixer blobs
+
+`Track.TrackActionMixer` and `Track.TrackActionMixer2` are 40 byte pointers,
+exactly like `Offscreen.BlockData`, and the sizes sit in the columns next to
+them. The blob they point at is
+
+```
+0x00   u64 BE   the length of what follows
+0x08   u32 LE   the length of the compressed part
+0x0C            the zlib stream
+```
+
+after the 56 byte external locator. Inflating it gives CSP's own serialised
+document:
+
+```
+0x00   "cmt "        the magic
+0x04   4 characters  the version, "0100" or "0110"
+0x08   "binc"        the codec
+0x0C   u32 LE        a checksum
+0x10   u32 LE        the number of entries in the string pool
+0x14                the pool, one length prefixed string per entry
+```
+
+The pool starts with the type names the document uses and is followed by the
+names of the properties and the string values; the body after the pool refers
+to those entries by their index. The numbers inside the document are little
+endian, while the numbers of the blob that carries it are big endian.
+
+The type names seen are `null`, `Byte`, `SByte`, `UInt16`, `Int16`,
+`UInt32`, `Int32`, `Single`, `Double`, `String`, `Float2`, `Float3`, `Quat`,
+`Matrix44` and the arrays of them. A document that carries doubles instead of
+floats has `Double2`, `Double3` and `Double[]` as well.
+
+### What a track animates
+
+The property names in the pool say exactly what a track holds. The smallest
+track has `ActionNodeClip`, a `TimeClip` with `Start`, `End` and `Rate`, the
+blend properties `MotionBlend`, `ShiftBlend`, `NextBlend` and `BlendEnable`,
+`TimeInfo` and `AnimInfo`. An animation track adds `Param` with
+`ImageCelName` and `Tag`, and one `FCurve` with `Type`, `Frame`, `Value`,
+`LeftSlope`, `RightSlope`, `Interp` and `Constant`. A track that moves a cel
+adds `ImageAspectScale`, `ImageCenter`, `ImagePosition`, `ImageRotation` and
+`Opacity`, and its curve has an `Axis` and both an `X` and a `Y`.
+
+The program itself names the same things in its type information, in the
+`Planeswalker` namespace:
+
+```
+.?AVPWAnimationFCurve@Planeswalker@@
+.?AVPWFCurve@Planeswalker@@
+.?AV?$vector@VPWFCurveKey@Planeswalker@@...
+```
+
+So a keyframe is a `PWFCurveKey`: a frame, a value, the slope on each side
+and the interpolation. The keyframe list itself is not decoded yet: the value
+part of the body still has to be mapped out, and until it is, an animation
+cannot be written back.
+
+TVMini reads the timeline, the tracks, the sizes and the property names, and
+reports them. It does not write animation: the bundled template is a static
+document with no `TimeLine` table at all, so an export carries no motion.
+
 ## How CSP writes a file
 
 Putting it together, the method CSP uses is:

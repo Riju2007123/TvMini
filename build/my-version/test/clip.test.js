@@ -24,6 +24,7 @@ import {
   readClipDocumentFromBytes,
   readClipLayersFromBytes,
 } from "../public/core/clip.js";
+import { parseActionDocument } from "../public/core/clip-animation.js";
 
 /** The blank Clip Studio document the writer starts from. */
 const TEMPLATE = new URL("../public/assets/clip-template.clip", import.meta.url);
@@ -333,6 +334,42 @@ test("a written .clip reads back with the same pixels", async () => {
     }
   }
   assert.ok(matching > 100, `only ${matching} pixels matched`);
+});
+
+test("an action document is read and its properties are named", async () => {
+  await withTempDir(async (dir) => {
+    // The header of the serialised form CSP writes for a track: the magic,
+    // the version, the codec, a checksum and the size of the string pool.
+    const pool = [
+      "null", "Byte", "UInt16", "Single",
+      "ActionNodeClip", "TimeClip", "Start", "End", "Rate",
+      "FCurve", "Type", "Frame", "Value", "LeftSlope", "RightSlope", "Interp", "Constant",
+    ];
+    const header = Buffer.alloc(20);
+    header.write("cmt ", 0, "ascii");
+    header.write("0100", 4, "ascii");
+    header.write("binc", 8, "ascii");
+    header.writeUInt32LE(0x12345678, 12);
+    header.writeUInt32LE(pool.length, 16);
+    const entries = Buffer.concat(
+      pool.map((name) => {
+        const text = Buffer.from(name, "ascii");
+        return Buffer.concat([Buffer.from([text.length]), text]);
+      }),
+    );
+    const body = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
+    const document = Buffer.concat([header, entries, body]);
+
+    const parsed = parseActionDocument(document);
+    assert.equal(parsed.version, "0100");
+    assert.equal(parsed.codec, "binc");
+    assert.equal(parsed.checksum, 0x12345678);
+    assert.equal(parsed.poolSize, pool.length);
+    assert.deepEqual(parsed.types, ["null", "Byte", "UInt16", "Single"]);
+    assert.ok(parsed.properties.includes("FCurve"));
+    assert.ok(parsed.properties.includes("LeftSlope"));
+    assert.deepEqual([...parsed.body], [...body]);
+  });
 });
 
 test("readClipPreview rejects foreign files and damaged databases", async () => {
