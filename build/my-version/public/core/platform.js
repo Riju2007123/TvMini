@@ -277,7 +277,7 @@ function createBrowserBackend(hooks) {
       const text = `${JSON.stringify(project, null, 2)}\n`;
       const bytes = new TextEncoder().encode(text);
       const name = withTvminiExtension(currentName || "untitled");
-      const saved = await saveFile(name, bytes);
+      const saved = await saveFile(name, bytes, "project");
       if (!saved) return null;
       return { name: saved.name, bytes: bytes.length, recent: addRecent(saved.name, text) };
     },
@@ -285,7 +285,7 @@ function createBrowserBackend(hooks) {
     async exportPng(project, stem) {
       const name = `${stem}.png`;
       const { buffer, width, height } = renderPng(project);
-      const saved = await saveFile(name, new Uint8Array(buffer));
+      const saved = await saveFile(name, new Uint8Array(buffer), "png");
       if (!saved) return null;
       return { path: saved.name, bytes: buffer.length, width, height };
     },
@@ -296,7 +296,7 @@ function createBrowserBackend(hooks) {
         throw new Error("refusing to overwrite the imported .clip file");
       }
       const result = await createClipBuffer(project, { name: name.replace(/\.clip$/i, "") });
-      const saved = await saveFile(name, new Uint8Array(result.buffer));
+      const saved = await saveFile(name, new Uint8Array(result.buffer), "clip");
       if (!saved) return null;
       return {
         path: saved.name,
@@ -313,7 +313,7 @@ function createBrowserBackend(hooks) {
         throw new Error("refusing to overwrite the imported .tvpp file");
       }
       const buffer = createTvppBuffer(project);
-      const saved = await saveFile(name, new Uint8Array(buffer));
+      const saved = await saveFile(name, new Uint8Array(buffer), "tvpp");
       if (!saved) return null;
       return { path: saved.name, bytes: buffer.length, width: project.width, height: project.height };
     },

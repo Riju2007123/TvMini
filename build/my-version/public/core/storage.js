@@ -105,13 +105,62 @@ export function pickFile(accept) {
   });
 }
 
-/** Save bytes to a file, using the File System Access API when available. */
-export async function saveFile(name, bytes) {
-  const blob = new Blob([bytes], { type: "application/octet-stream" });
+/**
+ * The kinds of file the app writes.
+ *
+ * The dialog of the browser is told which kind is wanted, so it offers that
+ * one kind instead of every file on the machine.
+ */
+export const FILE_KINDS = {
+  project: {
+    description: "TVMini project",
+    mime: "application/json",
+    extensions: [".tvmini"],
+  },
+  png: {
+    description: "PNG image",
+    mime: "image/png",
+    extensions: [".png"],
+  },
+  clip: {
+    description: "Clip Studio Paint document",
+    mime: "application/octet-stream",
+    extensions: [".clip"],
+  },
+  tvpp: {
+    description: "TVPaint Animation document",
+    mime: "application/octet-stream",
+    extensions: [".tvpp"],
+  },
+};
+
+/**
+ * Save bytes to a file, using the File System Access API when available.
+ *
+ * `kind` is one of the keys of `FILE_KINDS`. The dialog of the browser then
+ * only offers the kind of file that is wanted, and the name it suggests
+ * already carries the right extension.
+ */
+export async function saveFile(name, bytes, kind = null) {
+  const wanted = kind ? FILE_KINDS[kind] : null;
+  const blob = new Blob([bytes], { type: wanted?.mime ?? "application/octet-stream" });
 
   if (typeof window.showSaveFilePicker === "function") {
     try {
-      const handle = await window.showSaveFilePicker({ suggestedName: name });
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        // Without this the dialog offers every file type there is.
+        ...(wanted
+          ? {
+              types: [
+                {
+                  description: wanted.description,
+                  accept: { [wanted.mime]: wanted.extensions },
+                },
+              ],
+            }
+          : {}),
+      });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();

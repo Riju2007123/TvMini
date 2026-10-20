@@ -149,6 +149,7 @@ it. The repository contains `.github/workflows/pages.yml`, which publishes
 | Save / open a project | real file paths, atomic writes | browser download, or the File System Access API to save in place |
 | Export PNG / `.clip` | written straight to disk | browser download |
 | Import a `.clip` document | same | same |
+| Save / export | written straight to disk | the dialog of the browser, offering only the kind of file that is wanted |
 | Recent projects | paths on disk, re-opened by path | kept in `localStorage`; a browser cannot re-open a file by path, so the project text is stored |
 | Folder browser | in-app directory browser | the browser's own file picker |
 | Layers panel | the tree of layers and folders, with the controls for the layer being worked on | `public/app.js` `renderLayerPanel` |
