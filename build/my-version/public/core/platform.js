@@ -91,6 +91,13 @@ function createServerBackend(hooks) {
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
+    async chooseAndImportAudio() {
+      const path = await hooks.pickPath({ mode: "open", title: "Import a sound" });
+      if (!path) return null;
+      const data = await serverRequest("POST", "/api/import-audio", { path });
+      return { name: data.name, path: data.path, data: data.data };
+    },
+
     async importTvpp(path) {
       const data = await serverRequest("POST", "/api/import-tvpp", { path });
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
@@ -270,6 +277,12 @@ function createBrowserBackend(hooks) {
     async importTvpp(name) {
       // Same rule as .clip: a browser re-opens recent entries from storage.
       return this.open(name);
+    },
+
+    async chooseAndImportAudio() {
+      const picked = await pickFile("audio/*");
+      if (!picked) return null;
+      return { name: picked.name, path: picked.name, data: bytesToBase64(picked.bytes) };
     },
 
     async saveProject(project, currentName) {

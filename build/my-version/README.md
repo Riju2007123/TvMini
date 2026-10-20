@@ -27,6 +27,13 @@ model. It shares **no code, data or file formats** with TVPaint.
   per-stroke **opacity** slider and **blend modes** (normal / multiply /
   screen). Shape strokes are stored in the project file, so they survive
   save/open and export to PNG, `.clip` and `.tvpp` like any brush stroke.
+- Camera track: keyframes that frame the shot. The stage shows what the
+  camera sees (or the whole canvas with the frame drawn on it), the camera
+  holds its last key until the next one, and the PNG export is cropped to
+  the camera window.
+- Sound track: import an audio file, see its waveform under the frames it
+  plays on, and hear it with the playback. The sound travels inside the
+  project file, so a project stays self-contained.
 
 ## Keyboard shortcuts
 
@@ -34,6 +41,7 @@ model. It shares **no code, data or file formats** with TVPaint.
 |---|---|---|
 | Tools | Brush / Eraser / Pick colour | `B` / `E` / `I` |
 | Tools | Line / Rectangle / Ellipse / Fill | `L` / `R` / `V` / `F` |
+| Tools | Add a camera key on this frame | `C` |
 | Tools | Brush size | `[` / `]` |
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
@@ -124,6 +132,8 @@ node --test
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
 | Eraser | clears its own layer, revealing lower layers/image | `public/app.js`, `src/png.js` |
 | Shape tools | line, rectangle, ellipse and bucket fill, stored as strokes | `public/core/paint.js`, `public/core/png.js` |
+| Camera track | keyframes that frame the shot; the export is cropped to it | `public/timeline.js`, `public/core/png.js` |
+| Sound track | imported audio with a waveform, played with the animation | `public/audio.js`, `public/app.js` |
 | Stroke opacity / blend | per-stroke transparency and multiply/screen mixing | `public/core/paint.js`, `public/core/png.js` |
 | Stabiliser | eases pointer samples into a calmer path (0–10) | `public/core/paint.js` `smoothPoint` |
 | Undo / redo | 100-step document history, toolbar + shortcuts | `public/app.js` |
@@ -321,6 +331,55 @@ A transparent or blending stroke is painted into a mask first and then applied
 in one pass, so a stroke never darkens its own overlaps. The blend maths
 follows the canvas rule (blend the colours, then composite by source alpha),
 which keeps the browser preview and the exported pixels in step.
+
+## Camera track
+
+The camera frames the shot. It is a list of keyframes on the timeline, each
+one a window over the canvas:
+
+```json
+"camera": {
+  "keys": [
+    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600 },
+    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300 }
+  ]
+}
+```
+
+- The camera **holds** its last key until the next one arrives, so one key
+  frames the whole animation. A camera key also counts as content, so the
+  timeline grows to reach it.
+- The stage can show two things: the **camera view** (the shot, scaled to
+  fit, with a letterbox around it) or the **whole canvas** with the camera
+  frame drawn on it. The 🎥 button in the camera row switches between them,
+  and the Inspector has the position, width and height of the key.
+- Drawing works in both: the pointer is mapped back through the camera, so a
+  stroke lands where you clicked.
+- The PNG export is cropped to the camera window, so the picture is the shot
+  and not the whole canvas. The `.clip` and `.tvpp` exports still use the
+  canvas size.
+- `C` adds a key on the current frame; the ✕ button in the camera row removes
+  it. Camera edits are undoable like any other change.
+
+## Sound track
+
+File → **Import a sound…** adds an audio file to the timeline:
+
+```json
+"audio": { "name": "beep.wav", "data": "<base64>", "duration": 0.6, "offset": 0 }
+```
+
+- The sound is stored **inside** the project file (base64), so a project stays
+  self-contained. The limit is 12 MB of base64; the ✕ button in the sound row
+  removes it again.
+- The waveform is drawn under the frames it plays on. The peaks are worked
+  out with the Web Audio API when the sound is imported, and again whenever a
+  project is opened.
+- Playback starts the sound together with the animation, lined up with the
+  start frame, and stops it on pause. A browser may refuse to start a sound
+  without a user gesture; pressing play again fixes that.
+- The sound is **not** written into the PNG, `.clip` or `.tvpp` exports —
+  those formats have no room for it in TVMini.
 
 ## Undo / redo
 

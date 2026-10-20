@@ -215,6 +215,23 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         return;
       }
 
+      if (route === "POST /api/import-audio") {
+        const body = await readJson(req);
+        const target = path.resolve(body.path);
+        const bytes = await fsp.readFile(target);
+        // The browser decodes the sound, so the server only ships the bytes.
+        if (bytes.length > 12_000_000) {
+          sendJson(res, 400, { error: "that sound file is too large (max 12 MB)" });
+          return;
+        }
+        sendJson(res, 200, {
+          path: target,
+          name: path.basename(target),
+          data: bytes.toString("base64"),
+        });
+        return;
+      }
+
       if (route === "POST /api/save") {
         const body = await readJson(req);
         const result = await saveProject(body.path, body.project);

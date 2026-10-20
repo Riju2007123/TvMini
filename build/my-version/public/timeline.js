@@ -14,6 +14,62 @@ export function isBehavior(value) {
   return BEHAVIORS.includes(value);
 }
 
+/* ------------------------------------------------------------------ camera */
+
+/**
+ * The camera window in effect at `frame`.
+ *
+ * A camera track is a list of keyframes, each one a rectangle over the
+ * canvas. Like a drawing's exposure, the camera holds its last key until
+ * the next one arrives, so a single key frames the whole animation.
+ */
+export function cameraAt(camera, frame) {
+  if (!camera || !Array.isArray(camera.keys) || camera.keys.length === 0) return null;
+  let current = camera.keys[0];
+  for (const key of camera.keys) {
+    if (key.frame > frame) break;
+    current = key;
+  }
+  return current;
+}
+
+/** The camera key on `frame` exactly, or null. */
+export function cameraKeyAt(camera, frame) {
+  if (!camera || !Array.isArray(camera.keys)) return null;
+  return camera.keys.find((key) => key.frame === frame) ?? null;
+}
+
+/** Insert or replace a camera key, keeping the list sorted by frame. */
+export function setCameraKey(camera, key) {
+  const keys = Array.isArray(camera?.keys) ? camera.keys.filter((k) => k.frame !== key.frame) : [];
+  keys.push(key);
+  keys.sort((a, b) => a.frame - b.frame);
+  return { keys };
+}
+
+/** Remove the camera key on `frame` (if any). */
+export function deleteCameraKey(camera, frame) {
+  if (!camera || !Array.isArray(camera.keys)) return { keys: [] };
+  return { keys: camera.keys.filter((key) => key.frame !== frame) };
+}
+
+/**
+ * The view transform for a camera window inside a canvas of `width` x
+ * `height`: the window is scaled to fit and centred, so the rest of the
+ * canvas is covered by the letterbox area.
+ */
+export function cameraView(camera, frame, width, height) {
+  const window = cameraAt(camera, frame);
+  if (!window) return null;
+  const scale = Math.min(width / window.width, height / window.height);
+  return {
+    camera: window,
+    scale,
+    offsetX: (width - window.width * scale) / 2,
+    offsetY: (height - window.height * scale) / 2,
+  };
+}
+
 function drawingsOf(layer) {
   return Array.isArray(layer.drawings) ? layer.drawings : [];
 }
@@ -139,6 +195,12 @@ export function contentEnd(project) {
   for (const layer of project.layers) {
     for (const drawing of drawingsOf(layer)) {
       end = Math.max(end, drawing.at + drawing.hold - 1);
+    }
+  }
+  // A camera key counts as content: the shot moves on that frame.
+  if (project.camera && Array.isArray(project.camera.keys)) {
+    for (const key of project.camera.keys) {
+      end = Math.max(end, key.frame);
     }
   }
   return end;

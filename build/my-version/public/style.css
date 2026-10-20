@@ -896,6 +896,66 @@ canvas.picking {
   color: var(--violet);
 }
 
+.tl-cell.camera {
+  color: var(--faint);
+}
+
+.audio-row {
+  background: rgba(63, 163, 236, 0.05);
+}
+
+.tl-cell.audio-wave-cell {
+  padding: 0;
+  overflow: hidden;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 100% 100%;
+}
+
+.tl-cell.camera.key {
+  background: rgba(63, 163, 236, 0.16);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.camera-row {
+  background: rgba(63, 163, 236, 0.04);
+}
+
+.camera-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.camera-presets button {
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.camera-presets button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.camera-presets button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.panel-hint {
+  margin: 2px 0 0;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
 .tl-cell.current {
   position: relative;
   z-index: 2;

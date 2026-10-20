@@ -27,6 +27,7 @@
             <button role="menuitem" data-action="open">Open…<span class="key">Ctrl+O</span></button>
             <button role="menuitem" data-action="importClip">Import .clip preview…</button>
             <button role="menuitem" data-action="importTvpp">Import .tvpp (TVPaint)…</button>
+            <button role="menuitem" data-action="importAudio">Import a sound…</button>
             <hr />
             <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
             <button role="menuitem" data-action="saveAs">Save As…<span class="key">Ctrl+Shift+S</span></button>
@@ -237,6 +238,33 @@
             <span>Exposure of the current drawing</span>
             <input id="exposure" type="number" min="1" max="10000" step="1" value="1" />
           </label>
+
+          <div class="panel-title">Camera</div>
+          <div class="camera-presets">
+            <button id="cameraAdd" type="button" title="Add a camera key on the current frame">Add key</button>
+            <button id="cameraRemove" type="button" title="Remove the camera key on the current frame">Remove</button>
+            <button id="cameraFit" type="button" title="Frame the whole canvas">Fit</button>
+            <button id="cameraZoom" type="button" title="Zoom in on the centre of the canvas">2× zoom</button>
+          </div>
+          <label class="field">
+            <span>Camera position X</span>
+            <input id="cameraX" type="number" step="1" value="0" />
+          </label>
+          <label class="field">
+            <span>Camera position Y</span>
+            <input id="cameraY" type="number" step="1" value="0" />
+          </label>
+          <label class="field">
+            <span>Camera width</span>
+            <input id="cameraWidth" type="number" min="16" step="1" value="960" />
+          </label>
+          <label class="field">
+            <span>Camera height</span>
+            <input id="cameraHeight" type="number" min="16" step="1" value="600" />
+          </label>
+          <p class="panel-hint" id="cameraHint">No camera key on this frame. The camera
+            holds its last key until the next one, so one key frames the whole
+            animation.</p>
 
           <div class="panel-note">
             Draw on the canvas. The timeline below shows one row per animation

@@ -1,9 +1,14 @@
 import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
+import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
 import {
+  cameraAt,
+  cameraKeyAt,
+  cameraView,
   contentEnd,
+  deleteCameraKey,
   deleteDrawing,
   drawingAt,
   duplicateDrawing,
@@ -12,6 +17,7 @@ import {
   insertDrawing,
   layerBounds,
   resolveDrawing,
+  setCameraKey,
   setExposure,
   shiftStartFrame,
   timelineColumns,
@@ -27,6 +33,8 @@ const MAX_TOTAL_DRAWINGS = 5000;
 const MAX_HOLD = 10000;
 const MAX_START_FRAME = 100000;
 const MAX_FRAME = 10_000_000;
+/** Colour behind the camera window when the stage shows the camera view. */
+const CAMERA_BACKDROP = "#12161c";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -55,6 +63,15 @@ const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
 const strokeBlendSelect = document.getElementById("strokeBlend");
+const cameraAddButton = document.getElementById("cameraAdd");
+const cameraRemoveButton = document.getElementById("cameraRemove");
+const cameraFitButton = document.getElementById("cameraFit");
+const cameraZoomButton = document.getElementById("cameraZoom");
+const cameraXInput = document.getElementById("cameraX");
+const cameraYInput = document.getElementById("cameraY");
+const cameraWidthInput = document.getElementById("cameraWidth");
+const cameraHeightInput = document.getElementById("cameraHeight");
+const cameraHint = document.getElementById("cameraHint");
 const pressureGainInput = document.getElementById("pressureGain");
 const pressureGainValue = document.getElementById("pressureGainValue");
 const touchDrawInput = document.getElementById("touchDraw");
@@ -117,6 +134,11 @@ const state = {
   strokeWasNew: false,
   pressureEnabled: true,
   tool: "brush",
+  // Show the camera's shot in the stage (off = whole canvas with a frame on it).
+  cameraView: true,
+  // Waveform of the sound track, and the element that plays it.
+  audioPeaks: null,
+  audioElement: null,
   // Line smoothing while drawing (0 = off, up to 10 = very smooth).
   stabilizer: 0,
   smoothedPoint: null,
@@ -197,6 +219,8 @@ function snapshot() {
     fps: project.fps,
     startFrame: project.startFrame,
     loop: project.loop,
+    camera: project.camera,
+    audio: project.audio,
   });
 }
 
@@ -209,6 +233,8 @@ function restore(snapshotValue) {
     fps: clean.fps,
     startFrame: clean.startFrame,
     loop: clean.loop,
+    camera: clean.camera ?? null,
+    audio: clean.audio ?? null,
   });
   clampSelection();
 }
@@ -587,8 +613,33 @@ function drawOnionSkins(project, layer, frame) {
 function renderCanvas(frame = state.project.currentFrame) {
   const project = state.project;
   const { width, height } = project;
+  const camera = cameraAt(project.camera, frame);
+  // The stage shows the shot the camera takes; switching the camera view off
+  // shows the whole canvas with the camera frame drawn on it instead.
+  const view = state.cameraView ? cameraView(project.camera, frame, width, height) : null;
 
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
+
+  if (view) {
+    // The area outside the camera window is the letterbox.
+    ctx.fillStyle = CAMERA_BACKDROP;
+    ctx.fillRect(0, 0, width, height);
+    ctx.save();
+    ctx.setTransform(
+      view.scale,
+      0,
+      0,
+      view.scale,
+      view.offsetX - view.camera.x * view.scale,
+      view.offsetY - view.camera.y * view.scale,
+    );
+    // Only the camera window shows the canvas.
+    ctx.beginPath();
+    ctx.rect(view.camera.x, view.camera.y, view.camera.width, view.camera.height);
+    ctx.clip();
+  }
+
   ctx.fillStyle = project.background;
   ctx.fillRect(0, 0, width, height);
 
@@ -620,12 +671,235 @@ function renderCanvas(frame = state.project.currentFrame) {
     ctx.drawImage(paintCanvas, 0, 0);
     ctx.globalAlpha = 1;
   }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (view) ctx.restore();
+
+  // With the camera view off, mark the shot on the canvas.
+  if (camera && !view) drawCameraOverlay(camera);
+}
+
+/** Dim everything outside the camera window and outline the window itself. */
+function drawCameraOverlay(camera) {
+  const { width, height } = state.project;
+  ctx.save();
+  ctx.fillStyle = "rgba(6, 10, 16, 0.55)";
+  ctx.beginPath();
+  ctx.rect(0, 0, width, height);
+  ctx.rect(camera.x, camera.y, camera.width, camera.height);
+  ctx.fill("evenodd");
+  ctx.strokeStyle = "#3fa3ec";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(camera.x, camera.y, camera.width, camera.height);
+  ctx.restore();
 }
 
 /* ---------------------------------------------------------------- timeline */
 
 function timelineColumnCount() {
   return Math.max(12, Math.min(MAX_COLUMNS, timelineColumns(state.project, 12)));
+}
+
+/* ------------------------------------------------------------------ camera */
+
+/** The camera key that sits on the current frame, if any. */
+function currentCameraKey() {
+  return cameraKeyAt(state.project.camera, state.project.currentFrame);
+}
+
+/** Add a camera key on the current frame, keeping the current framing. */
+function addCameraKey() {
+  const project = state.project;
+  const before = snapshot();
+  const existing = currentCameraKey();
+  const shown = cameraAt(project.camera, project.currentFrame);
+
+  project.camera = setCameraKey(project.camera, {
+    frame: project.currentFrame,
+    x: existing?.x ?? shown?.x ?? 0,
+    y: existing?.y ?? shown?.y ?? 0,
+    width: existing?.width ?? shown?.width ?? project.width,
+    height: existing?.height ?? shown?.height ?? project.height,
+  });
+
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  renderCanvas();
+  syncCameraControls();
+  setStatus(`Camera key on frame ${project.currentFrame}`);
+}
+
+/** Remove the camera key on the current frame. */
+function removeCameraKey() {
+  const project = state.project;
+  if (!currentCameraKey()) {
+    setStatus("There is no camera key on this frame", true);
+    return;
+  }
+  const before = snapshot();
+  project.camera = deleteCameraKey(project.camera, project.currentFrame);
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  renderCanvas();
+  syncCameraControls();
+  setStatus(`Camera key removed from frame ${project.currentFrame}`);
+}
+
+function toggleCameraView() {
+  state.cameraView = !state.cameraView;
+  renderTimeline();
+  renderCanvas();
+  setStatus(state.cameraView ? "Camera view on" : "Camera view off — the whole canvas is shown");
+}
+
+/** Show the camera key of the current frame in the Inspector. */
+function syncCameraControls() {
+  const project = state.project;
+  const key = currentCameraKey();
+  const shown = cameraAt(project.camera, project.currentFrame);
+
+  cameraXInput.value = String(Math.round(shown?.x ?? 0));
+  cameraYInput.value = String(Math.round(shown?.y ?? 0));
+  cameraWidthInput.value = String(Math.round(shown?.width ?? project.width));
+  cameraHeightInput.value = String(Math.round(shown?.height ?? project.height));
+
+  const hasKey = Boolean(key);
+  cameraRemoveButton.disabled = !hasKey;
+  for (const input of [cameraXInput, cameraYInput, cameraWidthInput, cameraHeightInput]) {
+    input.disabled = !hasKey;
+  }
+  cameraHint.textContent = hasKey
+    ? `Camera key on frame ${project.currentFrame}. The camera holds this framing until the next key.`
+    : "No camera key on this frame. The camera holds its last key until the next one, so one key frames the whole animation.";
+}
+
+cameraAddButton.addEventListener("click", addCameraKey);
+cameraRemoveButton.addEventListener("click", removeCameraKey);
+
+cameraFitButton.addEventListener("click", () => {
+  const project = state.project;
+  if (!currentCameraKey()) {
+    addCameraKey();
+    return;
+  }
+  updateCameraKey({ x: 0, y: 0, width: project.width, height: project.height });
+  setStatus("Camera frames the whole canvas");
+});
+
+cameraZoomButton.addEventListener("click", () => {
+  const project = state.project;
+  if (!currentCameraKey()) {
+    addCameraKey();
+    return;
+  }
+  const width = Math.max(16, Math.round(project.width / 2));
+  const height = Math.max(16, Math.round(project.height / 2));
+  updateCameraKey({
+    x: Math.round((project.width - width) / 2),
+    y: Math.round((project.height - height) / 2),
+    width,
+    height,
+  });
+  setStatus("Camera zoomed to the centre");
+});
+
+for (const [input, field] of [
+  [cameraXInput, "x"],
+  [cameraYInput, "y"],
+  [cameraWidthInput, "width"],
+  [cameraHeightInput, "height"],
+]) {
+  input.addEventListener("change", () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) {
+      syncCameraControls();
+      return;
+    }
+    const patch = { [field]: Math.round(value) };
+    if (field === "width") patch.width = Math.max(16, patch.width);
+    if (field === "height") patch.height = Math.max(16, patch.height);
+    updateCameraKey(patch);
+  });
+}
+
+/** Change the framing of the camera key on the current frame. */
+function updateCameraKey(patch) {
+  const project = state.project;
+  const key = currentCameraKey();
+  if (!key) {
+    setStatus("Add a camera key on this frame first", true);
+    return;
+  }
+  const before = snapshot();
+  project.camera = setCameraKey(project.camera, { ...key, ...patch });
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  renderCanvas();
+  syncCameraControls();
+}
+
+/** The camera row: one diamond per key, plus the add / remove / view buttons. */
+function renderCameraRow(columns, start) {
+  const project = state.project;
+  const row = element("div", "tl-row camera-row");
+
+  const head = element("div", "tl-head");
+
+  const name = element("button", "tl-name", "🎥 Camera");
+  name.title = "The camera frames the shot; the stage shows what it sees";
+  name.addEventListener("click", () => {
+    if (currentCameraKey()) {
+      setStatus(`Camera key on frame ${project.currentFrame}`);
+    } else {
+      addCameraKey();
+    }
+  });
+  head.append(name);
+
+  const add = element("button", "tl-icon", "◆");
+  add.title = "Add a camera key on the current frame";
+  add.addEventListener("click", (event) => {
+    event.stopPropagation();
+    addCameraKey();
+  });
+
+  const remove = element("button", "tl-icon", "✕");
+  remove.title = "Remove the camera key on the current frame";
+  remove.addEventListener("click", (event) => {
+    event.stopPropagation();
+    removeCameraKey();
+  });
+
+  const view = element("button", "tl-icon", state.cameraView ? "🎥" : "▣");
+  view.title = "Show the camera's shot in the stage";
+  view.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleCameraView();
+  });
+
+  head.append(add, remove, view);
+
+  const cells = element("div", "tl-cells");
+  cells.style.setProperty("--frames", String(columns));
+  for (let i = 0; i < columns; i += 1) {
+    const frame = start + i;
+    const key = cameraKeyAt(project.camera, frame);
+    const cell = element("button", `tl-cell camera${key ? " key" : ""}`);
+    cell.dataset.frame = String(frame);
+    cell.type = "button";
+    cell.textContent = key ? "◆" : "";
+    cell.title = key
+      ? `Camera key — ${Math.round(key.width)}×${Math.round(key.height)} at ${Math.round(key.x)}, ${Math.round(key.y)}`
+      : `Frame ${frame}`;
+    cell.addEventListener("click", () => selectFrame(frame));
+    cells.append(cell);
+  }
+
+  row.append(head, cells);
+  return row;
 }
 
 function renderTimeline() {
@@ -637,7 +911,6 @@ function renderTimeline() {
 
   const header = element("div", "tl-header");
   header.append(element("div", "tl-corner", "Layers"));
-
   const numbers = element("div", "tl-numbers");
   numbers.style.setProperty("--frames", String(columns));
   for (let i = 0; i < columns; i += 1) {
@@ -649,6 +922,8 @@ function renderTimeline() {
   }
   header.append(numbers);
   timelineEl.append(header);
+
+  timelineEl.append(renderCameraRow(columns, start));
 
   project.layers.forEach((layer, index) => {
     const row = element("div", "tl-row");
@@ -734,7 +1009,78 @@ function renderTimeline() {
     timelineEl.append(row);
   }
 
+  const audioRow = renderAudioRow(columns, start);
+  if (audioRow) timelineEl.append(audioRow);
+
   updatePlayhead();
+}
+
+/** The sound row: the name, a remove button and the waveform. */
+function renderAudioRow(columns, start) {
+  const project = state.project;
+  if (!project.audio) return null;
+
+  const row = element("div", "tl-row audio-row");
+
+  const head = element("div", "tl-head");
+  const name = element("button", "tl-name", `🔊 ${project.audio.name}`);
+  name.title = "The sound that plays with the animation";
+  name.addEventListener("click", () => {
+    setStatus(
+      `Sound "${project.audio.name}" — ${project.audio.duration.toFixed(1)} seconds ` +
+        `from frame ${Math.round(project.startFrame + project.audio.offset * project.fps)}`,
+    );
+  });
+
+  const remove = element("button", "tl-icon", "✕");
+  remove.title = "Remove the sound";
+  remove.addEventListener("click", (event) => {
+    event.stopPropagation();
+    removeAudio();
+  });
+  head.append(name, remove);
+
+  const cells = element("div", "tl-cells");
+  cells.style.setProperty("--frames", String(columns));
+  const cell = element("div", "tl-cell audio-wave-cell");
+  cell.style.gridColumn = "1 / -1";
+
+  // The waveform is a picture, so it scales with the timeline without
+  // needing a layout pass.
+  const picture = audioWaveformPicture(columns, start);
+  if (picture) cell.style.backgroundImage = `url(${picture})`;
+
+  cells.append(cell);
+  row.append(head, cells);
+  return row;
+}
+
+/** Draw the sound's peaks as a picture, one column per timeline frame. */
+function audioWaveformPicture(columns, start) {
+  const project = state.project;
+  const peaks = state.audioPeaks;
+  if (!project.audio || !peaks || peaks.length === 0) return null;
+
+  const width = Math.max(1, Math.min(4000, columns * 8));
+  const height = 26;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "rgba(63, 163, 236, 0.65)";
+
+  const soundStart = project.startFrame + project.audio.offset * project.fps;
+  const middle = height / 2;
+  const columnWidth = width / columns;
+  for (let index = 0; index < peaks.length; index += 1) {
+    const seconds = (index / peaks.length) * project.audio.duration;
+    const column = soundStart + seconds * project.fps - start;
+    if (column < 0 || column > columns) continue;
+    const bar = Math.max(1, peaks[index] * (height - 6));
+    context.fillRect(column * columnWidth, middle - bar / 2, Math.max(1, columnWidth - 1), bar);
+  }
+  return canvas.toDataURL("image/png");
 }
 
 function updatePlayhead() {
@@ -773,6 +1119,8 @@ function syncLayerControls() {
   deleteLayerButton.disabled = project.layers.length <= 1;
   layerUpButton.disabled = project.currentLayer <= 0;
   layerDownButton.disabled = project.currentLayer >= project.layers.length - 1;
+
+  syncCameraControls();
 }
 
 function selectLayer(index) {
@@ -1156,6 +1504,7 @@ function startPlayback() {
   state.playing = true;
   playButton.textContent = "⏸ Pause";
   renderCanvas(); // hides the onion skins
+  startAudio();
 
   // Clock-driven playback: the frame is derived from elapsed time, so a slow
   // render skips frames instead of slowing the animation down, and changing
@@ -1207,6 +1556,7 @@ function stopPlayback() {
   state.playTimer = null;
   state.playing = false;
   playButton.textContent = "▶ Play";
+  stopAudio();
   if (state.project?.layers?.length) {
     syncLayerControls();
     if (wasPlaying) renderCanvas(); // bring the onion skins back
@@ -1231,9 +1581,19 @@ function stepFrame(delta) {
 
 function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
+  const canvasX = ((event.clientX - rect.left) * state.project.width) / rect.width;
+  const canvasY = ((event.clientY - rect.top) * state.project.height) / rect.height;
+
+  // In the camera view the stage shows a crop, so the pointer has to be
+  // mapped back through the camera to find the canvas position.
+  const view = state.cameraView
+    ? cameraView(state.project.camera, state.project.currentFrame, state.project.width, state.project.height)
+    : null;
+  if (!view) return [canvasX, canvasY];
+
   return [
-    ((event.clientX - rect.left) * state.project.width) / rect.width,
-    ((event.clientY - rect.top) * state.project.height) / rect.height,
+    view.camera.x + (canvasX - view.offsetX) / view.scale,
+    view.camera.y + (canvasY - view.offsetY) / view.scale,
   ];
 }
 
@@ -1759,6 +2119,8 @@ async function handleAction(action) {
     if (action === "open") return chooseAndOpen();
     if (action === "importClip") return chooseAndImportClip();
     if (action === "importTvpp") return chooseAndImportTvpp();
+    if (action === "importAudio") return chooseAndImportAudio();
+    if (action === "removeAudio") return removeAudio();
     if (action === "save") return save();
     if (action === "saveAs") return saveAs();
     if (action === "export") return exportPng();
@@ -1790,6 +2152,27 @@ function newProject() {
   setStatus("New project");
 }
 
+/**
+ * Decode the sound of the current project so the timeline can draw its
+ * waveform. The sound travels with the project file, so this runs again
+ * every time a project is opened.
+ */
+async function loadSoundTrack() {
+  state.audioPeaks = null;
+  const audio = state.project.audio;
+  if (!audio) {
+    renderTimeline();
+    return;
+  }
+  const buffer = await decodeSound(audio.data);
+  if (!buffer) {
+    setStatus("The sound in this project could not be decoded", true);
+    return;
+  }
+  state.audioPeaks = soundPeaks(buffer);
+  renderTimeline();
+}
+
 async function openPath(filePath) {
   if (!confirmDiscard()) return;
   if (/\.clip$/i.test(filePath)) return importClip(filePath);
@@ -1809,6 +2192,7 @@ async function openPath(filePath) {
   resizeCanvas();
   refreshTitle();
   renderRecent();
+  loadSoundTrack();
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
@@ -1869,6 +2253,81 @@ async function chooseAndImportTvpp() {
   applyImportedProject(data, "tvpp");
 }
 
+/* ------------------------------------------------------------------ audio */
+
+/** Put a sound on the timeline and work out its waveform. */
+async function importAudio(name, base64) {
+  const project = state.project;
+  const before = snapshot();
+
+  const buffer = await decodeSound(base64);
+  if (!buffer) {
+    setStatus("This sound could not be decoded by the browser", true);
+    return;
+  }
+
+  project.audio = {
+    name,
+    data: base64,
+    duration: buffer.duration,
+    offset: 0,
+  };
+  state.audioPeaks = soundPeaks(buffer);
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  setStatus(`Sound "${name}" added — ${buffer.duration.toFixed(1)} seconds`);
+}
+
+async function chooseAndImportAudio() {
+  const data = await backend.chooseAndImportAudio();
+  if (!data) return;
+  await importAudio(data.name, data.data);
+}
+
+/** Take the sound off the timeline. */
+function removeAudio() {
+  if (!state.project.audio) {
+    setStatus("There is no sound on the timeline", true);
+    return;
+  }
+  const before = snapshot();
+  state.project.audio = null;
+  state.audioPeaks = null;
+  stopAudio();
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  setStatus("Sound removed");
+}
+
+/** Start the sound with the playback, lined up with the start frame. */
+function startAudio() {
+  const project = state.project;
+  stopAudio();
+  if (!project.audio) return;
+
+  const element = new Audio(`data:audio/*;base64,${project.audio.data}`);
+  const offset = (project.currentFrame - project.startFrame) / project.fps - project.audio.offset;
+  element.currentTime = Math.max(0, offset);
+  element.playbackRate = 1;
+  const started = element.play();
+  if (started && typeof started.catch === "function") {
+    started.catch(() => {
+      // The browser may refuse to start the sound without a user gesture.
+      setStatus("The sound could not start — press play again", true);
+    });
+  }
+  state.audioElement = element;
+}
+
+/** Stop the sound. */
+function stopAudio() {
+  if (!state.audioElement) return;
+  state.audioElement.pause();
+  state.audioElement = null;
+}
+
 async function chooseAndOpen() {
   if (!confirmDiscard()) return;
   const data = await backend.chooseAndOpen();
@@ -1885,6 +2344,7 @@ async function chooseAndOpen() {
   resizeCanvas();
   refreshTitle();
   renderRecent();
+  loadSoundTrack();
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
@@ -2347,6 +2807,7 @@ const KEYS = [
       ["Rectangle", "R"],
       ["Ellipse", "V"],
       ["Fill", "F"],
+      ["Add a camera key on this frame", "C"],
       ["Smaller / larger brush", "[ / ]"],
       ["Clear the current drawing", "Backspace"],
     ],
@@ -2586,6 +3047,11 @@ document.addEventListener("keydown", (event) => {
     if (key === "f") {
       event.preventDefault();
       selectTool("fill");
+      return;
+    }
+    if (key === "c") {
+      event.preventDefault();
+      addCameraKey();
       return;
     }
     if (key === "i") {

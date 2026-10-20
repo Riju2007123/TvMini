@@ -322,6 +322,29 @@ drag start and end), `ellipse` keeps the two corners of its bounding box and
 similar-coloured pixels and stops at the stroke edges. `kind: "fill"` cannot be
 combined with `eraser`.
 
+`camera` is optional. It holds the keyframes of the camera track:
+
+```json
+"camera": {
+  "keys": [
+    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600 },
+    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300 }
+  ]
+}
+```
+
+The camera holds its last key until the next one. A PNG export is cropped to
+the camera window.
+
+`audio` is optional. It holds the sound that plays with the animation:
+
+```json
+"audio": { "name": "beep.wav", "data": "<base64>", "duration": 0.6, "offset": 0 }
+```
+
+`data` is the sound file itself, so the project stays self-contained. The
+sound is not written into the PNG, `.clip` or `.tvpp` exports.
+
 Layers are listed top-to-bottom. Drawings are listed in ascending `at` order.
 `at` and `currentFrame` are absolute frame numbers, not zero-based indices.
 
@@ -370,6 +393,8 @@ If the flat array is empty, the layer has no drawings.
 | stroke `opacity` | optional number 0…1; absent means fully opaque |
 | stroke `blend` | optional; `normal`, `multiply` or `screen`; absent means `normal` |
 | stroke `points` | at least 1; `[x, y]` or `[x, y, p]`, `p` is 0…1; max 200000 per stroke |
+| `camera` | optional; `{ keys: [{ frame, x, y, width, height }] }`, max 1000 keys, sorted by frame, no two keys on one frame |
+| `audio` | optional; `{ name, data, duration, offset }`; `data` is base64, max 12,000,000 characters |
 | total `strokes` | max 10000 in the whole project |
 
 Unknown fields are ignored so the format can grow.
@@ -413,6 +438,8 @@ text; it never fails silently.
 - Tools: Brush / Eraser / Pick buttons (`B` / `E` / `I`), Line / Rect / Oval /
   Fill buttons (`L` / `R` / `V` / `F`), colour, width, pen pressure, stabiliser
   (0–10), stroke opacity (1–100 %) and blend mode, undo / redo.
+- Timeline: a camera row (keyframes that frame the shot, `C` adds a key), the
+  layer rows, and a sound row with the waveform.
 - Current layer: name, opacity, before-first behaviour, after-last behaviour,
   clear current drawing.
 - Canvas: drag to draw; stroke colour and width controls.

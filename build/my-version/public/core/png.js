@@ -1,4 +1,4 @@
-import { resolveDrawing } from "../timeline.js";
+import { cameraAt, resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
 import { blendStrokeOver, eraseStrokeFrom, floodFillRgba, sampleEllipse } from "./paint.js";
 import { deflateSync, inflateSync } from "./zlib.js";
@@ -300,6 +300,68 @@ function composite(data, width, height, image, opacity = 1) {
 }
 
 /**
+ * The size of a rendered frame.
+ *
+ * With a camera track the frame is what the camera sees, so the output
+ * matches the camera window; without one it is the canvas size.
+ */
+export function outputSize(project, frame = project.currentFrame) {
+  const camera = cameraAt(project.camera, frame);
+  if (!camera) return { width: project.width, height: project.height };
+  return {
+    width: Math.max(1, Math.round(camera.width)),
+    height: Math.max(1, Math.round(camera.height)),
+  };
+}
+
+/** Bilinear sample of a straight-alpha RGBA buffer, at a fractional position. */
+function sampleRgba(data, width, height, x, y) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const read = (px, py, channel) => {
+    const cx = Math.min(width - 1, Math.max(0, px));
+    const cy = Math.min(height - 1, Math.max(0, py));
+    return data[(cy * width + cx) * 4 + channel];
+  };
+  const out = [0, 0, 0, 0];
+  for (let channel = 0; channel < 4; channel += 1) {
+    const top = read(x0, y0, channel) * (1 - fx) + read(x0 + 1, y0, channel) * fx;
+    const bottom = read(x0, y0 + 1, channel) * (1 - fx) + read(x0 + 1, y0 + 1, channel) * fx;
+    out[channel] = top * (1 - fy) + bottom * fy;
+  }
+  return out;
+}
+
+/**
+ * Crop a straight-alpha RGBA buffer to the camera window and scale it to the
+ * camera's own pixel size.
+ */
+export function cropToCamera(rgba, project, frame = project.currentFrame) {
+  const camera = cameraAt(project.camera, frame);
+  if (!camera) return rgba;
+  const out = outputSize(project, frame);
+  const buffer = new Uint8Array(out.width * out.height * 4);
+  const stepX = camera.width / out.width;
+  const stepY = camera.height / out.height;
+
+  for (let y = 0; y < out.height; y += 1) {
+    const sourceY = camera.y + (y + 0.5) * stepY - 0.5;
+    for (let x = 0; x < out.width; x += 1) {
+      const sourceX = camera.x + (x + 0.5) * stepX - 0.5;
+      const pixel = sampleRgba(rgba, project.width, project.height, sourceX, sourceY);
+      const index = (y * out.width + x) * 4;
+      buffer[index] = Math.round(pixel[0]);
+      buffer[index + 1] = Math.round(pixel[1]);
+      buffer[index + 2] = Math.round(pixel[2]);
+      buffer[index + 3] = Math.round(pixel[3]);
+    }
+  }
+  return buffer;
+}
+
+/**
  * Render one frame of a validated project to an RGB byte buffer.
  *
  * Layers are stored top-to-bottom (the timeline shows the top layer first),
@@ -333,7 +395,43 @@ export function renderProject(project, frame = project.currentFrame) {
     composite(data, width, height, { width, height, data: paint }, layer.opacity);
   }
 
+  // A camera track frames the shot: the exported image is what the camera
+  // sees, cropped and scaled to the camera window.
+  const camera = cameraAt(project.camera, frame);
+  if (camera) {
+    const out = outputSize(project, frame);
+    return {
+      width: out.width,
+      height: out.height,
+      data: cropRgbToCamera(data, width, height, camera, out.width, out.height),
+    };
+  }
+
   return { width, height, data };
+}
+
+/** Bilinear crop and scale of an RGB buffer to the camera window. */
+function cropRgbToCamera(data, width, height, camera, outWidth, outHeight) {
+  const out = new Uint8Array(outWidth * outHeight * 3);
+  const stepX = camera.width / outWidth;
+  const stepY = camera.height / outHeight;
+  const read = (x, y, channel) => {
+    const cx = Math.min(width - 1, Math.max(0, Math.round(x)));
+    const cy = Math.min(height - 1, Math.max(0, Math.round(y)));
+    return data[(cy * width + cx) * 3 + channel];
+  };
+
+  for (let y = 0; y < outHeight; y += 1) {
+    const sourceY = camera.y + (y + 0.5) * stepY - 0.5;
+    for (let x = 0; x < outWidth; x += 1) {
+      const sourceX = camera.x + (x + 0.5) * stepX - 0.5;
+      const index = (y * outWidth + x) * 3;
+      for (let channel = 0; channel < 3; channel += 1) {
+        out[index + channel] = read(sourceX, sourceY, channel);
+      }
+    }
+  }
+  return out;
 }
 
 const CRC_TABLE = (() => {

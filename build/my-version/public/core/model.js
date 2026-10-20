@@ -13,6 +13,11 @@ export const MAX_HOLD = 10000;
 export const MIN_SIZE = 16;
 export const MAX_SIZE = 4096;
 
+/** Camera keyframes on the timeline (a moving view over the canvas). */
+export const MAX_CAMERA_KEYS = 1000;
+/** Largest embedded audio track, in base64 characters. */
+export const MAX_AUDIO_CHARS = 12_000_000;
+
 /** Shape tools store their geometry kind on the stroke (absent = freehand). */
 export const STROKE_KINDS = ["line", "rect", "ellipse", "fill"];
 /** Per-stroke blend modes (absent = "normal"). */
@@ -182,6 +187,8 @@ export function createProject(width = 960, height = 600, background = "#ffffff")
     currentLayer: 0,
     currentFrame: 1,
     loop: true,
+    camera: null,
+    audio: null,
     layers: [createLayer("Layer 1")],
   };
 }
@@ -316,6 +323,87 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
 }
 
 /**
+ * Validate the camera track: a list of keyframes, each one a window over
+ * the canvas. The camera holds the last key until the next one arrives.
+ */
+function normalizeCamera(value, label, width, height) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  if (!Array.isArray(value.keys)) {
+    throw new ValidationError(`${label}.keys must be an array`);
+  }
+  if (value.keys.length > MAX_CAMERA_KEYS) {
+    throw new ValidationError(`${label}.keys has too many entries (max ${MAX_CAMERA_KEYS})`);
+  }
+
+  const keys = value.keys.map((key, index) => {
+    const kLabel = `${label}.keys[${index}]`;
+    if (!key || typeof key !== "object" || Array.isArray(key)) {
+      throw new ValidationError(`${kLabel} must be an object`);
+    }
+    const frame = integerInRange(key.frame, `${kLabel}.frame`, 1, 10_000_000);
+    const x = finiteNumber(key.x === undefined ? 0 : key.x, `${kLabel}.x`);
+    const y = finiteNumber(key.y === undefined ? 0 : key.y, `${kLabel}.y`);
+    const keyWidth = numberInRange(
+      key.width === undefined ? width : key.width,
+      `${kLabel}.width`,
+      1,
+      MAX_SIZE * 4,
+    );
+    const keyHeight = numberInRange(
+      key.height === undefined ? height : key.height,
+      `${kLabel}.height`,
+      1,
+      MAX_SIZE * 4,
+    );
+    return { frame, x, y, width: keyWidth, height: keyHeight };
+  });
+
+  keys.sort((a, b) => a.frame - b.frame);
+  for (let i = 1; i < keys.length; i += 1) {
+    if (keys[i].frame === keys[i - 1].frame) {
+      throw new ValidationError(`${label}.keys has two keys on frame ${keys[i].frame}`);
+    }
+  }
+
+  return { keys };
+}
+
+/** Validate the optional audio track stored with the project. */
+function normalizeAudio(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  if (typeof value.data !== "string" || value.data.length === 0) {
+    throw new ValidationError(`${label}.data must be a base64 string`);
+  }
+  if (value.data.length > MAX_AUDIO_CHARS) {
+    throw new ValidationError(`${label}.data is too large (max ${MAX_AUDIO_CHARS} characters)`);
+  }
+  if (typeof value.name !== "string" || value.name.trim().length === 0) {
+    throw new ValidationError(`${label}.name must be text`);
+  }
+  const name = value.name.trim();
+  if (name.length > 120) {
+    throw new ValidationError(`${label}.name must be 120 characters or fewer`);
+  }
+  const duration = numberInRange(
+    value.duration === undefined ? 0 : value.duration,
+    `${label}.duration`,
+    0,
+    24 * 60 * 60,
+  );
+  const offset = numberInRange(
+    value.offset === undefined ? 0 : value.offset,
+    `${label}.offset`,
+    -24 * 60 * 60,
+    24 * 60 * 60,
+  );
+  return { name, data: value.data, duration, offset };
+}
+
+/**
  * Validate an untrusted object and return a clean copy.
  *
  * Version 1 files (a flat `strokes` array) are migrated to version 2: the
@@ -354,6 +442,8 @@ export function normalizeProject(input) {
       currentLayer: 0,
       currentFrame: 1,
       loop: true,
+      camera: null,
+      audio: null,
       layers: [layer],
     };
   }
@@ -395,6 +485,17 @@ export function normalizeProject(input) {
     throw new ValidationError("currentFrame must be at or after startFrame");
   }
 
+  // The camera track and the audio track are optional; an older file simply
+  // has neither and opens with the plain canvas view and no sound.
+  const camera =
+    input.camera === undefined || input.camera === null
+      ? null
+      : normalizeCamera(input.camera, "camera", width, height);
+  const audio =
+    input.audio === undefined || input.audio === null
+      ? null
+      : normalizeAudio(input.audio, "audio");
+
   return {
     format: FORMAT,
     version: VERSION,
@@ -407,6 +508,8 @@ export function normalizeProject(input) {
     currentLayer,
     currentFrame,
     loop,
+    camera,
+    audio,
     layers,
   };
 }
