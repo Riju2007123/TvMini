@@ -1407,6 +1407,117 @@ brushImageInput.addEventListener("change", async () => {
   setStatus(`The brush is now ${file.name}`);
 });
 
+/* ------------------------------------------------------- the brush library */
+
+const brushLibrarySelect = document.getElementById("brushLibrary");
+const brushSaveButton = document.getElementById("brushSave");
+const brushRemoveButton = document.getElementById("brushRemove");
+
+/** Where the saved brushes are kept. */
+const BRUSH_STORE = "tvmini.brushes";
+
+/** The saved brushes. */
+function readBrushLibrary() {
+  try {
+    const raw = localStorage.getItem(BRUSH_STORE);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((b) => b && typeof b.data === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeBrushLibrary(list) {
+  try {
+    localStorage.setItem(BRUSH_STORE, JSON.stringify(list));
+  } catch {
+    setStatus("The brushes could not be saved", true);
+  }
+}
+
+/** Fill the list of saved brushes. */
+function refreshBrushLibrary() {
+  const list = readBrushLibrary();
+  const wanted = brushLibrarySelect.value;
+  brushLibrarySelect.textContent = "";
+
+  const round = document.createElement("option");
+  round.value = "";
+  round.textContent = "the round tip";
+  brushLibrarySelect.append(round);
+
+  for (const brush of list) {
+    const option = document.createElement("option");
+    option.value = brush.name;
+    option.textContent = brush.name;
+    brushLibrarySelect.append(option);
+  }
+  if (list.some((brush) => brush.name === wanted)) brushLibrarySelect.value = wanted;
+  brushRemoveButton.disabled = list.length === 0;
+}
+
+/** The brush of the drawing that is being drawn on. */
+function currentBrush() {
+  const drawing = ensureDrawing(currentLayer(), state.project.currentFrame);
+  return drawing.brush ?? null;
+}
+
+/** Put a brush on the drawing that is being drawn on. */
+function useBrush(brush, name) {
+  const layer = currentLayer();
+  if (layer.locked) {
+    setStatus("This layer is locked — unlock it first", true);
+    return false;
+  }
+  const drawing = ensureDrawing(layer, state.project.currentFrame);
+  const before = snapshot();
+  if (brush) drawing.brush = { data: brush.data };
+  else delete drawing.brush;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  brushImageName.textContent = name;
+  return true;
+}
+
+brushLibrarySelect.addEventListener("change", () => {
+  const name = brushLibrarySelect.value;
+  if (!name) {
+    useBrush(null, "the round tip");
+    setStatus("The brush is the round tip again");
+    return;
+  }
+  const brush = readBrushLibrary().find((item) => item.name === name);
+  if (!brush) return;
+  if (useBrush(brush, brush.name)) setStatus(`The brush is now ${brush.name}`);
+});
+
+brushSaveButton.addEventListener("click", () => {
+  const brush = currentBrush();
+  if (!brush) {
+    setStatus("Pick a brush image first", true);
+    return;
+  }
+  const name = prompt("The name of this brush", "my brush");
+  if (!name) return;
+  const list = readBrushLibrary().filter((item) => item.name !== name);
+  list.push({ name, data: brush.data });
+  writeBrushLibrary(list);
+  refreshBrushLibrary();
+  brushLibrarySelect.value = name;
+  setStatus(`Saved the brush ${name}`);
+});
+
+brushRemoveButton.addEventListener("click", () => {
+  const name = brushLibrarySelect.value;
+  if (!name) return;
+  writeBrushLibrary(readBrushLibrary().filter((item) => item.name !== name));
+  refreshBrushLibrary();
+  setStatus(`Removed the brush ${name}`);
+});
+
+refreshBrushLibrary();
+
 /**
  * Show how much of the canvas the stage shows.
  *

@@ -1733,3 +1733,25 @@ input[type="range"] {
 .zoom-label:hover {
   border-color: var(--accent);
 }
+/* The brush picture and the brushes that were saved. */
+.brush-image-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.brush-image-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.brush-image-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 11px;
+}
