@@ -97,6 +97,17 @@ const cameraHeightInput = document.getElementById("cameraHeight");
 const cameraRotationInput = document.getElementById("cameraRotation");
 const cameraInterpSelect = document.getElementById("cameraInterp");
 const cameraHint = document.getElementById("cameraHint");
+const layerTreeEl = document.getElementById("layerTree");
+const layerKindSelect = document.getElementById("layerKind");
+const layerOpacityInput = document.getElementById("layerOpacity");
+const layerOpacityOut = document.getElementById("layerOpacityOut");
+const layerLockButton = document.getElementById("layerLock");
+const panelAddLayerButton = document.getElementById("panelAddLayer");
+const panelAddFolderButton = document.getElementById("panelAddFolder");
+const panelUnfoldButton = document.getElementById("panelUnfold");
+const panelDeleteLayerButton = document.getElementById("panelDeleteLayer");
+const panelLayerUpButton = document.getElementById("panelLayerUp");
+const panelLayerDownButton = document.getElementById("panelLayerDown");
 const quickBar = document.getElementById("quickBar");
 const quickSwatch = document.getElementById("quickSwatch");
 const quickWidth = document.getElementById("quickWidth");
@@ -659,6 +670,7 @@ function resizeCanvas() {
   canvas.height = state.project.height;
   renderCanvas();
   renderTimeline();
+  renderLayerPanel();
   syncLayerControls();
   updateFrameLabel();
 }
@@ -1948,6 +1960,7 @@ function toggleFolder(name) {
     state.collapsed.add(name);
   }
   renderTimeline();
+  renderLayerPanel();
 }
 
 function renderTimeline() {
@@ -2131,6 +2144,188 @@ function renderTimeline() {
   updatePlayhead();
 }
 
+/* ------------------------------------------------------- the layers panel */
+
+/**
+ * A small picture of what a layer holds.
+ *
+ * A layer that came from a `.clip` has a picture, and that is shown as it
+ * is. A layer that was drawn here has strokes, and they are drawn small.
+ */
+function layerThumbnail(project, index) {
+  const layer = project.layers[index];
+  const size = 22;
+  const canvas = element("canvas", "layer-thumb");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+
+  // The transparency of the layer is shown as a checkerboard, the way
+  // Clip Studio Paint shows it.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#d8d8d8";
+  for (let y = 0; y < size; y += 5) {
+    for (let x = 0; x < size; x += 5) {
+      if (((x / 5) + (y / 5)) % 2 === 0) ctx.fillRect(x, y, 5, 5);
+    }
+  }
+
+  const drawing = drawingAt(layer, project.currentFrame) ?? layer.drawings?.[0] ?? null;
+  if (!drawing) return canvas;
+
+  const base = drawingImageElement(drawing);
+  if (base) {
+    ctx.drawImage(base, 0, 0, size, size);
+    return canvas;
+  }
+
+  // The strokes of the layer, drawn small enough to fit.
+  const points = [];
+  for (const stroke of drawing.strokes ?? []) {
+    for (const point of stroke.points ?? []) points.push(point);
+  }
+  if (!points.length) return canvas;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of points) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const span = Math.max(maxX - minX, maxY - minY, 1);
+  const scale = (size - 2) / span;
+  const offsetX = (size - (maxX - minX) * scale) / 2 - minX * scale;
+  const offsetY = (size - (maxY - minY) * scale) / 2 - minY * scale;
+
+  ctx.strokeStyle = layer.color ?? "#1f2937";
+  ctx.lineWidth = Math.max(1, scale * 2);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const stroke of drawing.strokes ?? []) {
+    if (!stroke.points?.length) continue;
+    ctx.beginPath();
+    ctx.moveTo(stroke.points[0][0] * scale + offsetX, stroke.points[0][1] * scale + offsetY);
+    for (let i = 1; i < stroke.points.length; i += 1) {
+      ctx.lineTo(stroke.points[i][0] * scale + offsetX, stroke.points[i][1] * scale + offsetY);
+    }
+    ctx.stroke();
+  }
+  return canvas;
+}
+
+/**
+ * The layers panel: the layers and the folders that hold them.
+ *
+ * The tree is drawn the way Clip Studio Paint draws it - a folder can be
+ * opened and closed, a layer is shown or hidden, and the layer that is
+ * being worked on is marked.
+ */
+function renderLayerPanel() {
+  const project = state.project;
+  layerTreeEl.replaceChildren();
+
+  for (const index of layerTree(project)) {
+    const layer = project.layers[index];
+    const folder = isGroup(layer);
+    const depth = layerDepth(project, index);
+    const collapsed = folder && state.collapsed.has(layer.name);
+
+    const row = element("div", "layer-row");
+    row.dataset.layer = String(index);
+    row.style.setProperty("--depth", String(depth));
+    if (index === project.currentLayer) row.classList.add("selected");
+
+    // A folder can be opened and closed. A layer has nothing there, but
+    // the space is kept so the names of the layers line up.
+    const fold = element("button", "layer-fold", collapsed ? "▶" : "▼");
+    if (folder) {
+      fold.title = collapsed ? "Open this folder" : "Close this folder";
+      fold.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleFolder(layer.name);
+      });
+    } else {
+      fold.classList.add("layer-fold-blank");
+      fold.disabled = true;
+      fold.tabIndex = -1;
+    }
+    row.append(fold);
+
+    const eye = element("button", "layer-eye", layer.visible ? "👁" : "🚫");
+    eye.title = layer.visible ? "Hide this layer" : "Show this layer";
+    eye.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleVisibility(index);
+    });
+    row.append(eye);
+
+    row.append(layerThumbnail(project, index));
+
+    const name = element("button", "layer-name", layer.name);
+    name.title = folder
+      ? `Folder with ${childrenOf(project, index).length} layer(s) (double-click to rename)`
+      : "Select this layer (double-click to rename)";
+    name.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectLayer(index);
+    });
+    name.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      renameLayer(index);
+    });
+    row.append(name);
+
+    if (index === project.currentLayer) {
+      row.append(element("span", "layer-current", "✎"));
+    }
+
+    row.addEventListener("click", (event) => {
+      if (event.target === row) selectLayer(index);
+    });
+    // A layer can be dragged to another place, and onto a folder, which
+    // puts it inside.
+    row.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target === eye || event.target === fold) return;
+      startLayerDrag(event, index, [...layerTreeEl.querySelectorAll(".layer-row")]);
+    });
+
+    layerTreeEl.append(row);
+  }
+
+  syncLayerPanelControls();
+}
+
+/** The row of controls shows the layer that is being worked on. */
+function syncLayerPanelControls() {
+  const project = state.project;
+  const layer = project.layers[project.currentLayer];
+  if (!layer) return;
+
+  layerKindSelect.value = isGroup(layer) ? "group" : "anim";
+  const percent = Math.round((layer.opacity ?? 1) * 100);
+  layerOpacityInput.value = String(percent);
+  layerOpacityOut.textContent = String(percent);
+  layerLockButton.setAttribute("aria-pressed", layer.locked ? "true" : "false");
+  layerLockButton.textContent = layer.locked ? "🔒" : "🔓";
+  layerLockButton.title = layer.locked ? "Unlock this layer" : "Lock this layer";
+
+  // A folder cannot be locked or made transparent on its own.
+  const folder = isGroup(layer);
+  layerOpacityInput.disabled = false;
+  panelUnfoldButton.disabled = (layer.parent ?? -1) < 0;
+  panelUnfoldButton.title = (layer.parent ?? -1) < 0
+    ? "This layer is not in a folder"
+    : "Take this layer out of its folder";
+  panelDeleteLayerButton.disabled = false;
+  layerKindSelect.title = folder ? "This layer is a folder" : "This layer holds drawings";
+}
+
 /** The sound row: the name, a remove button and the waveform. */
 function renderAudioRow(columns, start) {
   const project = state.project;
@@ -2252,6 +2447,7 @@ function selectLayer(index) {
   state.project.currentLayer = index;
   updatePlayhead();
   syncLayerControls();
+  renderLayerPanel();
   setStatus(`Layer ${index + 1}: ${currentLayer().name}`);
 }
 
@@ -2308,6 +2504,7 @@ function afterChange({ timeline = true } = {}) {
   clampSelection();
   refreshTitle();
   syncLayerControls();
+  renderLayerPanel();
   if (timeline) renderTimeline();
   else updatePlayhead();
   updateFrameLabel();
@@ -2452,6 +2649,43 @@ function removeGroup() {
   setStatus(`Took ${layer.name} apart — ${children.length} layer(s) moved up`);
 }
 
+/**
+ * Take a layer out of the folder it is in.
+ *
+ * The layer moves up to where the folder sits, so it becomes a layer of the
+ * same level as the folder. A folder that is taken out carries the layers
+ * it holds with it.
+ */
+function takeOutOfFolder() {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  const parent = layer?.parent ?? -1;
+  if (!layer || parent < 0) {
+    setStatus("This layer is not in a folder", true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const folder = project.layers[parent];
+  const grandParent = folder.parent ?? -1;
+  const size = blockSize(project, index);
+
+  // The layer is moved to the place the folder has, so it ends up above
+  // the folder instead of inside it.
+  const indexOf = moveBlock(project, index, size, parent);
+  if (!indexOf) return;
+  const moved = indexOf.get(layer);
+  project.layers[moved].parent = grandParent;
+  project.currentLayer = moved;
+
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`${layer.name} is out of ${folder.name}`);
+}
+
 /** Cut a layer by the picture of the layer below it. */
 function toggleClip() {
   const project = state.project;
@@ -2593,11 +2827,14 @@ function reorderLayer(from, to) {
  * the pointer. The row under the pointer is marked instead, and the move
  * happens when the button is let go.
  */
-function startLayerDrag(event, index) {
-  const rows = [...timelineEl.querySelectorAll(".tl-row[data-layer]")];
-  if (rows.length < 2) return;
+function startLayerDrag(event, index, rows = null) {
+  // The rows that can be dropped on. The list of layers in the timeline and
+  // the one in the layers panel are two views of the same thing, and a
+  // drag belongs to the one it started in.
+  const list = rows ?? [...timelineEl.querySelectorAll(".tl-row[data-layer]")];
+  if (list.length < 2) return;
 
-  layerDrag = { index, rows, target: index };
+  layerDrag = { index, rows: list, target: index };
   event.preventDefault();
   window.addEventListener("pointermove", onLayerDragMove);
   window.addEventListener("pointerup", onLayerDragEnd, { once: true });
@@ -3532,6 +3769,50 @@ removeGroupButton.addEventListener("click", removeGroup);
 deleteLayerButton.addEventListener("click", deleteLayer);
 layerUpButton.addEventListener("click", () => moveLayer(-1));
 layerDownButton.addEventListener("click", () => moveLayer(1));
+
+/* The layers panel does the same things as the toolbar of the timeline. */
+panelAddLayerButton.addEventListener("click", addLayer);
+panelAddFolderButton.addEventListener("click", addGroup);
+panelDeleteLayerButton.addEventListener("click", deleteLayer);
+panelLayerUpButton.addEventListener("click", () => moveLayer(-1));
+panelLayerDownButton.addEventListener("click", () => moveLayer(1));
+panelUnfoldButton.addEventListener("click", takeOutOfFolder);
+
+layerOpacityInput.addEventListener("input", () => {
+  const project = state.project;
+  const layer = project.layers[project.currentLayer];
+  if (!layer) return;
+  const before = snapshot();
+  layer.opacity = Math.max(0, Math.min(1, Number(layerOpacityInput.value) / 100));
+  layerOpacityOut.textContent = layerOpacityInput.value;
+  recordHistory(before);
+  markDirty();
+  renderCanvas();
+});
+
+layerOpacityInput.addEventListener("change", () => {
+  afterChange();
+  setStatus(`${currentLayer().name} is at ${layerOpacityInput.value}%`);
+});
+
+layerLockButton.addEventListener("click", () => {
+  toggleLock(state.project.currentLayer);
+  renderLayerPanel();
+});
+
+layerKindSelect.addEventListener("change", () => {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  if (!layer) return;
+  const want = layerKindSelect.value;
+  if (want === "group" && !isGroup(layer)) {
+    addGroup();
+  } else if (want === "anim" && isGroup(layer)) {
+    removeGroup();
+  }
+  renderLayerPanel();
+});
 clipLayerInput.addEventListener("change", toggleClip);
 addFrameButton.addEventListener("click", addDrawing);
 duplicateFrameButton.addEventListener("click", duplicateFrame);

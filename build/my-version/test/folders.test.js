@@ -190,6 +190,65 @@ test("the layers are put in order so a folder is followed by its layers", () => 
   assert.equal(project.layers[5].parent, 4);
 });
 
+test("a layer can be taken out of the folder it is in", () => {
+  const project = treeProject();
+  // "Cell 2" sits in "Group" and comes out of it, the way the layers
+  // panel takes a layer out of a folder.
+  const index = 2;
+  const layer = project.layers[index];
+  const parent = layer.parent;
+  const folder = project.layers[parent];
+  const size = blockSize(project, index);
+
+  const indexOf = moveBlock(project, index, size, parent);
+  const moved = indexOf.get(layer);
+  project.layers[moved].parent = folder.parent;
+
+  assert.deepEqual(project.layers.map((item) => item.name), [
+    "Cell 2", "Group", "Cell 1", "Inner", "Cell 3", "Other",
+  ]);
+  // The layer that came out is at the top level now, and the folder kept
+  // the layers that were in it with it.
+  assert.equal(project.layers[0].parent, -1);
+  assert.equal(project.layers[1].parent, -1);
+  assert.equal(project.layers[2].parent, 1);
+  assert.equal(project.layers[3].parent, 1);
+  assert.equal(project.layers[4].parent, 3);
+  assert.equal(project.layers[5].parent, -1);
+  assert.deepEqual(childrenOf(project, -1), [0, 1, 5]);
+  assert.deepEqual(childrenOf(project, 1), [2, 3]);
+  assert.deepEqual(layerTree(project), [0, 1, 2, 3, 4, 5]);
+});
+
+test("a folder that is taken out carries the layers it holds", () => {
+  const project = treeProject();
+  // "Inner" is a folder inside "Group", and it comes out with "Cell 3".
+  // It lands above the folder it came out of, at the same level.
+  const index = 3;
+  const folder = project.layers[index];
+  const parent = folder.parent;
+  const outer = project.layers[parent];
+  const size = blockSize(project, index);
+
+  const indexOf = moveBlock(project, index, size, parent);
+  const moved = indexOf.get(folder);
+  project.layers[moved].parent = outer.parent;
+
+  assert.deepEqual(project.layers.map((item) => item.name), [
+    "Inner", "Cell 3", "Group", "Cell 1", "Cell 2", "Other",
+  ]);
+  assert.equal(project.layers[0].parent, -1);
+  assert.equal(project.layers[1].parent, 0);
+  assert.equal(project.layers[2].parent, -1);
+  assert.equal(project.layers[3].parent, 2);
+  assert.equal(project.layers[4].parent, 2);
+  assert.equal(project.layers[5].parent, -1);
+  assert.deepEqual(childrenOf(project, -1), [0, 2, 5]);
+  assert.deepEqual(childrenOf(project, 0), [1]);
+  assert.deepEqual(childrenOf(project, 2), [3, 4]);
+  assert.deepEqual(layerTree(project), [0, 1, 2, 3, 4, 5]);
+});
+
 test("isGroup tells a folder from a drawing layer", () => {
   assert.equal(isGroup(createGroup("G")), true);
   assert.equal(isGroup(createLayer("L")), false);

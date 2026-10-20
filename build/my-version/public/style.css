@@ -96,6 +96,7 @@ body.shell {
 
 body.hide-tools .tools-pane,
 body.hide-inspector .inspector-pane,
+body.hide-layers .layers-pane,
 body.hide-stage .stage-pane,
 body.hide-timeline .timeline-pane,
 body.hide-timeline #timelineGrip {
@@ -564,6 +565,25 @@ body.hide-inspector.hide-stage .workspace {
   background: var(--surface);
 }
 
+/* The panes on the right stand on top of each other. */
+.right-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--seam-w);
+  min-width: 0;
+  min-height: 0;
+  background: var(--seam-strong);
+}
+
+.right-column > .pane {
+  flex: 1 1 auto;
+}
+
+.right-column > .layers-pane {
+  flex: 0 0 auto;
+  max-height: 58%;
+}
+
 .pane-header {
   display: flex;
   align-items: center;
@@ -623,6 +643,227 @@ body.hide-inspector.hide-stage .workspace {
 .ghost-btn .tli {
   width: 13px;
   height: 13px;
+}
+
+/* layers panel ------------------------------------------------------------ */
+
+.layer-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-controls select {
+  height: 20px;
+  min-width: 0;
+  padding: 0 2px;
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.layer-kind {
+  flex: 0 0 auto;
+  max-width: 74px;
+}
+
+.layer-blend {
+  flex: 0 0 auto;
+  max-width: 62px;
+  color: var(--faint);
+}
+
+.layer-opacity {
+  flex: 1 1 auto;
+  min-width: 30px;
+  accent-color: var(--accent);
+}
+
+.layer-opacity-out {
+  flex: none;
+  width: 24px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.layer-lock {
+  flex: none;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layer-lock:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.layer-lock[aria-pressed="true"] {
+  border-color: var(--seam-strong);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.layer-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-actions button {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
+  padding: 0 2px;
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.layer-actions button:hover {
+  color: var(--text);
+  background: #565b61;
+}
+
+.layer-actions button:active {
+  background: #3f4348;
+}
+
+.layer-tree {
+  padding: 2px 0 6px;
+  overflow: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding-right: 6px;
+  /* The layers inside a folder are indented under it. */
+  padding-left: calc(4px + var(--depth, 0) * 14px);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-row:hover {
+  background: var(--surface-2);
+}
+
+.layer-row.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.layer-row.selected:hover {
+  background: #4fb0f4;
+}
+
+.layer-row.drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.layer-eye,
+.layer-fold {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layer-eye:hover,
+.layer-fold:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.layer-fold {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.layer-fold-blank {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.layer-thumb {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--seam-strong);
+  border-radius: 2px;
+  background: #f4f4f4;
+}
+
+.layer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.layer-name:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.layer-name input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.layer-current {
+  flex: none;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.layer-row.selected .layer-current {
+  color: #fff;
 }
 
 /* tools pane ------------------------------------------------------------- */

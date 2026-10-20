@@ -17,6 +17,13 @@ model. It shares **no code, data or file formats** with TVPaint.
   can hold a folder. The timeline draws the layers inside a folder indented
   under it, and the row of a folder shows the cells of the layers inside it,
   the way an animation folder shows the cells of an animation.
+- **A layers panel**, laid out the way Clip Studio Paint lays out its own: a
+  row of controls for the layer that is being worked on (what it is, how it
+  is blended, how opaque it is, whether it is locked), a row of buttons to
+  add a layer, add a folder, take a layer out of its folder, delete it and
+  move it up or down, and then the tree of the layers and the folders that
+  hold them. A layer can be shown or hidden, renamed with a double-click, and
+  dragged to another place — dropped on a folder it goes inside it.
 - **Named cells**: a cell of the timeline carries a name, and a new cell is
   named after the frame it sits on the way Clip Studio Paint names the cells
   of an animation folder (`1`, `1a`, `2`, `2a`). A double-click on a cell
@@ -124,6 +131,7 @@ it. The repository contains `.github/workflows/pages.yml`, which publishes
 | Import a `.clip` document | same | same |
 | Recent projects | paths on disk, re-opened by path | kept in `localStorage`; a browser cannot re-open a file by path, so the project text is stored |
 | Folder browser | in-app directory browser | the browser's own file picker |
+| Layers panel | the tree of layers and folders, with the controls for the layer being worked on | `public/app.js` `renderLayerPanel` |
 
 The `.clip` writer runs **entirely in the browser**: SQLite is
 [sql.js](https://github.com/sql-js/sql.js) (WebAssembly), zlib is
@@ -741,8 +749,8 @@ The *shape* is imitated only. **No MoArt code, markup, CSS or assets are
 reused** — MoArt is source-available rather than open source, so the shell was
 written from scratch against the layout that was documented in the study.
 
-- The `Window` menu lists Tools, Stage, Inspector and Timeline and toggles
-  them; the choice is remembered in `localStorage`.
+- The `Window` menu lists Tools, Stage, Layers, Inspector and Timeline and
+  toggles them; the choice is remembered in `localStorage`.
 - Every panel header carries a `–` button that hides that panel.
 - The strip between the stage and the timeline is a drag grip: drag it to
   resize the timeline, double-click it to reset the height.

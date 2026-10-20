@@ -49,6 +49,7 @@
           <div id="windowMenu" class="menu-popup" role="menu" hidden>
             <button role="menuitemcheckbox" data-pane-toggle="tools" aria-checked="true">Tools</button>
             <button role="menuitemcheckbox" data-pane-toggle="stage" aria-checked="true">Stage</button>
+            <button role="menuitemcheckbox" data-pane-toggle="layers" aria-checked="true">Layers</button>
             <button role="menuitemcheckbox" data-pane-toggle="inspector" aria-checked="true">Inspector</button>
             <button role="menuitemcheckbox" data-pane-toggle="timeline" aria-checked="true">Timeline</button>
             <hr />
@@ -228,6 +229,38 @@
         </div>
       </section>
 
+      <div class="right-column">
+        <aside class="pane layers-pane" data-pane="layers" aria-label="Layers">
+          <div class="pane-header">
+            <span class="pane-title">Layers</span>
+            <span class="pane-header-spacer"></span>
+            <button class="ghost-btn" type="button" data-pane-toggle="layers" title="Hide the Layers panel" aria-label="Hide the Layers panel">
+              <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+            </button>
+          </div>
+          <div class="layer-controls">
+            <select id="layerKind" class="layer-kind" title="What this layer is">
+              <option value="anim">Drawing</option>
+              <option value="group">Folder</option>
+            </select>
+            <select id="layerBlend" class="layer-blend" title="How this layer is blended" disabled>
+              <option value="normal">Normal</option>
+            </select>
+            <input id="layerOpacity" class="layer-opacity" type="range" min="0" max="100" value="100" title="Opacity of this layer" />
+            <output id="layerOpacityOut" class="layer-opacity-out">100</output>
+            <button id="layerLock" class="layer-lock" type="button" title="Lock this layer" aria-pressed="false">🔒</button>
+          </div>
+          <div class="layer-actions">
+            <button id="panelAddLayer" type="button" title="Add a drawing layer">+ Layer</button>
+            <button id="panelAddFolder" type="button" title="Add a folder around this layer">+ Folder</button>
+            <button id="panelUnfold" type="button" title="Take this layer out of its folder">− Folder</button>
+            <button id="panelDeleteLayer" type="button" title="Delete this layer">− Layer</button>
+            <button id="panelLayerUp" type="button" title="Move this layer up">↑</button>
+            <button id="panelLayerDown" type="button" title="Move this layer down">↓</button>
+          </div>
+          <div class="pane-body layer-tree" id="layerTree"></div>
+        </aside>
+
       <aside class="pane inspector-pane" data-pane="inspector">
         <div class="pane-header">
           <span class="pane-title">Inspector</span>
@@ -329,12 +362,40 @@
           </div>
         </div>
       </aside>
+      </div>
     </main>
 
     <div id="timelineGrip" class="pane-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="-1"></div>
 
     <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
       <div class="pane-header timeline-header">
+        <button id="timelineMenuButton" class="tl-menu-button" title="The settings of the timeline" aria-haspopup="menu" aria-expanded="false">
+          <span class="tl-menu-icon" aria-hidden="true">▦</span>
+          <span>Timeline</span>
+          <span class="tl-menu-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="timelineMenu" class="menu-popup timeline-menu" role="menu" hidden>
+          <label class="field">
+            <span>Frames per second</span>
+            <input id="menuFps" type="number" min="1" max="120" step="1" value="12" />
+          </label>
+          <label class="field">
+            <span>First frame</span>
+            <input id="menuStartFrame" type="number" min="1" max="100000" step="1" value="1" />
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuLoop" type="checkbox" checked />
+            <span>Loop the playback</span>
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuOnion" type="checkbox" />
+            <span>Onion skin</span>
+          </label>
+          <hr />
+          <button id="menuAddFolder" type="button" role="menuitem">New animation folder</button>
+          <button id="menuFirstFrame" type="button" role="menuitem">Go to the first frame</button>
+          <button id="menuLastFrame" type="button" role="menuitem">Go to the last frame</button>
+        </div>
         <button id="firstFrameButton" class="transport" title="Go to the first frame">⏮</button>
         <button id="previousKeyButton" class="transport" title="Go to the key before this frame">⏪</button>
         <button id="playButton" class="transport" title="Play or pause (Space)">▶ Play</button>
@@ -360,6 +421,7 @@
           <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
         </label>
         <span class="pane-header-spacer"></span>
+        <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
         <button class="ghost-btn" type="button" data-pane-toggle="timeline" title="Hide the Timeline panel" aria-label="Hide the Timeline panel">
           <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
         </button>
