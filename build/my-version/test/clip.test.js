@@ -358,7 +358,10 @@ test("an action document is read and its properties are named", async () => {
       }),
     );
     const body = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
-    const document = Buffer.concat([header, entries, body]);
+    // The body starts with the number of type names.
+    const count = Buffer.alloc(4);
+    count.writeUInt32LE(4, 0);
+    const document = Buffer.concat([header, entries, count, body]);
 
     const parsed = parseActionDocument(document);
     assert.equal(parsed.version, "0100");
@@ -368,6 +371,7 @@ test("an action document is read and its properties are named", async () => {
     assert.deepEqual(parsed.types, ["null", "Byte", "UInt16", "Single"]);
     assert.ok(parsed.properties.includes("FCurve"));
     assert.ok(parsed.properties.includes("LeftSlope"));
+    assert.equal(parsed.typeCount, 4);
     assert.deepEqual([...parsed.body], [...body]);
   });
 });

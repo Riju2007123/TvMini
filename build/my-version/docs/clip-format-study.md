@@ -306,6 +306,35 @@ names of the properties and the string values; the body after the pool refers
 to those entries by their index. The numbers inside the document are little
 endian, while the numbers of the blob that carries it are big endian.
 
+The body itself starts with the number of type names, as a little endian
+32-bit number, and then holds the values.
+
+The pool of an animation track, in full, is this. The first twenty-two
+entries are the type names and the rest are the property names and the
+string values:
+
+```
+ 0 null          1 Byte         2 SByte        3 UInt16       4 Int16
+ 5 UInt32        6 Int32        7 Single       8 Double       9 String
+10 Float2       11 Float3      12 Quat        13 Matrix44    14 Single[]
+15 Byte[]       16 Int32[]     17 String[]    18 Float2[]    19 Float3[]
+20 Quat[]       21 Matrix44[]
+22 celsysdocument  23 version      24 1.0.0
+25 Version-Information  26 Software  27 CLIP STUDIO  28 Version
+29 2.1.0         30 General      31 2.0.0
+32 ActionNodeClip  33 Name         34 (empty)     35 TimeClip
+36 Start         37 End          38 Rate         39 MotionClip
+40 MotionBlend   41 ShiftBlend   42 NextBlend    43 BlendEnable
+44 TimeInfo      45 AnimInfo     46 Param        47 ImageCelName
+48 Tag           49 1            50 FCurve       51 Type
+52 Frame         53 Value        54 LeftSlope    55 RightSlope
+56 Interp        57 Constant
+```
+
+A track that moves a cel has more entries in its pool, with
+`ImageAspectScale`, `ImageCenter`, `ImagePosition`, `ImageRotation` and
+`Opacity` in it, and its curve has an `Axis` and both an `X` and a `Y`.
+
 The type names seen are `null`, `Byte`, `SByte`, `UInt16`, `Int16`,
 `UInt32`, `Int32`, `Single`, `Double`, `String`, `Float2`, `Float3`, `Quat`,
 `Matrix44` and the arrays of them. A document that carries doubles instead of

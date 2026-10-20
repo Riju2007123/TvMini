@@ -85,6 +85,11 @@ export function parseActionDocument(input) {
     index += 1;
   }
 
+  // The body starts with the number of type names, as a little endian
+  // 32-bit number, and then holds the values.
+  const hasCount = cursor + 4 <= data.length;
+  const typeCount = hasCount ? data.readUInt32LE(cursor) : null;
+
   return {
     version,
     codec,
@@ -93,8 +98,9 @@ export function parseActionDocument(input) {
     pool,
     types,
     properties: pool.slice(types.length),
-    body: data.subarray(cursor),
+    body: hasCount ? data.subarray(cursor + 4) : data.subarray(cursor),
     bodyOffset: cursor,
+    typeCount,
   };
 }
 
