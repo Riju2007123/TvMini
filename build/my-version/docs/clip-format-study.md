@@ -340,7 +340,37 @@ The type names seen are `null`, `Byte`, `SByte`, `UInt16`, `Int16`,
 `Matrix44` and the arrays of them. A document that carries doubles instead of
 floats has `Double2`, `Double3` and `Double[]` as well.
 
-### What a track animates
+### The body, as far as it is mapped
+
+The body starts with the number of type names and then holds the values. The
+values are written as a regular stream, and the layout of two different
+documents is the same: comparing the mixer of an animation track in
+`Animation11.clip` (120 frames) with the one in `Animation16.clip` (33
+frames), the two bodies have the **same length pattern and the same offsets
+for every field**. Only the values differ, and they differ as floats:
+
+```
+offset 176   3.84375   vs   3.8438...      a float
+offset 200   3.25      vs   3.25           a float
+offset 264   3.84375   vs   3.8438...      a float
+```
+
+So the property values are single precision floats, and the names in the pool
+appear in the body at fixed offsets. Around offset 380 the body holds a run of
+numbers that step by 256, which is the stride of one tile, so the keyframe
+table is laid out in 256 byte records.
+
+What is still missing is how a value is tagged and where a nested object
+ends. The property names themselves are in the body at fixed offsets, so the
+body is a tree, but the rule that decides where each child starts has not
+been found yet.
+
+Because of that, the animation cannot be written back yet, and TVMini does
+not try to. The writer keeps a document static on purpose: a malformed mixer
+is the one thing that could make Clip Studio Paint reject a file that
+otherwise opens, and a static file that opens is worth more than an animated
+file that does not.
+
 
 The property names in the pool say exactly what a track holds. The smallest
 track has `ActionNodeClip`, a `TimeClip` with `Start`, `End` and `Rate`, the
