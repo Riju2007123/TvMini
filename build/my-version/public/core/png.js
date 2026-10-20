@@ -246,7 +246,12 @@ function paintDrawing(width, height, drawing) {
   // A drawing may carry a raster base (imported .tvpp frames). It sits under
   // the strokes, so eraser strokes can reveal it or wipe it like any paint.
   if (drawing.image) {
-    const image = decodePng(drawing.image.data);
+    // The image travels as base64 when it comes over the wire, and as raw
+    // bytes once it has been decoded, so both are accepted here.
+    const source = typeof drawing.image.data === "string"
+      ? Buffer.from(drawing.image.data, "base64")
+      : drawing.image.data;
+    const image = decodePng(source);
     paint.set(image.data);
   }
 

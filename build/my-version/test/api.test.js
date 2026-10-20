@@ -182,8 +182,8 @@ test("import-clip turns a .clip preview into a project without touching recent",
     assert.equal(body.name, "Animation15.clip");
     assert.equal(body.project.width, 32);
     assert.equal(body.project.height, 24);
-    assert.equal(body.project.image.width, 32);
-    assert.equal(Buffer.from(body.project.image.data, "base64").equals(png), true);
+    // The whole file comes in as layers, so the canvas carries no flat image.
+    assert.equal(body.project.image, null);
     assert.equal(body.project.layers.length, 1);
     assert.deepEqual(body.project.layers[0].drawings, []);
 

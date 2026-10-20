@@ -19,7 +19,12 @@ import {
   saveFile,
 } from "./storage.js";
 import { createClipBuffer } from "./clip-write.js";
-import { readClipPreviewFromBytes } from "./clip.js";
+import {
+  clipToProject,
+  readClipDocumentFromBytes,
+  readClipLayersFromBytes,
+  readClipPreviewFromBytes,
+} from "./clip.js";
 import { createTvppBuffer, importTvppBytes } from "./tvpp.js";
 import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
@@ -227,37 +232,14 @@ function createBrowserBackend(hooks) {
     async chooseAndImportClip() {
       const picked = await pickFile(".clip");
       if (!picked) return null;
-      const preview = await readClipPreviewFromBytes(picked.bytes);
-      const project = normalizeProject({
-        format: "tvmini",
-        version: 2,
-        width: preview.width,
-        height: preview.height,
-        background: "#ffffff",
-        image: {
-          data: bytesToBase64(preview.png),
-          width: preview.width,
-          height: preview.height,
-        },
-        fps: 12,
-        startFrame: 1,
-        currentLayer: 0,
-        currentFrame: 1,
-        loop: true,
-        layers: [
-          {
-            name: "Layer 1",
-            type: "anim",
-            visible: true,
-            locked: false,
-            opacity: 1,
-            blend: "normal",
-            preBehavior: "none",
-            postBehavior: "hold",
-            drawings: [],
-          },
-        ],
-      });
+      // The whole file comes in: every raster layer of the document becomes
+      // a layer of the project, carrying its own picture.
+      const [document, layers] = await Promise.all([
+        readClipDocumentFromBytes(picked.bytes),
+        readClipLayersFromBytes(picked.bytes),
+      ]);
+      const project = clipToProject(document, layers);
+      return { name: picked.name, project };
       return { name: picked.name, path: picked.name, project };
     },
 

@@ -3,6 +3,8 @@ import { openDatabase } from "./sqlite.js";
 import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
 import { actionProperties, readActionBlob } from "./clip-animation.js";
+import { createProject, normalizeProject } from "./model.js";
+import { encodeRgbaPng } from "./png.js";
 
 /** Every Clip Studio Paint document starts with this 8-byte tag. */
 export const CLIP_MAGIC = "CSFCHUNK";
@@ -123,6 +125,92 @@ function pngDimensions(bytes) {
     throw new ValidationError("the .clip preview is not a PNG image");
   }
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+/**
+ * Scale one RGBA buffer to another size with nearest neighbour.
+ *
+ * A Clip Studio layer keeps its raster at the size of its own canvas, which
+ * is not always the size of the document, so a layer that does not match has
+ * to be fitted before it can become a TVMini layer.
+ */
+function scaleRgba(source, sourceWidth, sourceHeight, width, height) {
+  if (sourceWidth === width && sourceHeight === height) return source;
+  const output = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y * sourceHeight) / height));
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = Math.min(sourceWidth - 1, Math.floor((x * sourceWidth) / width));
+      source.copy(
+        output,
+        (y * width + x) * 4,
+        (sourceY * sourceWidth + sourceX) * 4,
+        (sourceY * sourceWidth + sourceX) * 4 + 4,
+      );
+    }
+  }
+  return output;
+}
+
+/**
+ * Build a TVMini project out of a Clip Studio document.
+ *
+ * Every raster layer of the document becomes a TVMini layer that carries its
+ * picture as the base of a single drawing. The strokes of that drawing are
+ * empty, so the layer is the picture, but it behaves like any other layer:
+ * the eraser can cut into it, the opacity and the visibility carry over, and
+ * saving the project back to a `.clip` writes the picture again.
+ *
+ * The document's timeline comes over as well, so the frame rate and the
+ * frame range of the Clip Studio file are the ones the project works with.
+ */
+export function clipToProject(document, layers, fallback = {}) {
+  const width = Number(document.width) || Number(fallback.width) || 0;
+  const height = Number(document.height) || Number(fallback.height) || 0;
+  if (width < MIN_SIZE || height < MIN_SIZE) {
+    throw new ValidationError("this .clip has no usable canvas size");
+  }
+  if (width > MAX_SIZE || height > MAX_SIZE) {
+    throw new ValidationError(
+      `this .clip canvas is ${width}×${height}; TVMini supports up to ${MAX_SIZE} px`,
+    );
+  }
+
+  const timeline = document.timeline ?? {};
+  const startFrame = Math.max(1, Number(timeline.startFrame ?? 0) + 1);
+  const endFrame = Math.max(startFrame, Number(timeline.endFrame ?? 0) + 1);
+  const hold = endFrame - startFrame + 1;
+
+  const byId = new Map((layers ?? []).map((layer) => [layer.id, layer]));
+  const projectLayers = [];
+  for (const layer of document.layers ?? []) {
+    const raster = byId.get(layer.id);
+    if (!raster || !raster.pixels) continue;
+    const picture = scaleRgba(raster.pixels, raster.width, raster.height, width, height);
+    projectLayers.push({
+      name: layer.name || `Layer ${layer.id}`,
+      visible: layer.visible !== false,
+      locked: Boolean(layer.locked),
+      opacity: Number.isFinite(layer.opacity) ? layer.opacity : 1,
+      drawings: [{
+        at: startFrame,
+        hold,
+        strokes: [],
+        image: {
+          data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
+          width,
+          height,
+        },
+      }],
+    });
+  }
+
+  const project = createProject(width, height, "#ffffff");
+  project.fps = Math.max(1, Number(timeline.frameRate ?? 12));
+  project.startFrame = startFrame;
+  project.currentFrame = Math.max(startFrame, Number(timeline.currentFrame ?? 0) + 1);
+  project.layers = projectLayers.length ? projectLayers : [createProject(width, height).layers[0]];
+  return normalizeProject(project);
 }
 
 /**
@@ -491,34 +579,61 @@ export async function readClipLayersFromBytes(data, { includePaper = false } = {
 
   try {
     const externalById = new Map();
-    for (const row of db.prepare("SELECT ExternalID, Offset FROM ExternalChunk").all()) {
+    let externalRows = [];
+    try {
+      externalRows = db.prepare("SELECT ExternalID, Offset FROM ExternalChunk").all();
+    } catch {
+      // A document without the table simply has no external blobs.
+      externalRows = [];
+    }
+    for (const row of externalRows) {
       const chunk = container.chunks.find((item) => item.headerOffset === Number(row.Offset));
       if (chunk) externalById.set(asText(row.ExternalID), chunk);
     }
 
     const mipmapById = new Map();
-    for (const mipmap of db.prepare("SELECT MainId, BaseMipmapInfo FROM Mipmap").all()) {
-      mipmapById.set(Number(mipmap.MainId ?? 0), Number(mipmap.BaseMipmapInfo ?? 0));
+    try {
+      for (const mipmap of db.prepare("SELECT MainId, BaseMipmapInfo FROM Mipmap").all()) {
+        mipmapById.set(Number(mipmap.MainId ?? 0), Number(mipmap.BaseMipmapInfo ?? 0));
+      }
+    } catch {
+      // A document without mipmaps simply has no rasters to read.
     }
 
     const offscreenById = new Map();
-    for (const row of db.prepare("SELECT MainId, Attribute, BlockData FROM Offscreen").all()) {
-      offscreenById.set(Number(row.MainId ?? 0), row);
+    try {
+      for (const row of db.prepare("SELECT MainId, Attribute, BlockData FROM Offscreen").all()) {
+        offscreenById.set(Number(row.MainId ?? 0), row);
+      }
+    } catch {
+      // No offscreen table, no layers.
+    }
+
+    let layerRows = [];
+    try {
+      layerRows = db
+        .prepare("SELECT MainId, LayerName, LayerType, LayerFolder, LayerRenderMipmap FROM Layer")
+        .all();
+    } catch {
+      layerRows = [];
     }
 
     const results = [];
-    for (const layer of db
-      .prepare("SELECT MainId, LayerName, LayerType, LayerFolder, LayerRenderMipmap FROM Layer")
-      .all()) {
+    for (const layer of layerRows) {
       if (Number(layer.LayerFolder ?? 0) !== 0) continue;
       const isPaper = Number(layer.LayerType ?? 0) === 1584;
       if (isPaper && !includePaper) continue;
 
       const baseInfo = mipmapById.get(Number(layer.LayerRenderMipmap ?? 0));
       if (!baseInfo) continue;
-      const info = db
-        .prepare("SELECT Offscreen FROM MipmapInfo WHERE MainId = ?")
-        .get(baseInfo);
+      let info = null;
+      try {
+        info = db
+          .prepare("SELECT Offscreen FROM MipmapInfo WHERE MainId = ?")
+          .get(baseInfo);
+      } catch {
+        info = null;
+      }
       if (!info) continue;
       const offscreen = offscreenById.get(Number(info.Offscreen ?? 0));
       if (!offscreen) continue;

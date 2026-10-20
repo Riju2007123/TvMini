@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProject, normalizeProject, ValidationError } from "./src/model.js";
-import { readClipDocument, readClipPreview } from "./src/clip.js";
+import { readClipDocument, readClipPreview, readClipProject } from "./src/clip.js";
 import { createTvppBuffer, importTvppBytes } from "./src/tvpp.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
 import { exportClip, exportPng, openProject, saveProject, exportTvpp } from "./src/store.js";
@@ -187,17 +187,16 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       }
 
       if (route === "POST /api/import-clip") {
+        // The whole file comes in: every raster layer of the document
+        // becomes a layer of the project, carrying its own picture.
         const body = await readJson(req);
-        const preview = await readClipPreview(body.path);
-        const project = normalizeProject({
-          ...createProject(preview.width, preview.height),
-          image: {
-            data: preview.png.toString("base64"),
-            width: preview.width,
-            height: preview.height,
-          },
+        const imported = await readClipProject(body.path);
+        sendJson(res, 200, {
+          path: imported.path,
+          name: imported.name,
+          project: imported.project,
+          document: imported.document,
         });
-        sendJson(res, 200, { path: preview.path, name: preview.name, project });
         return;
       }
 
