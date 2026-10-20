@@ -265,6 +265,71 @@ export function decodePng(input) {
   return { width, height, data: out };
 }
 
+/**
+ * Decoded pictures, kept so that a frame does not decode them again.
+ *
+ * A picture that comes from an imported document is a PNG that is the same
+ * for every frame, and unpacking one costs about a tenth of a second for a
+ * canvas the size of a photograph. Decoding them again for every frame is
+ * what makes a big imported document slow, so the result is kept and used
+ * again.
+ *
+ * The pictures are only ever read, never changed: a caller that wants to
+ * paint on one copies it first.
+ */
+const pictureCache = new Map();
+let pictureCacheBytes = 0;
+const PICTURE_CACHE_LIMIT = 128 * 1024 * 1024;
+
+/** Decode a picture, or hand back the one that was decoded before. */
+export function decodePicture(source) {
+  const key = typeof source === "string" ? source : null;
+  if (key !== null) {
+    const hit = pictureCache.get(key);
+    if (hit) {
+      // Put it at the end, so the one that was used longest ago is the one
+      // that is dropped when the cache is full.
+      pictureCache.delete(key);
+      pictureCache.set(key, hit);
+      return hit;
+    }
+  }
+
+  const bytes = typeof source === "string" ? Buffer.from(source, "base64") : source;
+  const picture = decodePng(bytes);
+  if (key !== null) {
+    pictureCache.set(key, picture);
+    pictureCacheBytes += picture.data.length;
+    while (pictureCacheBytes > PICTURE_CACHE_LIMIT && pictureCache.size > 1) {
+      const oldest = pictureCache.keys().next().value;
+      pictureCacheBytes -= pictureCache.get(oldest).data.length;
+      pictureCache.delete(oldest);
+    }
+  }
+  return picture;
+}
+
+/** Forget the pictures that were decoded. */
+export function clearPictureCache() {
+  pictureCache.clear();
+  pictureCacheBytes = 0;
+}
+
+/**
+ * The picture of a drawing that is only a picture.
+ *
+ * Returns null when the drawing has strokes on top of the picture, or when
+ * the picture is not the size of the canvas - in both cases the drawing has
+ * to be painted into a buffer of its own.
+ */
+function directPicture(drawing, width, height) {
+  if (!drawing || !drawing.image) return null;
+  if (drawing.strokes && drawing.strokes.length) return null;
+  const picture = decodePicture(drawing.image.data);
+  if (picture.width !== width || picture.height !== height) return null;
+  return picture.data;
+}
+
 /** Paint or erase one stroke's shape into a straight-alpha RGBA buffer. */
 function paintStrokeInto(target, width, height, stroke, rgb) {
   const erase = stroke.eraser === true;
@@ -353,9 +418,9 @@ function paintDrawingInner(width, height, drawing) {
     // The image travels as base64 when it comes over the wire, and as raw
     // bytes once it has been decoded, so both are accepted here.
     const source = typeof drawing.image.data === "string"
-      ? Buffer.from(drawing.image.data, "base64")
+      ? drawing.image.data
       : drawing.image.data;
-    const image = decodePng(source);
+    const image = decodePicture(source);
     paint.set(image.data);
   }
 
@@ -399,12 +464,35 @@ function composite(data, width, height, image, opacity = 1) {
   }
   if (opacity <= 0) return;
 
+  const source = image.data;
+
+  // The usual case is a layer that is drawn at full strength, and most of
+  // its pixels are solid. Those pixels are copied as they are, without the
+  // arithmetic of blending, which is what a big canvas spends its time on.
+  if (opacity === 1) {
+    for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
+      const alpha = source[j + 3];
+      if (alpha === 0) continue;
+      if (alpha === 255) {
+        data[i] = source[j];
+        data[i + 1] = source[j + 1];
+        data[i + 2] = source[j + 2];
+        continue;
+      }
+      const blend = alpha / 255;
+      data[i] = Math.round(source[j] * blend + data[i] * (1 - blend));
+      data[i + 1] = Math.round(source[j + 1] * blend + data[i + 1] * (1 - blend));
+      data[i + 2] = Math.round(source[j + 2] * blend + data[i + 2] * (1 - blend));
+    }
+    return;
+  }
+
   for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
-    const alpha = (image.data[j + 3] / 255) * opacity;
+    const alpha = (source[j + 3] / 255) * opacity;
     if (alpha === 0) continue;
-    data[i] = Math.round(image.data[j] * alpha + data[i] * (1 - alpha));
-    data[i + 1] = Math.round(image.data[j + 1] * alpha + data[i + 1] * (1 - alpha));
-    data[i + 2] = Math.round(image.data[j + 2] * alpha + data[i + 2] * (1 - alpha));
+    data[i] = Math.round(source[j] * alpha + data[i] * (1 - alpha));
+    data[i + 1] = Math.round(source[j + 1] * alpha + data[i + 1] * (1 - alpha));
+    data[i + 2] = Math.round(source[j + 2] * alpha + data[i + 2] * (1 - alpha));
   }
 }
 
@@ -500,7 +588,7 @@ export function renderProject(project, frame = project.currentFrame) {
   }
 
   if (project.image) {
-    composite(data, width, height, decodePng(Buffer.from(project.image.data, "base64")));
+    composite(data, width, height, decodePicture(project.image.data));
   }
 
   for (let index = project.layers.length - 1; index >= 0; index -= 1) {
@@ -510,7 +598,11 @@ export function renderProject(project, frame = project.currentFrame) {
     const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
 
-    const paint = paintDrawing(width, height, resolved.drawing);
+    // A drawing that is only a picture does not have to be copied into a
+    // buffer of its own first: the picture can go onto the canvas as it
+    // is. That saves a copy of the whole canvas for every imported layer.
+    const paint = directPicture(resolved.drawing, width, height) ??
+      paintDrawing(width, height, resolved.drawing);
     composite(data, width, height, { width, height, data: paint }, layer.opacity);
   }
 

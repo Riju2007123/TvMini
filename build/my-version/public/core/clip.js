@@ -3,6 +3,7 @@ import { openDatabase } from "./sqlite.js";
 import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
 import { actionProperties, readActionBlob } from "./clip-animation.js";
+import { frameOfCellName } from "../timeline.js";
 import { createProject, normalizeProject } from "./model.js";
 import { encodeRgbaPng } from "./png.js";
 
@@ -155,14 +156,14 @@ function scaleRgba(source, sourceWidth, sourceHeight, width, height) {
 /**
  * Build a TVMini project out of a Clip Studio document.
  *
- * Every raster layer of the document becomes a TVMini layer that carries its
- * picture as the base of a single drawing. The strokes of that drawing are
- * empty, so the layer is the picture, but it behaves like any other layer:
- * the eraser can cut into it, the opacity and the visibility carry over, and
- * saving the project back to a `.clip` writes the picture again.
+ * The shape of the document comes over as it is: the folders, the animation
+ * folders and the layers inside them. The children of an animation folder
+ * are the cells of the animation, and each of them becomes a layer of its
+ * own that carries the picture of the cell, so the animation shows up in the
+ * timeline the way it shows up in Clip Studio Paint.
  *
- * The document's timeline comes over as well, so the frame rate and the
- * frame range of the Clip Studio file are the ones the project works with.
+ * Clip Studio Paint names a cell after the frame it sits on, so the name of
+ * the cell says which frame it belongs to: `1`, `1a`, `2`, `2a` and so on.
  */
 export function clipToProject(document, layers, fallback = {}) {
   const width = Number(document.width) || Number(fallback.width) || 0;
@@ -181,35 +182,153 @@ export function clipToProject(document, layers, fallback = {}) {
   const endFrame = Math.max(startFrame, Number(timeline.endFrame ?? 0) + 1);
   const hold = endFrame - startFrame + 1;
 
-  const byId = new Map((layers ?? []).map((layer) => [layer.id, layer]));
-  const projectLayers = [];
-  for (const layer of document.layers ?? []) {
-    const raster = byId.get(layer.id);
-    if (!raster || !raster.pixels) continue;
+  const rasterById = new Map((layers ?? []).map((layer) => [Number(layer.id), layer]));
+  const nodes = new Map((document.layerTree ?? []).map((node) => [Number(node.id), node]));
+
+  /** The picture of a layer, as the base of a drawing. */
+  const pictureOf = (node) => {
+    const raster = rasterById.get(Number(node.id));
+    if (!raster || !raster.pixels) return null;
     const picture = scaleRgba(raster.pixels, raster.width, raster.height, width, height);
-    projectLayers.push({
-      name: layer.name || `Layer ${layer.id}`,
-      visible: layer.visible !== false,
-      locked: Boolean(layer.locked),
-      opacity: Number.isFinite(layer.opacity) ? layer.opacity : 1,
-      drawings: [{
-        at: startFrame,
-        hold,
+    return {
+      data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
+      width,
+      height,
+    };
+  };
+
+  /**
+   * The layers a folder holds.
+   *
+   * Clip Studio Paint keeps the layers of a folder in a chain that starts
+   * at the bottom of the screen, so the chain is turned around here: the
+   * first layer of the list is the top one.
+   */
+  const childrenOf = (node) => {
+    const list = [];
+    let id = Number(node.firstChildIndex ?? 0);
+    while (id) {
+      const child = nodes.get(id);
+      if (!child) break;
+      list.push(child);
+      id = Number(child.nextIndex ?? 0);
+    }
+    return list.reverse();
+  };
+
+  /**
+   * Build one layer of the document.
+   *
+   * `inheritedFrame` and `inheritedName` belong to the cell the layer sits
+   * in, when the cell holds more than one layer.
+   */
+  const buildLayer = (node, insideAnimation, inheritedFrame, inheritedName) => {
+    const folder = Boolean(node.folder);
+    const ownName = node.name || `Layer ${node.id}`;
+
+    // A cell is named after the frame it sits on, so the name of the cell
+    // says where it belongs. A layer inside an animation folder that has
+    // an ordinary name is **not** a cell: it is a layer that shows the
+    // whole time, the way a layer outside the folder does. Getting this
+    // wrong hides the artwork, because a cell only shows on its own frame.
+    const cellFrame = insideAnimation ? frameOfCellName(ownName) : null;
+    const isCel = cellFrame !== null;
+
+    // A layer that sits inside a cell is on the frame of that cell; a layer
+    // that is not a cell is on the first frame and shows from there on.
+    const frame = isCel ? cellFrame : (inheritedFrame ?? startFrame);
+    const cellName = inheritedName ?? (isCel ? ownName : null);
+
+    const layer = {
+      // The id of the row in the Clip Studio document. It is used to find
+      // the layer that was selected and is dropped before the project is
+      // handed over.
+      id: node.id,
+      name: ownName,
+      type: folder ? "group" : "anim",
+      visible: node.visible !== false,
+      locked: Boolean(node.locked),
+      opacity: typeof node.opacity === "number" && Number.isFinite(node.opacity) ? node.opacity : 1,
+      blend: "normal",
+      // A cell only shows on its own frame; an ordinary layer shows the
+      // whole time.
+      preBehavior: isCel ? "none" : "hold",
+      postBehavior: isCel ? "none" : "hold",
+      clip: false,
+      parent: -1,
+      drawings: [],
+    };
+
+    if (!folder) {
+      const picture = pictureOf(node);
+      const drawing = {
+        at: frame,
+        hold: isCel ? 1 : hold,
         strokes: [],
-        image: {
-          data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
-          width,
-          height,
-        },
-      }],
-    });
+      };
+      if (cellName) drawing.name = cellName;
+      if (picture) drawing.image = picture;
+      layer.drawings.push(drawing);
+    }
+
+    const children = childrenOf(node).map((child) =>
+      buildLayer(
+        child,
+        insideAnimation || Boolean(node.animationFolder),
+        isCel ? frame : inheritedFrame,
+        isCel ? cellName : inheritedName,
+      ),
+    );
+    if (folder) layer.children = children;
+    return layer;
+  };
+
+  // The root of the document holds every layer of the canvas.
+  const root =
+    (document.layerTree ?? []).find((node) => node.kind === "root-folder") ??
+    (document.layerTree ?? [])[0] ??
+    null;
+
+  const projectLayers = [];
+  const flatten = (layer, parent) => {
+    const index = projectLayers.length;
+    layer.parent = parent;
+    projectLayers.push(layer);
+    for (const child of layer.children ?? []) flatten(child, index);
+  };
+
+  if (root) {
+    for (const child of childrenOf(root)) {
+      flatten(buildLayer(child, false, null), -1);
+    }
+  }
+
+  // The tree is only a step on the way: the project keeps one flat list of
+  // layers, and every layer says which folder holds it.
+  const sourceIds = [];
+  for (const layer of projectLayers) {
+    sourceIds.push(Number(layer.id));
+    delete layer.id;
+    delete layer.children;
   }
 
   const project = createProject(width, height, "#ffffff");
   project.fps = Math.max(1, Number(timeline.frameRate ?? 12));
   project.startFrame = startFrame;
-  project.currentFrame = Math.max(startFrame, Number(timeline.currentFrame ?? 0) + 1);
+  project.currentFrame = Math.min(
+    endFrame,
+    Math.max(startFrame, Number(timeline.currentFrame ?? 0) + 1),
+  );
   project.layers = projectLayers.length ? projectLayers : [createProject(width, height).layers[0]];
+
+  // The layer that was selected in the document is the one the work was
+  // done on, so that is the one the brush starts on.
+  const selected = Number(document.currentLayerId ?? 0);
+  if (selected) {
+    const index = sourceIds.indexOf(selected);
+    if (index >= 0) project.currentLayer = index;
+  }
+
   return normalizeProject(project);
 }
 
@@ -512,6 +631,9 @@ export async function readClipDocumentFromBytes(data) {
       layerTree,
       mipmaps,
       timeline,
+      // The layer that was selected when the document was saved. It is the
+      // one the work was done on, so it is the one the brush belongs on.
+      currentLayerId: Number(canvasRow?.CanvasCurrentLayer ?? 0) || null,
       tracks,
       tables,
       tableDetails,

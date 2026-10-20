@@ -91,7 +91,7 @@ export async function readClipProject(filePath) {
   const data = Buffer.from(await fs.readFile(clean));
   const [document, layers, preview] = await Promise.all([
     readClipDocumentFromBytes(data),
-    readClipLayersFromBytes(data),
+    readClipLayersFromBytes(data, { includePaper: true }),
     readClipPreviewFromBytes(data).catch(() => null),
   ]);
   return {
