@@ -34,8 +34,23 @@ about licence enforcement is reported as documentation only.
 - **Step 6 — BUILD:** done — `SPEC.md` + `build/my-version` (independent app + tests).
   - Follow-up: pen pressure support (per-point `[x, y, pressure]`, tapered
     canvas + PNG export) and undo/redo (100-step snapshot history).
-    40/40 tests pass.
+  - 40/40 tests pass.
 - **Step 7 — REPO:** private repo
   `https://github.com/Riju2007123/tvpaint-save-export-rea` (branch `master`).
+- **Step 8 — CLIP STUDIO PARITY:** done.
+  - The user showed a 75 s recording of Clip Studio Paint EX building an
+    animation: an "Animation folder" whose children are the cells
+    `1`, `1a`, `2`, `2a`, `3`, `4`, a nested layer group, a clip mask and the
+    keyframe buttons of the timeline.
+  - Added to TVMini: **layer folders** (nested), **named cells** (`1`, `1a`,
+    `2`, `2a`), a **clip mask**, **keyframe navigation**, and a `.clip` import
+    that brings in the whole document — folders, animation folders and the
+    cells of an animation — as frames on the timeline.
+  - The cell naming rule was read out of 45 real `.clip` files: a cell is
+    named after the frame it sits on, with a letter for a second cell on the
+    same frame. See `build/my-version/docs/clip-format-study.md`.
+  - Project format is now version 3 (folders, clip mask, cell names);
+    version 1 and 2 files are migrated on load.
+  - 176/176 tests pass.
 
 **next step: all steps complete — see REPORT.md / SPEC.md**

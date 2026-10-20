@@ -951,6 +951,20 @@ canvas.picking {
   gap: 2px;
   height: 26px;
   padding: 2px 4px;
+  /* The layers inside a folder are indented under it. */
+  padding-left: calc(4px + var(--depth, 0) * 14px);
+}
+
+.tl-fold {
+  color: var(--text-dim);
+}
+
+.tl-clip {
+  flex: none;
+  padding: 0 2px;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
 }
 
 .tl-icon {

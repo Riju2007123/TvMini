@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
+  createGroup,
   createLayer,
   createProject,
   normalizeProject,
@@ -34,11 +35,11 @@ function v1Project(strokes = []) {
   };
 }
 
-test("createProject returns a valid empty version 2 project", () => {
+test("createProject returns a valid empty project", () => {
   const project = createProject(320, 200, "#AABBCC");
   assert.equal(project.format, "tvmini");
   assert.equal(project.version, VERSION);
-  assert.equal(project.version, 2);
+  assert.equal(project.version, 3);
   assert.equal(project.width, 320);
   assert.equal(project.height, 200);
   assert.equal(project.background, "#aabbcc");
@@ -116,7 +117,41 @@ test("normalizeProject sorts drawings and rejects overlaps", () => {
 test("normalizeProject rejects wrong format and unsupported versions", () => {
   const base = createProject(100, 100);
   assert.throws(() => normalizeProject({ ...base, format: "tvpp" }), /not a tvmini project/);
-  assert.throws(() => normalizeProject({ ...base, version: 3 }), /unsupported project version/);
+  assert.throws(() => normalizeProject({ ...base, version: 9 }), /unsupported project version/);
+});
+
+test("version 2 projects are migrated to the folder aware schema", () => {
+  const legacy = {
+    format: "tvmini",
+    version: 2,
+    width: 100,
+    height: 80,
+    background: "#ffffff",
+    image: null,
+    fps: 24,
+    startFrame: 1,
+    currentLayer: 0,
+    currentFrame: 1,
+    loop: true,
+    layers: [
+      {
+        name: "Ink",
+        type: "anim",
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blend: "normal",
+        preBehavior: "none",
+        postBehavior: "hold",
+        drawings: [{ at: 1, hold: 1, strokes: [] }],
+      },
+    ],
+  };
+
+  const clean = normalizeProject(legacy);
+  assert.equal(clean.version, VERSION);
+  assert.equal(clean.layers[0].parent, -1);
+  assert.equal(clean.layers[0].clip, false);
 });
 
 test("version 1 projects are migrated to one animation layer", () => {
@@ -124,7 +159,7 @@ test("version 1 projects are migrated to one animation layer", () => {
     v1Project([{ color: "#112233", width: 4, points: [[1, 2], [3, 4]] }]),
   );
 
-  assert.equal(clean.version, 2);
+  assert.equal(clean.version, VERSION);
   assert.equal(clean.layers.length, 1);
   assert.equal(clean.layers[0].name, "Layer 1");
   assert.equal(clean.layers[0].drawings.length, 1);
@@ -136,8 +171,54 @@ test("version 1 projects are migrated to one animation layer", () => {
   assert.deepEqual(empty.layers[0].drawings, []);
 });
 
-test("normalizeProject rejects bad colours, points and widths", () => {
-  const base = createProject(100, 100);
+test("a folder holds the layers that point at it", () => {
+  const project = createProject(100, 100);
+  const folder = createGroup("Folder");
+  const layer = createLayer("Inside");
+  project.layers = [folder, layer];
+  layer.parent = 0;
+
+  const clean = normalizeProject(project);
+  assert.equal(clean.layers[0].type, "group");
+  assert.equal(clean.layers[1].parent, 0);
+});
+
+test("a layer may only sit in a folder that comes before it", () => {
+  const project = createProject(100, 100);
+  const layer = createLayer("Layer 1");
+  const folder = createGroup("Folder");
+  project.layers = [layer, folder];
+  layer.parent = 1;
+  assert.throws(() => normalizeProject(project), /parent must come before/);
+
+  project.layers = [folder, createLayer("Other"), layer];
+  layer.parent = 1;
+  assert.throws(() => normalizeProject(project), /parent must be a folder/);
+});
+
+test("a folder cannot hold itself and the folders cannot loop", () => {
+  const project = createProject(100, 100);
+  const folder = createGroup("Folder");
+  project.layers = [folder];
+  folder.parent = 0;
+  assert.throws(() => normalizeProject(project), /must not be the layer itself/);
+});
+
+test("a cell may carry a name", () => {
+  const project = createProject(100, 100);
+  project.layers[0].drawings = [
+    { at: 1, hold: 1, strokes: [], name: "1a" },
+    { at: 2, hold: 1, strokes: [], name: 7 },
+  ];
+  assert.throws(() => normalizeProject(project), /name must be text/);
+
+  project.layers[0].drawings[1].name = "2";
+  const clean = normalizeProject(project);
+  assert.equal(clean.layers[0].drawings[0].name, "1a");
+  assert.equal(clean.layers[0].drawings[1].name, "2");
+});
+
+test("normalizeProject rejects bad colours, points and widths", () => {  const base = createProject(100, 100);
   assert.throws(() => normalizeProject({ ...base, background: "white" }), /#rrggbb/);
   assert.throws(
     () => normalizeProject(projectWithDrawing({

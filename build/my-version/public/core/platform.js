@@ -70,6 +70,13 @@ function createServerBackend(hooks) {
       return (await serverRequest("POST", "/api/recent/remove", { path: name })).entries;
     },
 
+    async open(path) {
+      // The recent list of a server holds real paths, so a project is opened
+      // by the path it was saved under.
+      const data = await serverRequest("POST", "/api/open", { path });
+      return { name: data.path, project: data.project, recent: data.recent };
+    },
+
     async chooseAndOpen() {
       const path = await hooks.pickPath({ mode: "open", title: "Open project" });
       if (!path) return null;
@@ -232,14 +239,13 @@ function createBrowserBackend(hooks) {
     async chooseAndImportClip() {
       const picked = await pickFile(".clip");
       if (!picked) return null;
-      // The whole file comes in: every raster layer of the document becomes
-      // a layer of the project, carrying its own picture.
+      // The whole file comes in: the folders, the animation folders and the
+      // layers inside them, each carrying its own picture.
       const [document, layers] = await Promise.all([
         readClipDocumentFromBytes(picked.bytes),
-        readClipLayersFromBytes(picked.bytes),
+        readClipLayersFromBytes(picked.bytes, { includePaper: true }),
       ]);
       const project = clipToProject(document, layers);
-      return { name: picked.name, project };
       return { name: picked.name, path: picked.name, project };
     },
 

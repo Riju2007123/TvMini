@@ -1,12 +1,12 @@
-import { BEHAVIORS, CAMERA_INTERP, isBehavior } from "../timeline.js";
+import { BEHAVIORS, CAMERA_INTERP, LAYER_TYPES, isBehavior } from "../timeline.js";
 import { Buffer } from "./bytes.js";
 
 export const FORMAT = "tvmini";
-export const VERSION = 2;
+export const VERSION = 3;
 export const MAX_STROKES = 10000;
-export const MAX_LAYERS = 100;
-export const MAX_DRAWINGS_PER_LAYER = 1000;
-export const MAX_TOTAL_DRAWINGS = 5000;
+export const MAX_LAYERS = 500;
+export const MAX_DRAWINGS_PER_LAYER = 2000;
+export const MAX_TOTAL_DRAWINGS = 20000;
 export const MAX_FPS = 120;
 export const MAX_START_FRAME = 100000;
 export const MAX_HOLD = 10000;
@@ -169,6 +169,24 @@ export function createLayer(name = "Layer 1") {
     blend: "normal",
     preBehavior: "none",
     postBehavior: "hold",
+    clip: false,
+    parent: -1,
+    drawings: [],
+  };
+}
+
+/**
+ * Create an empty folder.
+ *
+ * A folder holds other layers. It has no cells of its own; the cells of the
+ * layers inside it show up on the folder's row in the timeline.
+ */
+export function createGroup(name = "Group") {
+  return {
+    ...createLayer(name),
+    type: "group",
+    preBehavior: "hold",
+    postBehavior: "hold",
     drawings: [],
   };
 }
@@ -273,8 +291,8 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   }
 
   const type = value.type === undefined ? "anim" : value.type;
-  if (type !== "anim") {
-    throw new ValidationError(`${label}.type must be "anim"`);
+  if (!LAYER_TYPES.includes(type)) {
+    throw new ValidationError(`${label}.type must be one of ${LAYER_TYPES.join(", ")}`);
   }
 
   const visible = value.visible === undefined ? true : boolean(value.visible, `${label}.visible`);
@@ -285,6 +303,12 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   if (blend !== "normal") {
     throw new ValidationError(`${label}.blend must be "normal"`);
   }
+
+  const clip = value.clip === undefined ? false : boolean(value.clip, `${label}.clip`);
+  const parent =
+    value.parent === undefined
+      ? -1
+      : integerInRange(value.parent, `${label}.parent`, -1, 1_000_000);
 
   const preBehavior = value.preBehavior === undefined ? "none" : value.preBehavior;
   const postBehavior = value.postBehavior === undefined ? "hold" : value.postBehavior;
@@ -318,6 +342,18 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
     const strokes = normalizeStrokes(drawing.strokes, `${dLabel}.strokes`);
 
     const clean = { at, hold, strokes };
+    // A cell can carry a name, the way Clip Studio Paint names the cells of
+    // an animation folder. A name that is not text is refused.
+    if (drawing.name !== undefined && drawing.name !== null) {
+      if (typeof drawing.name !== "string") {
+        throw new ValidationError(`${dLabel}.name must be text`);
+      }
+      const cellLabel = drawing.name.trim();
+      if (cellLabel.length > 80) {
+        throw new ValidationError(`${dLabel}.name must be 80 characters or fewer`);
+      }
+      if (cellLabel.length > 0) clean.name = cellLabel;
+    }
     // A drawing may carry a raster base (imported .tvpp frames render through
     // it). Regular drawings simply never set this field.
     if (drawing.image !== undefined) {
@@ -356,8 +392,45 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
     blend,
     preBehavior,
     postBehavior,
+    clip,
+    parent,
     drawings,
   };
+}
+
+/**
+ * Check that every layer sits in a folder that exists.
+ *
+ * A layer points at the folder that holds it, so a folder comes before the
+ * layers it holds and a layer may not hold itself.
+ */
+function normalizeLayerParents(layers) {
+  for (let index = 0; index < layers.length; index += 1) {
+    const parent = layers[index].parent;
+    if (parent === -1) continue;
+    if (parent === index) {
+      throw new ValidationError(`layers[${index}].parent must not be the layer itself`);
+    }
+    if (parent < 0 || parent >= layers.length) {
+      throw new ValidationError(`layers[${index}].parent must be a layer in this project`);
+    }
+    if (layers[parent].type !== "group") {
+      throw new ValidationError(`layers[${index}].parent must be a folder`);
+    }
+    if (parent >= index) {
+      throw new ValidationError(`layers[${index}].parent must come before the layer it holds`);
+    }
+    // The chain of folders must not loop.
+    const seen = new Set([index]);
+    let walk = parent;
+    while (walk !== -1) {
+      if (seen.has(walk)) {
+        throw new ValidationError(`layers[${index}].parent makes a loop in the folders`);
+      }
+      seen.add(walk);
+      walk = layers[walk].parent;
+    }
+  }
 }
 
 /**
@@ -452,8 +525,10 @@ function normalizeAudio(value, label) {
 /**
  * Validate an untrusted object and return a clean copy.
  *
- * Version 1 files (a flat `strokes` array) are migrated to version 2: the
- * strokes become one drawing at frame 1 on a single animation layer.
+ * Version 1 files (a flat `strokes` array) are migrated to the current
+ * version: the strokes become one drawing at frame 1 on a single animation
+ * layer. Version 2 files are the same, except that their layers have no
+ * folder, no clip mask and their cells have no name.
  */
 export function normalizeProject(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -462,7 +537,7 @@ export function normalizeProject(input) {
   if (input.format !== FORMAT) {
     throw new ValidationError(`not a ${FORMAT} project (format=${JSON.stringify(input.format)})`);
   }
-  if (input.version !== 1 && input.version !== VERSION) {
+  if (input.version !== 1 && input.version !== 2 && input.version !== VERSION) {
     throw new ValidationError(`unsupported project version ${JSON.stringify(input.version)}`);
   }
 
@@ -511,6 +586,7 @@ export function normalizeProject(input) {
   const layers = input.layers.map((layer, index) =>
     normalizeLayer(layer, index, startFrame, width, height),
   );
+  normalizeLayerParents(layers);
 
   let totalDrawings = 0;
   let totalStrokes = 0;

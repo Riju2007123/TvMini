@@ -9,7 +9,7 @@ The code that implements this lives in:
 
 | File | What it does |
 |---|---|
-| `public/core/clip.js` | the reader: the container, the database, the pixels |
+| `public/core/clip.js` | the reader: the container, the database, the pixels, the layer tree |
 | `public/core/clip-blocks.js` | the codec shared by the reader and the writer |
 | `public/core/clip-write.js` | the writer: it builds a document CSP opens |
 | `src/clip.js` | the same reader, with the file system added |
@@ -154,6 +154,78 @@ A folder is a row with `LayerFolder` set, not a separate type. An animation
 folder has `AnimationFolder` set as well. The old reader dropped the paper
 rows and the folders; the new reader keeps every row and says which kind it
 is.
+
+### The layer tree
+
+The layers of a document are held in a chain. Two columns say how:
+
+| Column | Meaning |
+|---|---|
+| `LayerFirstChildIndex` | the first layer inside this folder |
+| `LayerNextIndex` | the next layer at the same level |
+
+So a folder's children are the chain that starts at `LayerFirstChildIndex`,
+and the chain of a child continues with `LayerNextIndex`.
+
+**The chain starts at the bottom of the screen.** The root folder of a real
+document points at the paper layer, the paper points at the animation folder,
+and the animation folder points at the "(Story Information)" layer — which is
+the top row of the Clip Studio Paint palette. The reader therefore turns the
+chain around at every level: the first layer of the list is the top one.
+
+A worked example, from `Animation2.clip`:
+
+```
+root (type 256)
+└── Paper (type 1584)
+    └── Animation folder (AnimationFolder = 1)
+        ├── "1"
+        │   └── "1a"
+        │       └── "2"
+        │           └── "2a"  (a folder)
+        │               ├── "Layer 1"
+        │               ├── "Layer 2"
+        │               └── "Layer 3"
+        └── "3"
+            └── "4"
+```
+
+Turned around, that is the order the palette shows: the animation folder at
+the top, then the cells `4`, `3`, `2a` (with the three layers inside it),
+`2`, `1a` and `1`, and the paper at the bottom.
+
+### The cells of an animation folder
+
+The children of an animation folder are the **cells** of the animation, and
+each one of them is a layer of its own. A cell can be a raster layer or a
+folder that holds several layers.
+
+**A cell is named after the frame it sits on.** The name is a number and an
+optional letter: `1`, `1a`, `1b`, `2`, `2a`. The letter tells which cell it is
+when a frame carries more than one of them. The rule holds over the whole
+corpus, for instance in `bleach collab.clip`:
+
+```
+"hand 1"    1, 1a, 2, 2a, 3, 3a, 4, 5, 6, 7, 8, 9, 10
+"Folder 3"  1, 1a, 2, 2a, 3, 3a, 4, 4a, 5, 6, 6a, 7, 8, ... 17
+```
+
+and in `Animation4.clip`:
+
+```
+1, 1a, 2, 3, 4, 4a, 4b, 5, 6, Layer 1, 6a, 7, 7a, 7b, 8, 9
+```
+
+The name is what says which frame a cell belongs to, so a reader does not have
+to decode the action document to place the cells of an animation. A cell whose
+name is not a frame number — `Layer 1`, or the uuid a folder gets when it is
+copied — keeps the frame of the cell it is in.
+
+The frame of every cell is also written down in the action document of the
+track of the animation folder: the pool of the track holds the names of the
+cells (`ImageCelName`), and the FCurve of the track holds the keyframes. The
+keyframe list inside the action body is still not decoded, so the reader takes
+the frame from the name of the cell instead.
 
 ### How a blob is found
 

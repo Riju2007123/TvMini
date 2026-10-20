@@ -39,6 +39,11 @@ Deliberately **not** in scope:
   other than normal, or sequence/movie export;
 - any interaction with TVPaint's licence or demo checks.
 
+The layer model does follow Clip Studio Paint where it is cheap to do so:
+folders, cells that are named after their frame, a clip mask and the frames of
+an imported animation. That is a choice of TVMini's own model, not a claim of
+compatibility with either program.
+
 ---
 
 ## 2. Functional requirements
@@ -126,7 +131,7 @@ Deliberately **not** in scope:
 
 ### FR-10 Import a Clip Studio `.clip`
 - Opening a `.clip` file (via Open… or "Import .clip preview…") reads it
-  read-only and loads its embedded canvas preview as the new canvas.
+  read-only and brings the whole document in.
 - The original `.clip` file is never written or modified.
 - The new document has no path and is offered a `.tvmini` name on Save As.
 - The preview image is stored inside the `.tvmini` project, so reopening the
@@ -137,6 +142,57 @@ Deliberately **not** in scope:
   has no `CanvasPreview` row, or has a canvas outside 16…4096 px is rejected
   with a readable error and leaves the current project untouched.
 - Importing does not add anything to Recent.
+- The layer tree of the document comes over as it is (FR-18), and the cells of
+  an animation folder come over as frames on the timeline (FR-19).
+
+### FR-18 Layer folders
+- A layer is either a drawing layer (`"anim"`) or a folder (`"group"`).
+- A folder holds other layers; a folder can hold a folder.
+- The layer list stays flat. Every layer says which folder holds it, and a
+  folder's layers sit right after it, so the list reads top first.
+- The timeline draws the layers inside a folder indented under it, and the row
+  of a folder shows the cells of the layers inside it — the way an animation
+  folder shows the cells of an animation.
+- A folder can be closed, which hides the layers inside it.
+- A folder is painted with the opacity of every folder above it, and a folder
+  that is hidden hides the layers inside it.
+- **+ Folder** puts the current layer inside a new folder; **− Folder** takes
+  the folder apart and moves its layers up to where it was.
+- A layer moves among its siblings with ↑ and ↓, and dropping a layer on a
+  folder in the list puts it inside that folder. A folder and the layers
+  inside it move as one block.
+- A folder holds no cells of its own, so it cannot be drawn on, and it cannot
+  be clipped.
+- A folder is left out of a `.clip` export: the layers inside it are written
+  as layers of their own.
+
+### FR-19 Named cells
+- A cell of the timeline may carry a name.
+- A new cell is named after the frame it sits on, the way Clip Studio Paint
+  names the cells of an animation folder: `1`, `1a`, `1b`, then `2`, `2a`.
+- A cell whose name is a number and an optional letter says which frame it
+  belongs to, so an imported animation lands on the frames it has in Clip
+  Studio Paint.
+- The name is shown in the cell, and a double-click on a cell renames it.
+- The timeline row of a folder shows the names of the cells inside it.
+
+### FR-20 Clip mask
+- A layer can be cut by the picture of the layer below it: the **Clip to the
+  layer below** box in the inspector.
+- The layer below is the next drawing layer under it, the way Clip Studio
+  Paint clips to the layer underneath.
+- The cut applies to the picture of the layer, and to its whole exposure on
+  that frame.
+- A layer that is clipped is marked with `✂` in the timeline.
+- A folder cannot be clipped, and a layer with nothing below it cannot be
+  clipped either.
+
+### FR-21 Keyframe navigation
+- The timeline header has the first frame, the frame before the next key, the
+  frame after the last key and the last frame.
+- A key is a frame on which a cell starts, or a camera key.
+- `Home` / `End` go to the first and the last frame, `PageUp` / `PageDown` go
+  to the key before and the key after the current frame.
 
 ### FR-11 Eraser
 - The tools panel offers **Brush** and **Eraser**; `B` and `E` switch tools
@@ -215,28 +271,33 @@ Deliberately **not** in scope:
 - `←` / `→` step one frame and stop playback.
 
 ### FR-15 Timeline UI
-- One row per animation layer, top layer first; one column per frame.
-- The layer head shows visibility, name and lock.
+- One row per layer, top layer first; one column per frame.
+- The layer head shows visibility, name and lock. A folder also shows a
+  fold arrow and the number of layers it holds.
 - The frame header shows absolute frame numbers and marks the first frame.
 - A filled dot `●` is a drawing's first frame; `·` is a held frame; `◌` is a
-  virtual frame; blank is empty.
+  virtual frame; blank is empty. A cell with a name shows its name instead of
+  the dot.
 - Clicking any frame cell selects both that layer and that frame.
 - The current frame is outlined; the current layer row is highlighted.
 - The timeline scrolls horizontally for long scenes and vertically for many
   layers.
 - If a `.clip` preview is present, a read-only image row is shown below the
   animation layers.
-- Toolbar actions: Play/Pause, Loop, FPS, Start, + Layer, − Layer, ↑, ↓,
-  + Drawing, Duplicate, Hold +1, Delete, Exposure.
-- The current layer's name, opacity and pre/post behaviour are edited in the
-  tools panel.
+- Toolbar actions: Play/Pause, Loop, FPS, Start, the keyframe buttons, + Layer,
+  + Folder, − Folder, − Layer, ↑, ↓, + Drawing, Duplicate, Hold +1, Delete,
+  Exposure.
+- The current layer's name, opacity, pre/post behaviour and clip mask are
+  edited in the tools panel.
 
 ### FR-16 Canvas rendering
 - The canvas shows the current frame.
 - Layers are composited bottom-to-top; layer 0 is the top.
+- A folder is not painted itself; the layers inside it are.
 - Held frames show the owning drawing.
 - Virtual frames follow pre/post behaviour.
 - Eraser strokes clear only their own layer's paint.
+- A clipped layer is cut by the picture of the layer below it.
 - The imported `.clip` preview is behind all animation layers.
 - Export uses the same layer resolution and compositing rules as the screen.
 
@@ -271,7 +332,7 @@ Project file: UTF-8 JSON, extension `.tvmini`.
 ```json
 {
   "format": "tvmini",
-  "version": 2,
+  "version": 3,
   "width": 960,
   "height": 600,
   "background": "#ffffff",
@@ -291,10 +352,13 @@ Project file: UTF-8 JSON, extension `.tvmini`.
       "blend": "normal",
       "preBehavior": "none",
       "postBehavior": "hold",
+      "clip": false,
+      "parent": -1,
       "drawings": [
         {
           "at": 1,
           "hold": 2,
+          "name": "1",
           "strokes": [
             { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] },
             { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] },
@@ -315,6 +379,11 @@ Project file: UTF-8 JSON, extension `.tvmini`.
 A point is `[x, y]` or `[x, y, pressure]`. The third value is optional and,
 when present, must be between 0 and 1. `width` is the diameter at full
 pressure.
+
+A layer is a drawing layer (`"type": "anim"`) or a folder (`"type": "group"`).
+`parent` is the index of the folder that holds the layer, or `-1` for the top
+level; a folder always comes before the layers it holds. `clip` cuts the
+layer by the picture of the layer below it. A cell may carry a `name`.
 
 A stroke without `kind` is freehand. `line` and `rect` keep two points (the
 drag start and end), `ellipse` keeps the two corners of its bounding box and
@@ -358,18 +427,22 @@ travels with the project:
 "image": { "width": 2136, "height": 1418, "data": "iVBORw0KGgo..." }
 ```
 
-### 3.1 Version 1 migration
+### 3.1 Version 1 and version 2 migration
 
 A version 1 file has a flat `strokes` array and no `layers`. On load it becomes
-version 2 with one layer; the strokes become one drawing at frame 1 with hold 1.
-If the flat array is empty, the layer has no drawings.
+the current version with one layer; the strokes become one drawing at frame 1
+with hold 1. If the flat array is empty, the layer has no drawings.
+
+A version 2 file has the same layers, but no folder, no clip mask and no
+named cells. On load it becomes the current version with every layer at the
+top level, `clip` false and the cells unnamed.
 
 ### 3.2 Validation rules
 
 | field | rule |
 |---|---|
 | `format` | exactly `"tvmini"` |
-| `version` | integer `1` or `2` |
+| `version` | integer `1`, `2` or `3` |
 | `width`, `height` | integer 16…4096 |
 | `background`, stroke `color` | `#rrggbb` |
 | `image` | optional; `{ data, width, height }`, base64 PNG (max 8,000,000 chars), size equals the canvas |
@@ -378,16 +451,19 @@ If the flat array is empty, the layer has no drawings.
 | `currentLayer` | integer 0…`layers.length - 1` |
 | `currentFrame` | integer 1…10,000,000 and at or after `startFrame` |
 | `loop` | boolean |
-| `layers` | 1…100 |
+| `layers` | 1…500 |
 | layer `name` | trimmed text, 1…80 characters |
-| layer `type` | exactly `"anim"` |
+| layer `type` | `"anim"` or `"group"` |
+| layer `parent` | integer -1…`layers.length - 1`; `-1` is the top level, otherwise the index of a folder that comes earlier in the list; the folders must not loop |
+| layer `clip` | optional boolean; `true` cuts the layer by the layer below it |
 | `visible`, `locked` | boolean |
 | `opacity` | number 0…1 |
 | `blend` | exactly `"normal"` |
 | `preBehavior`, `postBehavior` | `none`, `hold`, `repeat` or `pingpong` |
-| `drawings` | 0…1000 per layer; 0…5000 in the whole project |
+| `drawings` | 0…2000 per layer; 0…20000 in the whole project |
 | drawing `at` | integer 1…10,000,000 and at or after `startFrame` |
 | drawing `hold` | integer 1…10000 |
+| drawing `name` | optional text, 1…80 characters |
 | drawing order | sorted by `at`; exposures must not overlap |
 | stroke `width` | number 1…200 |
 | stroke `eraser` | optional boolean; `true` means the stroke removes paint |

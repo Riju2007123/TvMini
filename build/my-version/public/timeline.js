@@ -14,6 +14,320 @@ export function isBehavior(value) {
   return BEHAVIORS.includes(value);
 }
 
+/* ------------------------------------------------------------------- layers */
+
+/** The kinds of layer a project can hold. */
+export const LAYER_TYPES = ["anim", "group"];
+
+/** A folder holds other layers; a drawing layer holds cells. */
+export function isGroup(layer) {
+  return layer?.type === "group";
+}
+
+/**
+ * The layers that are children of `parent`.
+ *
+ * `-1` asks for the layers at the top level. The children come back in the
+ * order they sit in the layer list, so a folder's children are always the
+ * rows that follow it.
+ */
+export function childrenOf(project, parent) {
+  const children = [];
+  const layers = project?.layers ?? [];
+  for (let index = 0; index < layers.length; index += 1) {
+    const parentIndex = layers[index].parent ?? -1;
+    if (parentIndex === parent) children.push(index);
+  }
+  return children;
+}
+
+/** The chain of folders above `index`, closest first. */
+export function ancestorsOf(project, index) {
+  const chain = [];
+  const layers = project?.layers ?? [];
+  let parent = layers[index]?.parent ?? -1;
+  const seen = new Set();
+  while (parent >= 0 && parent < layers.length && !seen.has(parent)) {
+    seen.add(parent);
+    chain.push(parent);
+    parent = layers[parent].parent ?? -1;
+  }
+  return chain;
+}
+
+/** How deep a layer sits in the tree; the top level is 0. */
+export function layerDepth(project, index) {
+  return ancestorsOf(project, index).length;
+}
+
+/**
+ * Every layer of the project, folders and their children together.
+ *
+ * The list is depth first and follows the layer list, so a folder is
+ * followed by the layers it holds.
+ */
+export function layerTree(project) {
+  const layers = project?.layers ?? [];
+  const out = [];
+  const walk = (parent) => {
+    for (const child of childrenOf(project, parent)) {
+      out.push(child);
+      walk(child);
+    }
+  };
+  walk(-1);
+  // A layer whose parent points at a folder that is not there would be lost,
+  // so anything the walk did not reach is appended at the end.
+  if (out.length !== layers.length) {
+    const seen = new Set(out);
+    for (let index = 0; index < layers.length; index += 1) {
+      if (!seen.has(index)) out.push(index);
+    }
+  }
+  return out;
+}
+
+/** The opacity a layer is painted with: its own times every folder's. */
+export function effectiveOpacity(project, index) {
+  const layers = project?.layers ?? [];
+  let opacity = layers[index]?.opacity ?? 1;
+  for (const parent of ancestorsOf(project, index)) {
+    opacity *= layers[parent]?.opacity ?? 1;
+  }
+  return opacity;
+}
+
+/** Whether a layer is painted: it and every folder above it are on. */
+export function layerIsVisible(project, index) {
+  const layers = project?.layers ?? [];
+  if (layers[index]?.visible === false) return false;
+  return ancestorsOf(project, index).every((parent) => layers[parent]?.visible !== false);
+}
+
+/**
+ * The layer a clipped layer is cut by: the drawing layer right below it,
+ * the way Clip Studio Paint clips to the layer underneath.
+ *
+ * A folder has no picture of its own, so it is skipped and the layers
+ * inside it are looked at instead.
+ */
+export function clipSourceOf(project, index) {
+  const layers = project?.layers ?? [];
+  for (let next = index + 1; next < layers.length; next += 1) {
+    if (isGroup(layers[next])) continue;
+    return next;
+  }
+  return -1;
+}
+
+/* ------------------------------------------------------------------- cells */
+
+/**
+ * Whether a layer sits inside another one.
+ *
+ * A folder holds its children, and a folder inside a folder holds its
+ * children in turn, so the answer is found by walking up the folders.
+ */
+export function isInside(project, ancestor, index) {
+  const layers = project?.layers ?? [];
+  const seen = new Set();
+  let parent = layers[index]?.parent ?? -1;
+  while (parent !== -1 && !seen.has(parent)) {
+    if (parent === ancestor) return true;
+    seen.add(parent);
+    parent = layers[parent]?.parent ?? -1;
+  }
+  return false;
+}
+
+/**
+ * How many layers a folder holds, itself and everything under it.
+ *
+ * The layers of a folder sit right after it, so the folder and its children
+ * are one block of the list.
+ */
+export function blockSize(project, index) {
+  const layers = project?.layers ?? [];
+  let count = 1;
+  for (let next = index + 1; next < layers.length; next += 1) {
+    if (!isInside(project, index, next)) break;
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * Put the layers in order: a folder is followed by the layers it holds.
+ *
+ * The list is drawn top first and the children of a folder are indented
+ * under it, so they have to sit right after it. The numbers that say which
+ * folder holds a layer are indexes into this list, so they follow it.
+ */
+export function packLayers(project) {
+  const order = [];
+  const walk = (parent) => {
+    for (const child of childrenOf(project, parent)) {
+      order.push(child);
+      walk(child);
+    }
+  };
+  walk(-1);
+  const seen = new Set(order);
+  for (let index = 0; index < project.layers.length; index += 1) {
+    if (!seen.has(index)) order.push(index);
+  }
+
+  const mapping = new Map();
+  order.forEach((oldIndex, newIndex) => mapping.set(oldIndex, newIndex));
+
+  const layers = order.map((oldIndex) => project.layers[oldIndex]);
+  for (const layer of layers) {
+    if (layer.parent === -1) continue;
+    layer.parent = mapping.get(layer.parent) ?? -1;
+  }
+  project.layers = layers;
+  return mapping;
+}
+
+/**
+ * Put a layer into the list.
+ *
+ * `parent` is the index of the folder that will hold it, or -1 for the top
+ * level. The numbers that say which folder holds a layer move with the list.
+ */
+export function insertLayer(project, index, layer, parent = -1) {
+  const old = project.layers;
+  const mapping = new Map();
+  for (let i = 0; i < old.length; i += 1) mapping.set(i, i < index ? i : i + 1);
+  old.splice(index, 0, layer);
+  for (const item of old) {
+    if (item === layer || item.parent === -1) continue;
+    item.parent = mapping.get(item.parent) ?? -1;
+  }
+  layer.parent = parent === -1 ? -1 : (mapping.get(parent) ?? -1);
+  return mapping;
+}
+
+/**
+ * Take layers out of the list.
+ *
+ * The numbers that say which folder holds a layer move with the list, and a
+ * layer whose folder is gone ends up at the top level.
+ */
+export function removeLayers(project, indices) {
+  const removed = new Set(indices);
+  const old = project.layers;
+  const kept = old.filter((_, index) => !removed.has(index));
+  const mapping = new Map();
+  let next = 0;
+  for (let index = 0; index < old.length; index += 1) {
+    if (removed.has(index)) continue;
+    mapping.set(index, next);
+    next += 1;
+  }
+  for (const layer of kept) {
+    if (layer.parent === -1) continue;
+    layer.parent = mapping.has(layer.parent) ? mapping.get(layer.parent) : -1;
+  }
+  project.layers = kept;
+  return mapping;
+}
+
+/**
+ * Move a block of layers to another place in the list.
+ *
+ * A folder and the layers inside it are one block, so they move together.
+ * `to` is the place the block ends up at, counted in the list that is left
+ * once the block has been taken out.
+ */
+export function moveBlock(project, from, count, to) {
+  if (from === to) return null;
+  if (from < 0 || from >= project.layers.length) return null;
+  if (count < 1) return null;
+
+  const old = project.layers;
+  // Remember which folder each layer is in by the folder itself, so the
+  // numbers can be worked out again after the move.
+  const parentOf = new Map();
+  old.forEach((layer) => parentOf.set(layer, layer.parent === -1 ? null : old[layer.parent] ?? null));
+
+  const block = old.splice(from, count);
+  const target = Math.max(0, Math.min(to, old.length));
+  old.splice(target, 0, ...block);
+
+  const indexOf = new Map();
+  old.forEach((layer, index) => indexOf.set(layer, index));
+  for (const layer of old) {
+    const parent = parentOf.get(layer);
+    layer.parent = parent ? (indexOf.get(parent) ?? -1) : -1;
+  }
+  return indexOf;
+}
+
+/**
+ * The name a new cell gets, the way Clip Studio Paint names its cells.
+ *
+ * A cell is named after the frame it sits on, and a second cell on the same
+ * frame gets a letter: `1`, `1a`, `1b`, then `2`, `2a` and so on. The name
+ * is for the cell that is about to be added, so the cells that are already
+ * on the frame decide the letter.
+ */
+export function cellName(layer, frame) {
+  const sameFrame = drawingsOf(layer).filter((drawing) => drawing.at === frame);
+  const base = String(frame);
+  const ordinal = sameFrame.length + 1;
+  if (ordinal <= 1) return base;
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  const index = ordinal - 2;
+  return index < letters.length ? `${base}${letters[index]}` : `${base}${index + 2}`;
+}
+
+/**
+ * The frame a cell name stands for.
+ *
+ * Clip Studio Paint names a cell after the frame it is on, so `2a` is the
+ * second cell on frame 2. A name that is not a frame number has no frame.
+ */
+export function frameOfCellName(name) {
+  if (typeof name !== "string") return null;
+  const match = /^(\d+)([a-z]*)$/.exec(name.trim());
+  if (!match) return null;
+  const frame = Number(match[1]);
+  return Number.isInteger(frame) && frame > 0 ? frame : null;
+}
+
+/**
+ * Every frame that holds a key: a cell's first frame, or a camera key.
+ *
+ * The timeline uses this list for the "previous key" and "next key" buttons.
+ */
+export function keyframes(project) {
+  const frames = new Set();
+  for (const layer of project?.layers ?? []) {
+    for (const drawing of drawingsOf(layer)) frames.add(drawing.at);
+  }
+  for (const key of project?.camera?.keys ?? []) frames.add(key.frame);
+  const start = project?.startFrame ?? 1;
+  return [...frames].filter((frame) => frame >= start).sort((a, b) => a - b);
+}
+
+/** The key before `frame`, or null when there is none. */
+export function previousKeyframe(project, frame) {
+  let found = null;
+  for (const key of keyframes(project)) {
+    if (key < frame) found = key;
+  }
+  return found;
+}
+
+/** The key after `frame`, or null when there is none. */
+export function nextKeyframe(project, frame) {
+  for (const key of keyframes(project)) {
+    if (key > frame) return key;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------ camera */
 
 /** How the camera travels from one keyframe to the next. */

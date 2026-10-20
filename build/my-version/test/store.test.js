@@ -121,7 +121,7 @@ test("open migrates a version 1 flat-stroke project", async () => {
   );
 
   const opened = await openProject(file);
-  assert.equal(opened.project.version, 2);
+  assert.equal(opened.project.version, 3);
   assert.equal(opened.project.layers[0].drawings[0].at, 1);
   assert.equal(opened.project.layers[0].drawings[0].strokes.length, 1);
 });

@@ -7,9 +7,23 @@ model. It shares **no code, data or file formats** with TVPaint.
 - No dependencies. Node 20+ (Node 22.5+ for `.clip` import/export).
 - The UI is plain HTML/CSS/JS served by a loopback-only HTTP server.
 - Project files use `*.tvmini` (JSON), **not** `.tvpp`.
-- Clip Studio `.clip` files can be imported read-only (preview image only) and
-  exported as layered CSP documents for the current frame.
-- One canvas, up to 100 animation layers, current-frame PNG and `.clip` export.
+- Clip Studio `.clip` files can be imported read-only and exported as layered
+  CSP documents for the current frame. An import brings in the **whole
+  document**: the folders, the animation folders, the layers inside them and
+  the cells of an animation, each with its own picture, so the animation
+  shows up in the timeline the way it shows up in Clip Studio Paint.
+- One canvas, up to 500 layers, current-frame PNG and `.clip` export.
+- **Folders**: a layer can be a folder that holds other layers, and a folder
+  can hold a folder. The timeline draws the layers inside a folder indented
+  under it, and the row of a folder shows the cells of the layers inside it,
+  the way an animation folder shows the cells of an animation.
+- **Named cells**: a cell of the timeline carries a name, and a new cell is
+  named after the frame it sits on the way Clip Studio Paint names the cells
+  of an animation folder (`1`, `1a`, `2`, `2a`). A double-click on a cell
+  renames it.
+- **Clip mask**: a layer can be cut by the picture of the layer below it.
+- **Keyframe navigation**: the timeline has the first frame, the frame before
+  the next key, the frame after the last key and the last frame.
 - A start screen with recent projects, a guide book and `F1` shortcut list.
 - HSV colour wheel (hue ring + saturation/value square + hex field, plus a
   "Transparent" chip that switches to the eraser) next to the native colour
@@ -49,6 +63,8 @@ model. It shares **no code, data or file formats** with TVPaint.
 | Tools | Brush size | `[` / `]` |
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
+| Timeline | First / last frame | `Home` / `End` |
+| Timeline | Previous / next key | `PageUp` / `PageDown` |
 | Timeline | Flip preview of the current layer (hold) | `S` |
 | Timeline | Toggle onion skin | `O` |
 | Timeline | Frame step | `←` / `→` |
@@ -105,7 +121,7 @@ it. The repository contains `.github/workflows/pages.yml`, which publishes
 | Draw, timeline, layers, pen pressure, eraser | same | same |
 | Save / open a project | real file paths, atomic writes | browser download, or the File System Access API to save in place |
 | Export PNG / `.clip` | written straight to disk | browser download |
-| Import a `.clip` preview | same | same |
+| Import a `.clip` document | same | same |
 | Recent projects | paths on disk, re-opened by path | kept in `localStorage`; a browser cannot re-open a file by path, so the project text is stored |
 | Folder browser | in-app directory browser | the browser's own file picker |
 
@@ -147,6 +163,15 @@ field by field.
 with its kind, the mipmap chain, the timeline, the tracks, and the raster
 pixels of the layers, which are decoded out of the `CHNKExta` blobs the
 database points at.
+
+**What an import builds:** the layer tree of the document becomes the layer
+tree of the project — the folders, the animation folders and the layers inside
+them. The children of an animation folder are the *cells* of the animation,
+and each one becomes a layer of its own that holds the picture of the cell, so
+every cell also appears as an entry of its own in the timeline. Clip Studio
+Paint names a cell after the frame it sits on (`1`, `1a`, `2`, `2a`), and the
+import reads the frame of a cell out of that name, so the animation lands on
+the same frames it has in Clip Studio Paint.
 
 **What the writer does not do:** it writes a static document. The animation of a
 Clip Studio track lives in CSP's own serialised action data, and a malformed

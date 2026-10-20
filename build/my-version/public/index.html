@@ -246,6 +246,10 @@
             <span>Opacity <output id="opacityValue">100%</output></span>
             <input id="opacity" type="range" min="0" max="100" value="100" />
           </label>
+          <label class="field checkbox inline" title="Cut this layer by the picture of the layer below it">
+            <input id="clipLayer" type="checkbox" />
+            <span>Clip to the layer below</span>
+          </label>
           <label class="field">
             <span>Before first drawing</span>
             <select id="preBehavior">
@@ -331,7 +335,11 @@
 
     <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
       <div class="pane-header timeline-header">
+        <button id="firstFrameButton" class="transport" title="Go to the first frame">⏮</button>
+        <button id="previousKeyButton" class="transport" title="Go to the key before this frame">⏪</button>
         <button id="playButton" class="transport" title="Play or pause (Space)">▶ Play</button>
+        <button id="nextKeyButton" class="transport" title="Go to the key after this frame">⏩</button>
+        <button id="lastFrameButton" class="transport" title="Go to the last frame">⏭</button>
         <label class="field checkbox inline">
           <input id="loop" type="checkbox" checked />
           <span>Loop</span>
@@ -359,6 +367,8 @@
       <div class="timeline-toolbar">
         <div class="toolbar-group">
           <button id="addLayerButton" title="Add an animation layer">+ Layer</button>
+          <button id="addGroupButton" title="Add a folder and put the current layer inside it">+ Folder</button>
+          <button id="removeGroupButton" title="Take the current folder apart">− Folder</button>
           <button id="deleteLayerButton" title="Delete the current layer">− Layer</button>
           <button id="layerUpButton" title="Move layer up">↑</button>
           <button id="layerDownButton" title="Move layer down">↓</button>
