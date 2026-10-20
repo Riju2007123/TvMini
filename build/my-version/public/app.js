@@ -1508,6 +1508,12 @@ function renderTimeline() {
     head.addEventListener("click", (event) => {
       if (event.target === head) selectLayer(index);
     });
+    // The row can be dragged to another place in the list.
+    head.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target === visibility || event.target === lock) return;
+      startLayerDrag(event, index);
+    });
 
     const cells = element("div", "tl-cells");
     cells.style.setProperty("--frames", String(columns));
@@ -1799,6 +1805,84 @@ function moveLayer(delta) {
   markDirty();
   afterChange();
   setStatus(`Moved ${layer.name} ${delta < 0 ? "up" : "down"}`);
+}
+
+/* --------------------------------------------------- dragging layers to reorder */
+
+/** The layer drag that is going on, if any. */
+let layerDrag = null;
+
+/**
+ * Move a layer to a new place in the list.
+ *
+ * The list is drawn top first, so a smaller index is a higher layer.
+ */
+function reorderLayer(from, to) {
+  const project = state.project;
+  if (from === to || to < 0 || to >= project.layers.length) return;
+
+  stopPlayback();
+  const before = snapshot();
+  const [layer] = project.layers.splice(from, 1);
+  project.layers.splice(to, 0, layer);
+  project.currentLayer = to;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Moved ${layer.name} to position ${to + 1} of ${project.layers.length}`);
+}
+
+/**
+ * Start a drag of a layer row.
+ *
+ * The list is not rearranged while the pointer is down, because the rows are
+ * drawn again after every change and a row that is drawn again cannot keep
+ * the pointer. The row under the pointer is marked instead, and the move
+ * happens when the button is let go.
+ */
+function startLayerDrag(event, index) {
+  const rows = [...timelineEl.querySelectorAll(".tl-row[data-layer]")];
+  if (rows.length < 2) return;
+
+  layerDrag = { index, rows, target: index };
+  event.preventDefault();
+  window.addEventListener("pointermove", onLayerDragMove);
+  window.addEventListener("pointerup", onLayerDragEnd, { once: true });
+  window.addEventListener("pointercancel", onLayerDragEnd, { once: true });
+}
+
+/** Work out which row the pointer is over and mark it. */
+function onLayerDragMove(event) {
+  if (!layerDrag) return;
+  const y = event.clientY;
+  let target = layerDrag.index;
+  for (const row of layerDrag.rows) {
+    const box = row.getBoundingClientRect();
+    if (y < box.top) {
+      target = Number(row.dataset.layer);
+      break;
+    }
+    if (y < box.bottom) {
+      target = Number(row.dataset.layer);
+      break;
+    }
+    target = Number(row.dataset.layer);
+  }
+  if (target === layerDrag.target) return;
+  layerDrag.target = target;
+  for (const row of layerDrag.rows) {
+    row.classList.toggle("drop-target", Number(row.dataset.layer) === target);
+  }
+}
+
+/** Finish the drag and move the layer if it went somewhere else. */
+function onLayerDragEnd() {
+  window.removeEventListener("pointermove", onLayerDragMove);
+  if (!layerDrag) return;
+  const { index, target, rows } = layerDrag;
+  layerDrag = null;
+  for (const row of rows) row.classList.remove("drop-target");
+  reorderLayer(index, target);
 }
 
 function addDrawing() {
@@ -2147,6 +2231,51 @@ function canvasPoint(event) {
     view.camera.y + (canvasY - view.offsetY) / view.scale,
   ];
 }
+
+/* ------------------------------------------------- zoom with the middle button */
+
+/** How much one notch of the middle button changes the zoom. */
+const ZOOM_STEP = 0.15;
+
+/** The smallest camera window that can be zoomed to. */
+const ZOOM_MIN = 16;
+
+/**
+ * Zoom with the middle mouse button.
+ *
+ * The stage shows what the camera takes, so zooming means making the camera
+ * window smaller or bigger. The point under the pointer stays where it is,
+ * which is what makes the zoom feel right.
+ */
+canvas.addEventListener("wheel", (event) => {
+  if (event.button !== 1) return;
+  event.preventDefault();
+
+  const project = state.project;
+  if (!currentCameraKey()) {
+    addCameraKey();
+    return;
+  }
+  const key = currentCameraKey();
+  if (!key) return;
+
+  const [px, py] = canvasPoint(event);
+  const factor = event.deltaY < 0 ? 1 / (1 + ZOOM_STEP) : 1 + ZOOM_STEP;
+  const width = Math.max(ZOOM_MIN, Math.min(project.width, Math.round(key.width * factor)));
+  const height = Math.max(ZOOM_MIN, Math.min(project.height, Math.round(key.height * factor)));
+  if (width === key.width && height === key.height) return;
+
+  // Keep the point under the pointer in the same place.
+  const shareX = (px - key.x) / key.width;
+  const shareY = (py - key.y) / key.height;
+  updateCameraKey({
+    x: Math.round(px - shareX * width),
+    y: Math.round(py - shareY * height),
+    width,
+    height,
+  });
+  setStatus(event.deltaY < 0 ? "Zoomed in" : "Zoomed out");
+}, { passive: false });
 
 function pressureFor(event) {
   if (!state.pressureEnabled) return null;

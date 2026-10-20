@@ -943,8 +943,7 @@ canvas.picking {
 
 .tl-row.selected .tl-head {
   background: var(--surface-2);
-  box-shadow: 1px 0 0 var(--seam-strong), inset 2px 0 0 var(--accent), inset 0 1px 0 var(--edge);
-}
+  box-shadow: 1px 0 0 var(--seam-strong), inset 2px 0 0 var(--accent), inset 0 1px 0 var(--edge);}
 
 .tl-head {
   display: flex;
@@ -1696,4 +1695,18 @@ input[type="range"] {
   .doc-tab-bar {
     display: none;
   }
+}
+
+/* A layer row can be dragged to another place in the list. */
+.tl-head {
+  cursor: grab;
+}
+
+.tl-row.drop-target .tl-head {
+  background: var(--surface-2);
+  box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.tl-row.drop-target .tl-name {
+  color: var(--accent);
 }
