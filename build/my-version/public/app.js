@@ -110,6 +110,7 @@ const state = {
   playing: false,
   playTimer: null,
   opacityBefore: null,
+  tvppSourcePath: null,
   // Remembered preferences (pressure gain, touch drawing, start screen).
   pressureGain: 1,
   touchDraw: true,
@@ -350,6 +351,21 @@ function projectImage() {
 const paintCanvas = document.createElement("canvas");
 const paintCtx = paintCanvas.getContext("2d");
 
+/* Raster bases (imported .tvpp frames) as <img> elements, cached by data. */
+const drawingImages = new Map();
+
+function drawingImageElement(drawing) {
+  if (!drawing?.image?.data) return null;
+  let element = drawingImages.get(drawing.image.data);
+  if (!element) {
+    element = new Image();
+    element.onload = () => renderCanvas();
+    element.src = `data:image/png;base64,${drawing.image.data}`;
+    drawingImages.set(drawing.image.data, element);
+  }
+  return element.complete ? element : null;
+}
+
 const MIN_PRESSURE_SCALE = 0.2;
 
 function strokeRadius(stroke, point) {
@@ -432,6 +448,8 @@ function renderCanvas(frame = state.project.currentFrame) {
     if (!resolved) continue;
 
     paintCtx.clearRect(0, 0, width, height);
+    const base = drawingImageElement(resolved.drawing);
+    if (base) paintCtx.drawImage(base, 0, 0, width, height);
     drawStrokesToPaint(resolved.drawing.strokes);
 
     ctx.globalAlpha = layer.opacity;
@@ -1466,10 +1484,12 @@ async function handleAction(action) {
     if (action === "new") return newProject();
     if (action === "open") return chooseAndOpen();
     if (action === "importClip") return chooseAndImportClip();
+    if (action === "importTvpp") return chooseAndImportTvpp();
     if (action === "save") return save();
     if (action === "saveAs") return saveAs();
     if (action === "export") return exportPng();
     if (action === "exportClip") return exportClip();
+    if (action === "exportTvpp") return exportTvpp();
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -1487,6 +1507,7 @@ function newProject() {
   state.currentPath = null;
   state.suggestedName = null;
   state.clipSourcePath = null;
+  state.tvppSourcePath = null;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
@@ -1498,6 +1519,7 @@ function newProject() {
 async function openPath(filePath) {
   if (!confirmDiscard()) return;
   if (/\.clip$/i.test(filePath)) return importClip(filePath);
+  if (/\.tvpp$/i.test(filePath)) return importTvpp(filePath);
 
   const data = await backend.open(filePath);
   if (!data) return;
@@ -1516,35 +1538,61 @@ async function openPath(filePath) {
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
-/** Put an imported .clip preview on the canvas (shared by every import path). */
-function applyImportedClip(data) {
+/** Put an imported .clip/.tvpp onto the canvas (shared by every import path). */
+function applyImportedProject(data, extension) {
   stopPlayback();
   state.project = data.project;
   state.currentPath = null;
-  state.suggestedName = `${data.name.replace(/\.clip$/i, "")}.tvmini`;
-  state.clipSourcePath = data.path || null;
+  state.suggestedName = `${data.name.replace(new RegExp(`\\.${extension}$`, "i"), "")}.tvmini`;
+  if (extension === "clip") state.clipSourcePath = data.path || null;
+  if (extension === "tvpp") state.tvppSourcePath = data.path || null;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
   resizeCanvas();
   refreshTitle();
-  setStatus(
-    `Imported the preview from ${data.name} (${data.project.width}×${data.project.height}). ` +
-      "Save as .tvmini to keep it — the .clip itself is never changed.",
-  );
+  const warnings = Array.isArray(data.warnings) && data.warnings.length
+    ? ` (${data.warnings.join("; ")})`
+    : "";
+  if (extension === "tvpp") {
+    const layers = data.project.layers.length;
+    const images = data.project.layers.reduce((n, l) => n + l.drawings.length, 0);
+    setStatus(
+      `Imported ${data.name}: ${layers} layer${layers === 1 ? "" : "s"}, ` +
+        `${images} frame${images === 1 ? "" : "s"}${warnings}. Save as .tvmini to keep it.`,
+    );
+  } else {
+    setStatus(
+      `Imported the preview from ${data.name} (${data.project.width}×${data.project.height}). ` +
+        "Save as .tvmini to keep it — the .clip itself is never changed.",
+    );
+  }
 }
 
 async function importClip(filePath) {
   const data = await backend.importClip(filePath);
   if (!data) return;
-  applyImportedClip(data);
+  applyImportedProject(data, "clip");
 }
 
 async function chooseAndImportClip() {
   if (!confirmDiscard()) return;
   const data = await backend.chooseAndImportClip();
   if (!data) return;
-  applyImportedClip(data);
+  applyImportedProject(data, "clip");
+}
+
+async function importTvpp(filePath) {
+  const data = await backend.importTvpp(filePath);
+  if (!data) return;
+  applyImportedProject(data, "tvpp");
+}
+
+async function chooseAndImportTvpp() {
+  if (!confirmDiscard()) return;
+  const data = await backend.chooseAndImportTvpp();
+  if (!data) return;
+  applyImportedProject(data, "tvpp");
 }
 
 async function chooseAndOpen() {
@@ -1621,6 +1669,21 @@ async function exportClip() {
   setStatus(
     `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
       `to ${baseName(data.path)} (${data.bytes} bytes). Timeline frames are flattened to the current frame.`,
+  );
+  refreshTitle();
+}
+
+async function exportTvpp() {
+  const stem = state.currentPath
+    ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
+    : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
+  stopPlayback();
+  setStatus("Building .tvpp…");
+  const data = await backend.exportTvpp(state.project, stem, state.tvppSourcePath);
+  if (!data) return;
+  setStatus(
+    `Exported ${baseName(data.path)} (${data.bytes} bytes, ${data.width}×${data.height}). ` +
+      "Open it in TVPaint Animation to verify.",
   );
   refreshTitle();
 }

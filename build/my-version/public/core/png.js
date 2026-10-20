@@ -173,11 +173,19 @@ export function decodePng(input) {
   return { width, height, data: out };
 }
 
-/** Paint a stroke list onto a transparent RGBA buffer. */
-function paintStrokes(width, height, strokes) {
+/** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
+function paintDrawing(width, height, drawing) {
   const paint = new Uint8Array(width * height * 4);
+  if (!drawing) return paint;
 
-  for (const stroke of strokes) {
+  // A drawing may carry a raster base (imported .tvpp frames). It sits under
+  // the strokes, so eraser strokes can reveal it or wipe it like any paint.
+  if (drawing.image) {
+    const image = decodePng(drawing.image.data);
+    paint.set(image.data);
+  }
+
+  for (const stroke of drawing.strokes) {
     const rgb = parseHex(stroke.color);
     const erase = stroke.eraser === true;
     const radii = stroke.points.map((point) => pointRadius(stroke, point));
@@ -202,6 +210,11 @@ function paintStrokes(width, height, strokes) {
   }
 
   return paint;
+}
+
+/** Kept for compatibility: same painter, stroke list only. */
+function paintStrokes(width, height, strokes) {
+  return paintDrawing(width, height, { image: null, strokes });
 }
 
 /** Alpha-composite an RGBA image over an RGB buffer. */
@@ -250,7 +263,7 @@ export function renderProject(project, frame = project.currentFrame) {
     const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
 
-    const paint = paintStrokes(width, height, resolved.drawing.strokes);
+    const paint = paintDrawing(width, height, resolved.drawing);
     composite(data, width, height, { width, height, data: paint }, layer.opacity);
   }
 
@@ -322,11 +335,45 @@ export function encodePng(width, height, data) {
 /** Render one layer's resolved drawing as straight-alpha RGBA. */
 export function renderLayerRgba(project, layer, frame = project.currentFrame) {
   const resolved = resolveDrawing(layer, frame);
-  return paintStrokes(
-    project.width,
-    project.height,
-    resolved ? resolved.drawing.strokes : [],
-  );
+  return paintDrawing(project.width, project.height, resolved ? resolved.drawing : null);
+}
+
+/** Render one drawing object as straight-alpha RGBA (used by the .tvpp writer). */
+export function renderDrawingRgba(project, drawing) {
+  return paintDrawing(project.width, project.height, drawing);
+}
+
+/** Encode an RGBA buffer as a PNG (colour type 6, 8 bits per channel). */
+export function encodeRgbaPng(width, height, data) {
+  if (data.length !== width * height * 4) {
+    throw new Error("pixel buffer does not match the image size");
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // truecolour with alpha
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    raw[y * (stride + 1)] = 0; // filter: none
+    Buffer.from(data.buffer, data.byteOffset + y * stride, stride).copy(
+      raw,
+      y * (stride + 1) + 1,
+    );
+  }
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
 export function renderPng(project) {

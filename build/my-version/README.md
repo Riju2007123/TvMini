@@ -292,6 +292,42 @@ CSP animation folders or `Track`/`TimeLine` records, so the result is a layered
 still image, not an animated CSP timeline. Vector, text, masks, groups and blend
 modes other than normal are not produced.
 
+## TVPaint `.tvpp` import / export
+
+TVMini can read and write TVPaint Animation `.tvpp` projects. The byte grammar
+was mapped by reverse engineering and is documented (with confidence levels) in
+`docs/moart-study.md`; the implementation itself is clean-room code in
+`public/core/tvpp.js`.
+
+### Import
+
+1. File → **Import .tvpp (TVPaint)…**
+2. Every layer becomes a TVMini layer in the same top-down order, keeping name,
+   visibility, opacity and the first frame of each layer's range.
+3. Each layer's frames decode to raster bases: repeated frames merge into one
+   drawing with a longer hold (our exposure model), gaps become empty frames,
+   and a drawing carries an `image` (base64 PNG at canvas size) that sits under
+   the layer's strokes — so you can paint over it or erase into it.
+4. Save As writes a normal `.tvmini` that keeps everything; the original
+   `.tvpp` is never written.
+
+### Export
+
+File → **Export .tvpp (TVPaint)…** writes every drawing as raster layer frames:
+
+- one layer per TVMini layer, topmost first, with opacity, visibility and the
+  layer's own frame range;
+- held exposures become compact "same as previous frame" stubs and empty gaps
+  become empty-frame stubs, matching the observed TVPaint compression
+  behaviour;
+- images themselves are written uncompressed (`DBOD`), a variant real TVPaint
+  files also use — **this writer still needs one real TVPaint round trip before
+  we call it fully battle-tested** (the reader side handles compressed `ZCHK`
+  files too).
+
+By design the exporter never overwrites the `.tvpp` file that was imported in
+the same session.
+
 How it works: `src/clip-write.js` starts from the blank CSP document in
 `assets/clip-template.clip`, rewrites the canvas size and mip chains, builds a
 block table for each layer, zlib-compresses the RGBA tiles into `CHNKExta`
@@ -328,6 +364,8 @@ build/my-version/
       png.js           rasteriser + PNG encoder/decoder
       clip.js          read-only Clip Studio preview import
       clip-write.js    layered Clip Studio .clip writer
+      tvpp.js          TVPaint .tvpp reader + writer (clean room)
+      png.js           canvas renderer + PNG encode/decode
       platform.js      file backend: Node server or browser storage
       storage.js       browser storage (File System Access API, localStorage)
       sqlite.js        SQLite: node:sqlite under Node, sql.js in the browser
@@ -375,6 +413,9 @@ finding:
 - PNG and `.clip` export of the current frame only; no sequences or movies.
 - `.clip` import is preview-only and read-only. `.clip` export is a layered
   still image for the current frame; it does not write CSP animation tracks.
+- `.tvpp` export writes uncompressed images and needs one real TVPaint save to
+  be called fully validated (the reader handles both compressed and bare
+  files); blend modes, audio and camera chunks are not produced yet.
 - `.clip` export needs Node 22.5+ under the Node server, because it uses
   `node:sqlite`. On a static host it uses SQLite compiled to WebAssembly
   instead, and needs no Node at all.

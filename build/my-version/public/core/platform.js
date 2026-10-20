@@ -20,6 +20,7 @@ import {
 } from "./storage.js";
 import { createClipBuffer } from "./clip-write.js";
 import { readClipPreviewFromBytes } from "./clip.js";
+import { createTvppBuffer, importTvppBytes } from "./tvpp.js";
 import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
 
@@ -83,6 +84,18 @@ function createServerBackend(hooks) {
       return { name: data.name, path: data.path, project: data.project };
     },
 
+    async chooseAndImportTvpp() {
+      const path = await hooks.pickPath({ mode: "open", title: "Import .tvpp (TVPaint)" });
+      if (!path) return null;
+      const data = await serverRequest("POST", "/api/import-tvpp", { path });
+      return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
+    },
+
+    async importTvpp(path) {
+      const data = await serverRequest("POST", "/api/import-tvpp", { path });
+      return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
+    },
+
     async saveProject(project, currentName, options = {}) {
       const target = currentName || (await hooks.pickPath({
         mode: "save",
@@ -130,6 +143,30 @@ function createServerBackend(hooks) {
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
 
       return serverRequest("POST", "/api/export-clip", {
+        path: clean,
+        project,
+        sourcePath: sourcePath ?? null,
+      });
+    },
+
+    async exportTvpp(project, stem, sourcePath) {
+      const target = await hooks.pickPath({
+        mode: "save",
+        title: "Export .tvpp (TVPaint)",
+        name: `${stem}.tvpp`,
+      });
+      if (!target) return null;
+
+      const clean = withTvppExtension(target);
+      if (sourcePath && sourcePath.toLowerCase() === clean.toLowerCase()) {
+        throw new Error("refusing to overwrite the imported .tvpp file");
+      }
+
+      const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+      if (info.dir) throw new Error("that path is a folder, not a file");
+      if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+
+      return serverRequest("POST", "/api/export-tvpp", {
         path: clean,
         project,
         sourcePath: sourcePath ?? null,
@@ -223,6 +260,18 @@ function createBrowserBackend(hooks) {
       return this.open(name);
     },
 
+    async chooseAndImportTvpp() {
+      const picked = await pickFile(".tvpp");
+      if (!picked) return null;
+      const imported = importTvppBytes(picked.bytes);
+      return { name: picked.name, path: picked.name, project: imported.project, warnings: imported.warnings };
+    },
+
+    async importTvpp(name) {
+      // Same rule as .clip: a browser re-opens recent entries from storage.
+      return this.open(name);
+    },
+
     async saveProject(project, currentName) {
       const text = `${JSON.stringify(project, null, 2)}\n`;
       const bytes = new TextEncoder().encode(text);
@@ -256,6 +305,17 @@ function createBrowserBackend(hooks) {
         layers: result.layers,
       };
     },
+
+    async exportTvpp(project, stem, sourceName) {
+      const name = `${stem}.tvpp`;
+      if (sourceName && sourceName.toLowerCase() === name.toLowerCase()) {
+        throw new Error("refusing to overwrite the imported .tvpp file");
+      }
+      const buffer = createTvppBuffer(project);
+      const saved = await saveFile(name, new Uint8Array(buffer));
+      if (!saved) return null;
+      return { path: saved.name, bytes: buffer.length, width: project.width, height: project.height };
+    },
   };
 }
 
@@ -277,6 +337,12 @@ function withTvminiExtension(name) {
 function withClipExtension(name) {
   const clean = name.trim();
   return /\.[^\\/]*$/.test(clean) ? clean : `${clean}.clip`;
+}
+
+/** Append `.tvpp` when the name has no extension. */
+function withTvppExtension(name) {
+  const clean = name.trim();
+  return /\.[^\\/]*$/.test(clean) ? clean : `${clean}.tvpp`;
 }
 
 function bytesToBase64(bytes) {

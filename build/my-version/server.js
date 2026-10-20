@@ -5,8 +5,9 @@ import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProject, normalizeProject, ValidationError } from "./src/model.js";
 import { readClipPreview } from "./src/clip.js";
+import { createTvppBuffer, importTvppBytes } from "./src/tvpp.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
-import { exportClip, exportPng, openProject, saveProject } from "./src/store.js";
+import { exportClip, exportPng, openProject, saveProject, exportTvpp } from "./src/store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "public");
@@ -200,6 +201,20 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         return;
       }
 
+      if (route === "POST /api/import-tvpp") {
+        const body = await readJson(req);
+        const target = path.resolve(body.path);
+        const bytes = await fsp.readFile(target);
+        const imported = importTvppBytes(bytes);
+        sendJson(res, 200, {
+          path: target,
+          name: path.basename(target),
+          project: imported.project,
+          warnings: imported.warnings,
+        });
+        return;
+      }
+
       if (route === "POST /api/save") {
         const body = await readJson(req);
         const result = await saveProject(body.path, body.project);
@@ -216,6 +231,12 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       if (route === "POST /api/export-clip") {
         const body = await readJson(req);
         sendJson(res, 200, await exportClip(body.path, body.project, body.sourcePath));
+        return;
+      }
+
+      if (route === "POST /api/export-tvpp") {
+        const body = await readJson(req);
+        sendJson(res, 200, await exportTvpp(body.path, body.project, body.sourcePath));
         return;
       }
 

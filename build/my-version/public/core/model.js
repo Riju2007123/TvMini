@@ -155,37 +155,37 @@ export function createProject(width = 960, height = 600, background = "#ffffff")
   };
 }
 
-function normalizeImage(value, width, height) {
+function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "image") {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new ValidationError("image must be an object");
+    throw new ValidationError(`${label} must be an object`);
   }
 
-  const imageWidth = integerInRange(value.width, "image.width", MIN_SIZE, MAX_SIZE);
-  const imageHeight = integerInRange(value.height, "image.height", MIN_SIZE, MAX_SIZE);
+  const imageWidth = integerInRange(value.width, `${label}.width`, MIN_SIZE, MAX_SIZE);
+  const imageHeight = integerInRange(value.height, `${label}.height`, MIN_SIZE, MAX_SIZE);
 
   if (imageWidth !== width || imageHeight !== height) {
-    throw new ValidationError("image size must match the canvas");
+    throw new ValidationError(`${label} size must match the canvas`);
   }
   if (typeof value.data !== "string" || value.data.length === 0) {
-    throw new ValidationError("image.data must be base64 text");
+    throw new ValidationError(`${label}.data must be base64 text`);
   }
-  if (value.data.length > 8_000_000) {
-    throw new ValidationError("image.data is too large");
+  if (value.data.length > maxBase64) {
+    throw new ValidationError(`${label}.data is too large`);
   }
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) {
-    throw new ValidationError("image.data must be base64 text");
+    throw new ValidationError(`${label}.data must be base64 text`);
   }
 
   const bytes = Buffer.from(value.data, "base64");
   if (bytes.length < 8 || bytes.readUInt32BE(0) !== 0x89504e47) {
-    throw new ValidationError("image.data must be a PNG");
+    throw new ValidationError(`${label}.data must be a PNG`);
   }
 
   return { data: value.data, width: imageWidth, height: imageHeight };
 }
 
-function normalizeLayer(value, index, startFrame) {
+function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   const label = `layers[${index}]`;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ValidationError(`${label} must be an object`);
@@ -246,7 +246,21 @@ function normalizeLayer(value, index, startFrame) {
     }
     const hold = integerInRange(drawing.hold, `${dLabel}.hold`, 1, MAX_HOLD);
     const strokes = normalizeStrokes(drawing.strokes, `${dLabel}.strokes`);
-    return { at, hold, strokes };
+
+    const clean = { at, hold, strokes };
+    // A drawing may carry a raster base (imported .tvpp frames render through
+    // it). Regular drawings simply never set this field.
+    if (drawing.image !== undefined) {
+      const image = normalizeImage(
+        drawing.image,
+        projectWidth,
+        projectHeight,
+        24_000_000,
+        `${dLabel}.image`,
+      );
+      if (image) clean.image = image;
+    }
+    return clean;
   });
 
   drawings.sort((a, b) => a.at - b.at);
@@ -327,7 +341,9 @@ export function normalizeProject(input) {
     throw new ValidationError(`too many layers (max ${MAX_LAYERS})`);
   }
 
-  const layers = input.layers.map((layer, index) => normalizeLayer(layer, index, startFrame));
+  const layers = input.layers.map((layer, index) =>
+    normalizeLayer(layer, index, startFrame, width, height),
+  );
 
   let totalDrawings = 0;
   let totalStrokes = 0;

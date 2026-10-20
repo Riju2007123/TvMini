@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { normalizeProject, projectPath, ValidationError } from "./model.js";
 import { createClipBuffer } from "./clip-write.js";
+import { createTvppBuffer } from "./tvpp.js";
 import { renderPng } from "./png.js";
 
 function tempName(target) {
@@ -99,4 +100,31 @@ export async function exportClip(filePath, project, sourcePath = null) {
   const { buffer, width, height, layers } = await createClipBuffer(clean, { name });
   await writeAtomic(target, buffer);
   return { path: target, bytes: buffer.length, width, height, layers };
+}
+
+/**
+ * Export the project as a TVPaint Animation `.tvpp` file (every drawing
+ * becomes raster layer frames; timeline hold runs become repeated frames).
+ *
+ * INFERRED: the byte grammar came from reverse engineering and needs one
+ * round trip through real TVPaint before we claim full fidelity there.
+ * Like every writer here it refuses to overwrite the file the data came
+ * from, and it always writes a fresh file.
+ */
+export async function exportTvpp(filePath, project, sourcePath = null) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  const clean = normalizeProject(project);
+  const target = path.resolve(path.extname(filePath) === "" ? `${filePath}.tvpp` : filePath);
+  if (
+    typeof sourcePath === "string" &&
+    sourcePath.trim() !== "" &&
+    path.resolve(sourcePath).toLowerCase() === target.toLowerCase()
+  ) {
+    throw new ValidationError("refusing to overwrite the imported .tvpp file");
+  }
+  const buffer = createTvppBuffer(clean);
+  await writeAtomic(target, buffer);
+  return { path: target, bytes: buffer.length, width: clean.width, height: clean.height };
 }
