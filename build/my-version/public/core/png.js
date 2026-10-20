@@ -1,5 +1,6 @@
 import { resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
+import { blendStrokeOver, eraseStrokeFrom, floodFillRgba, sampleEllipse } from "./paint.js";
 import { deflateSync, inflateSync } from "./zlib.js";
 
 function parseHex(hex) {
@@ -173,6 +174,70 @@ export function decodePng(input) {
   return { width, height, data: out };
 }
 
+/** Paint or erase one stroke's shape into a straight-alpha RGBA buffer. */
+function paintStrokeInto(target, width, height, stroke, rgb) {
+  const erase = stroke.eraser === true;
+  const radii = stroke.points.map((point) => pointRadius(stroke, point));
+
+  if (stroke.kind === "line") {
+    segment(
+      target, width, height,
+      stroke.points[0], stroke.points[1], radii[0], radii[1], rgb, erase,
+    );
+    return;
+  }
+
+  if (stroke.kind === "rect") {
+    const [x0, y0] = stroke.points[0];
+    const [x1, y1] = stroke.points[1];
+    const radius = radii[0];
+    segment(target, width, height, [x0, y0], [x1, y0], radius, radius, rgb, erase);
+    segment(target, width, height, [x1, y0], [x1, y1], radius, radius, rgb, erase);
+    segment(target, width, height, [x1, y1], [x0, y1], radius, radius, rgb, erase);
+    segment(target, width, height, [x0, y1], [x0, y0], radius, radius, rgb, erase);
+    return;
+  }
+
+  if (stroke.kind === "ellipse") {
+    const outline = sampleEllipse(
+      stroke.points[0][0], stroke.points[0][1], stroke.points[1][0], stroke.points[1][1],
+    );
+    if (!outline) return;
+    const radius = radii[0];
+    for (let i = 0; i < outline.length; i += 1) {
+      const from = outline[i];
+      const to = outline[(i + 1) % outline.length];
+      segment(target, width, height, from, to, radius, radius, rgb, erase);
+    }
+    return;
+  }
+
+  // Freehand.
+  if (stroke.points.length === 1) {
+    disc(target, width, height, stroke.points[0][0], stroke.points[0][1], radii[0], rgb, erase);
+    return;
+  }
+  for (let i = 1; i < stroke.points.length; i += 1) {
+    segment(
+      target,
+      width,
+      height,
+      stroke.points[i - 1],
+      stroke.points[i],
+      radii[i - 1],
+      radii[i],
+      rgb,
+      erase,
+    );
+  }
+}
+
+/** True when the stroke cannot be painted directly (needs a mask pass). */
+function needsMaskPass(stroke) {
+  if (stroke.opacity !== undefined && stroke.opacity < 1) return true;
+  return stroke.blend !== undefined && stroke.blend !== "normal";
+}
+
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
 function paintDrawing(width, height, drawing) {
   const paint = new Uint8Array(width * height * 4);
@@ -187,26 +252,27 @@ function paintDrawing(width, height, drawing) {
 
   for (const stroke of drawing.strokes) {
     const rgb = parseHex(stroke.color);
-    const erase = stroke.eraser === true;
-    const radii = stroke.points.map((point) => pointRadius(stroke, point));
 
-    if (stroke.points.length === 1) {
-      disc(paint, width, height, stroke.points[0][0], stroke.points[0][1], radii[0], rgb, erase);
+    if (stroke.kind === "fill") {
+      floodFillRgba(
+        paint, width, height,
+        stroke.points[0][0], stroke.points[0][1], rgb,
+      );
       continue;
     }
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      segment(
-        paint,
-        width,
-        height,
-        stroke.points[i - 1],
-        stroke.points[i],
-        radii[i - 1],
-        radii[i],
-        rgb,
-        erase,
-      );
+
+    // Transparent or blending strokes are painted opaque into a mask buffer
+    // first, then applied to the drawing in one pass — otherwise a stamped
+    // stroke's overlapping discs would darken each other.
+    if (needsMaskPass(stroke)) {
+      const mask = new Uint8Array(width * height * 4);
+      paintStrokeInto(mask, width, height, stroke, rgb);
+      if (stroke.eraser === true) eraseStrokeFrom(paint, mask, stroke.opacity ?? 1);
+      else blendStrokeOver(paint, mask, stroke.opacity ?? 1, stroke.blend ?? "normal");
+      continue;
     }
+
+    paintStrokeInto(paint, width, height, stroke, rgb);
   }
 
   return paint;

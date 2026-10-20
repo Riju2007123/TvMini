@@ -22,12 +22,18 @@ model. It shares **no code, data or file formats** with TVPaint.
   (¼×–2×) multiplies the FPS, and the clock-driven playback keeps its tempo
   even when a frame renders slowly. Hold `S` for a 160 ms flipbook
   preview of the current layer's frames.
+- Tool grid: line, rectangle and ellipse (drag to place) and a bucket fill
+  (click a region), plus a brush **stabiliser** that calms shaky strokes, a
+  per-stroke **opacity** slider and **blend modes** (normal / multiply /
+  screen). Shape strokes are stored in the project file, so they survive
+  save/open and export to PNG, `.clip` and `.tvpp` like any brush stroke.
 
 ## Keyboard shortcuts
 
 | Group | Action | Keys |
 |---|---|---|
 | Tools | Brush / Eraser / Pick colour | `B` / `E` / `I` |
+| Tools | Line / Rectangle / Ellipse / Fill | `L` / `R` / `V` / `F` |
 | Tools | Brush size | `[` / `]` |
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
@@ -117,6 +123,9 @@ node --test
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
 | Eraser | clears its own layer, revealing lower layers/image | `public/app.js`, `src/png.js` |
+| Shape tools | line, rectangle, ellipse and bucket fill, stored as strokes | `public/core/paint.js`, `public/core/png.js` |
+| Stroke opacity / blend | per-stroke transparency and multiply/screen mixing | `public/core/paint.js`, `public/core/png.js` |
+| Stabiliser | eases pointer samples into a calmer path (0–10) | `public/core/paint.js` `smoothPoint` |
 | Undo / redo | 100-step document history, toolbar + shortcuts | `public/app.js` |
 | Timeline | layers, drawings, holds, before/after behaviour | `public/timeline.js` |
 | Playback | FPS, start frame, loop, frame stepping | `public/app.js` |
@@ -229,6 +238,11 @@ every animation layer and must match the canvas size. Version 1 files (flat
 
 Validation and limits are in `src/model.js` and `SPEC.md` section 3.
 
+A stroke is `{ "color": "#rrggbb", "width": n, "points": [[x, y], …] }` plus
+optional `eraser`, `kind` (`line` / `rect` / `ellipse` / `fill`), `opacity`
+(0–1) and `blend` (`normal` / `multiply` / `screen`). Files without those
+fields keep their old meaning: freehand, fully opaque, normal blending.
+
 ## Pen pressure
 
 A stylus reports `PointerEvent.pressure` between 0 and 1. When "Pen pressure"
@@ -260,6 +274,53 @@ browser, alpha clearing in `src/png.js`), so lower layers, the white canvas or
 the `.clip` preview show through — not a painted-on white line. It uses the
 same width slider and pressure taper, is undoable like any stroke, and exports
 identically.
+
+## Shape tools, fill, opacity and blend
+
+The tool panel has four more tools next to the brush:
+
+| Tool | Key | How to use it |
+|---|---|---|
+| Line | `L` | drag from one point to another |
+| Rect | `R` | drag two opposite corners |
+| Oval | `V` | drag the outline |
+| Fill | `F` | click a region to flood it with the current colour |
+
+A shape is stored as a normal stroke with a `kind` field, so it saves, loads,
+undoes and exports like a brush stroke:
+
+```json
+{ "color": "#000000", "width": 6, "points": [[100, 100], [300, 100]], "kind": "line" }
+```
+
+- `kind` is one of `line`, `rect`, `ellipse`, `fill`; a stroke without it is
+  freehand.
+- The fill stroke keeps only its seed point. The region is flooded from that
+  point through pixels of a similar colour (tolerance 32) and stops at the
+  stroke edges, exactly like a paint bucket. It is replayed in stroke order,
+  so a fill always floods the paint that was there when it was made.
+- The browser and the Node renderer share the same flood fill and blend code
+  (`public/core/paint.js`), so a fill behaves the same on screen, in an
+  exported PNG, in a `.clip` and in a `.tvpp`. The browser antialiases stroke
+  edges while the export draws them hard, so the fill boundary can differ by
+  about one pixel.
+
+Two extra brush-panel settings apply to **new brush strokes**:
+
+- **Stabiliser** (0–10) eases each pointer sample toward the previous one, so
+  a shaky hand draws a calmer line. Level 0 turns it off; the level is
+  remembered in `localStorage`.
+- **Stroke opacity** (1–100%) and **Blend** (normal / multiply / screen) are
+  stored on the stroke:
+
+```json
+{ "color": "#ff0000", "width": 6, "points": [[40, 40]], "opacity": 0.5, "blend": "multiply" }
+```
+
+A transparent or blending stroke is painted into a mask first and then applied
+in one pass, so a stroke never darkens its own overlaps. The blend maths
+follows the canvas rule (blend the colours, then composite by source alpha),
+which keeps the browser preview and the exported pixels in step.
 
 ## Undo / redo
 
@@ -370,6 +431,7 @@ build/my-version/
   public/              the whole web app; this folder is what Pages publishes
     index.html
     app.js             canvas, timeline UI, history
+    shell.js           window chrome: panels, Window menu, resize grip, doc tab
     history.js
     timeline.js        shared frame/exposure/behaviour logic
     style.css
@@ -405,6 +467,28 @@ renderer and the tests, so exposure lookup has one definition.
 codec, the Clip Studio reader and writer, and the SQLite/zlib/Buffer
 dependencies all have one implementation that runs in both Node and the
 browser.
+
+## Shell
+
+The window uses the three-column shell of the MoArt pre-production tool that
+was studied for this project (`docs/moart-study.md`): a thin top bar, a tools
+column on the left, the stage in the middle, an inspector on the right, and
+the timeline docked across the bottom.
+
+The *shape* is imitated only. **No MoArt code, markup, CSS or assets are
+reused** — MoArt is source-available rather than open source, so the shell was
+written from scratch against the layout that was documented in the study.
+
+- The `Window` menu lists Tools, Stage, Inspector and Timeline and toggles
+  them; the choice is remembered in `localStorage`.
+- Every panel header carries a `–` button that hides that panel.
+- The strip between the stage and the timeline is a drag grip: drag it to
+  resize the timeline, double-click it to reset the height.
+- The document tab in the top bar follows the project name and the `*` dirty
+  mark.
+- The palette is the mid-grey, borderless shell the study recorded: panels are
+  separated by dark seams and a 1px top-edge light rather than drawn borders,
+  and one accent colour (`#3fa3ec`) carries selection, focus and the playhead.
 
 ## Mapping to the report
 

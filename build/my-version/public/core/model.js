@@ -13,6 +13,11 @@ export const MAX_HOLD = 10000;
 export const MIN_SIZE = 16;
 export const MAX_SIZE = 4096;
 
+/** Shape tools store their geometry kind on the stroke (absent = freehand). */
+export const STROKE_KINDS = ["line", "rect", "ellipse", "fill"];
+/** Per-stroke blend modes (absent = "normal"). */
+export const BLEND_MODES = ["normal", "multiply", "screen"];
+
 export class ValidationError extends Error {
   constructor(message) {
     super(message);
@@ -109,6 +114,32 @@ function normalizeStrokes(value, label) {
         throw new ValidationError(`${label}[${index}].eraser must be a boolean`);
       }
       if (stroke.eraser) clean.eraser = true;
+    }
+
+    if (stroke.kind !== undefined) {
+      if (!STROKE_KINDS.includes(stroke.kind)) {
+        throw new ValidationError(
+          `${label}[${index}].kind must be one of ${STROKE_KINDS.join(", ")}`,
+        );
+      }
+      if (stroke.kind === "fill" && clean.eraser) {
+        throw new ValidationError(`${label}[${index}] cannot be both a fill and an eraser`);
+      }
+      clean.kind = stroke.kind;
+    }
+
+    if (stroke.opacity !== undefined) {
+      const opacity = numberInRange(stroke.opacity, `${label}[${index}].opacity`, 0, 1);
+      if (opacity < 1) clean.opacity = opacity;
+    }
+
+    if (stroke.blend !== undefined) {
+      if (!BLEND_MODES.includes(stroke.blend)) {
+        throw new ValidationError(
+          `${label}[${index}].blend must be one of ${BLEND_MODES.join(", ")}`,
+        );
+      }
+      if (stroke.blend !== "normal") clean.blend = stroke.blend;
     }
 
     return clean;

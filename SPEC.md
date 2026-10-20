@@ -298,7 +298,12 @@ Project file: UTF-8 JSON, extension `.tvmini`.
           "strokes": [
             { "color": "#1f2937", "width": 6, "points": [[10, 10], [42, 80]] },
             { "color": "#b91c1c", "width": 12, "points": [[100, 20, 0.15], [140, 90, 0.85]] },
-            { "color": "#000000", "width": 20, "points": [[30, 30]], "eraser": true }
+            { "color": "#000000", "width": 20, "points": [[30, 30]], "eraser": true },
+            { "color": "#000000", "width": 6, "points": [[10, 10], [90, 10]], "kind": "line" },
+            { "color": "#000000", "width": 6, "points": [[10, 10], [90, 70]], "kind": "rect" },
+            { "color": "#000000", "width": 6, "points": [[10, 10], [90, 70]], "kind": "ellipse" },
+            { "color": "#000000", "width": 6, "points": [[50, 40]], "kind": "fill" },
+            { "color": "#ff0000", "width": 6, "points": [[10, 10]], "opacity": 0.5, "blend": "multiply" }
           ]
         }
       ]
@@ -310,6 +315,12 @@ Project file: UTF-8 JSON, extension `.tvmini`.
 A point is `[x, y]` or `[x, y, pressure]`. The third value is optional and,
 when present, must be between 0 and 1. `width` is the diameter at full
 pressure.
+
+A stroke without `kind` is freehand. `line` and `rect` keep two points (the
+drag start and end), `ellipse` keeps the two corners of its bounding box and
+`fill` keeps one seed point; the region is flooded from that seed through
+similar-coloured pixels and stops at the stroke edges. `kind: "fill"` cannot be
+combined with `eraser`.
 
 Layers are listed top-to-bottom. Drawings are listed in ascending `at` order.
 `at` and `currentFrame` are absolute frame numbers, not zero-based indices.
@@ -355,6 +366,9 @@ If the flat array is empty, the layer has no drawings.
 | drawing order | sorted by `at`; exposures must not overlap |
 | stroke `width` | number 1…200 |
 | stroke `eraser` | optional boolean; `true` means the stroke removes paint |
+| stroke `kind` | optional; `line`, `rect`, `ellipse` or `fill`; absent means freehand |
+| stroke `opacity` | optional number 0…1; absent means fully opaque |
+| stroke `blend` | optional; `normal`, `multiply` or `screen`; absent means `normal` |
 | stroke `points` | at least 1; `[x, y]` or `[x, y, p]`, `p` is 0…1; max 200000 per stroke |
 | total `strokes` | max 10000 in the whole project |
 
@@ -396,8 +410,9 @@ text; it never fails silently.
 ### 4.2 UI
 - File menu: New, Open…, Import .clip preview…, Save, Save As…, Export current
   frame PNG…, Export layered .clip (current frame)…, Recent ▸.
-- Tools: Brush / Eraser buttons (`B` / `E`), colour, width, pen pressure,
-  undo / redo.
+- Tools: Brush / Eraser / Pick buttons (`B` / `E` / `I`), Line / Rect / Oval /
+  Fill buttons (`L` / `R` / `V` / `F`), colour, width, pen pressure, stabiliser
+  (0–10), stroke opacity (1–100 %) and blend mode, undo / redo.
 - Current layer: name, opacity, before-first behaviour, after-last behaviour,
   clear current drawing.
 - Canvas: drag to draw; stroke colour and width controls.

@@ -190,7 +190,32 @@ Known limitations (next batches): compressed `ZCHK` *writer* (reader already
 handles it), blend modes beyond “Color”, layer `LOPM`/tone curves, audio
 chunks, and camera/timeline chunks (`FCFG`, `TLSD`).
 
-## 10. Validation status
+## 10. Application shell (MoArt layout, clean-room)
+
+- **MOART-FACT** — MoArt's workspace is a three-column application: a source
+  pane on the left (scenario board), the stage in the middle, an inspector on
+  the right, and a dockable timeline / dope sheet across the bottom. The
+  top bar carries the brand, the project tab strip and the export action.
+- **MOART-FACT** — the palette is a mid-grey, *borderless* shell: panels are
+  separated by dark seams and a 1px top-edge light instead of drawn borders.
+  The recorded tokens were ground `#303336`, well `#292C2F`, surface `#43464A`,
+  surface-2 `#4E5257`, surface-3 `#575B61`, text `#E9EBED`, muted `#A9AEB4` and
+  a single accent `#3FA3EC` for selection, focus and the playhead. Controls are
+  small: 18–22px tall, 12px type, 4px radii.
+- **MOART-FACT** — panels are tear-off floating windows driven by a shared
+  drag/dock kernel, and a "Window" menu opens the scenario board, the paper
+  sheet, the paint tools, the colour picker, the brush settings, the swatches
+  and the timesheet.
+- **TVMini implements it as** — the same three-column shell plus a bottom
+  timeline dock, a `Window` menu that toggles Tools / Stage / Inspector /
+  Timeline, per-panel hide buttons, a drag grip that resizes the timeline, and
+  a document tab that follows the project name. The palette uses the recorded
+  token values.
+- **Clean room** — the layout and the colour values were taken from the study
+  above; no MoArt markup, CSS, JavaScript or assets were copied. The shell is
+  plain HTML/CSS/JS written for this project.
+
+## 11. Validation status
 
 - **`.tvpp` round trip**: our writer ↔ our reader, byte-structural tests pass
   (90 tests total green). Real TVPaint validation still pending: **give the

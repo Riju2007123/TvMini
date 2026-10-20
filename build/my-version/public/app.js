@@ -1,6 +1,7 @@
 import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
+import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
 import {
   contentEnd,
   deleteDrawing,
@@ -46,6 +47,14 @@ const redoButton = document.getElementById("redoButton");
 const brushButton = document.getElementById("brushButton");
 const eraserButton = document.getElementById("eraserButton");
 const pickButton = document.getElementById("pickButton");
+const lineToolButton = document.getElementById("lineTool");
+const rectToolButton = document.getElementById("rectTool");
+const ellipseToolButton = document.getElementById("ellipseTool");
+const fillToolButton = document.getElementById("fillTool");
+const stabilizerInput = document.getElementById("stabilizer");
+const stabilizerValue = document.getElementById("stabilizerValue");
+const strokeOpacityInput = document.getElementById("strokeOpacity");
+const strokeBlendSelect = document.getElementById("strokeBlend");
 const pressureGainInput = document.getElementById("pressureGain");
 const pressureGainValue = document.getElementById("pressureGainValue");
 const touchDrawInput = document.getElementById("touchDraw");
@@ -108,6 +117,9 @@ const state = {
   strokeWasNew: false,
   pressureEnabled: true,
   tool: "brush",
+  // Line smoothing while drawing (0 = off, up to 10 = very smooth).
+  stabilizer: 0,
+  smoothedPoint: null,
   homeDir: ".",
   playing: false,
   playTimer: null,
@@ -353,7 +365,11 @@ function projectImage() {
 }
 
 const paintCanvas = document.createElement("canvas");
-const paintCtx = paintCanvas.getContext("2d");
+const paintCtx = paintCanvas.getContext("2d", { willReadFrequently: true });
+// Scratch canvas for transparent/blending strokes: the stroke is painted
+// opaque here first, then applied to the paint canvas in a single pass.
+const blendCanvas = document.createElement("canvas");
+const blendCtx = blendCanvas.getContext("2d");
 
 /* Raster bases (imported .tvpp frames) as <img> elements, cached by data. */
 const drawingImages = new Map();
@@ -383,47 +399,151 @@ function strokeRadius(stroke, point) {
 
 function drawStrokesInto(ctx, strokes) {
   ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const canvasWidth = ctx.canvas.width;
+  const canvasHeight = ctx.canvas.height;
 
   for (const stroke of strokes) {
-    ctx.globalCompositeOperation = stroke.eraser ? "destination-out" : "source-over";
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
-
-    const radii = stroke.points.map((point) => strokeRadius(stroke, point));
-
-    if (stroke.points.length === 1) {
-      ctx.beginPath();
-      ctx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
-      ctx.fill();
+    if (stroke.kind === "fill") {
+      floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke);
       continue;
     }
 
-    const tapered = stroke.points.some((point) => point.length === 3);
-    if (!tapered) {
-      ctx.lineWidth = stroke.width;
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
-      for (let i = 1; i < stroke.points.length; i += 1) {
-        ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+    const opacity = stroke.opacity ?? 1;
+    const blend = stroke.blend ?? "normal";
+    if (opacity < 1 || blend !== "normal") {
+      // Draw the stroke opaque into a mask canvas, then apply it in one
+      // pass — a multi-part stroke must not darken its own overlaps.
+      if (blendCanvas.width !== canvasWidth || blendCanvas.height !== canvasHeight) {
+        blendCanvas.width = canvasWidth;
+        blendCanvas.height = canvasHeight;
       }
-      ctx.stroke();
+      blendCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight);
+      ctx.globalAlpha = opacity;
+      ctx.globalCompositeOperation =
+        stroke.eraser === true ? "destination-out" : blend === "normal" ? "source-over" : blend;
+      ctx.drawImage(blendCanvas, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
       continue;
     }
 
-    // Pressure strokes are drawn segment by segment with an interpolated width.
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      const from = stroke.points[i - 1];
-      const to = stroke.points[i];
-      ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
-      ctx.beginPath();
-      ctx.moveTo(from[0], from[1]);
-      ctx.lineTo(to[0], to[1]);
-      ctx.stroke();
-    }
+    drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight);
   }
 
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/** Bucket fill: flood the paint canvas from the seed with the stroke colour. */
+function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
+  const rgb = parseHexColor(stroke.color);
+  if (!rgb) return;
+  const image = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  floodFillRgba(
+    image.data,
+    canvasWidth,
+    canvasHeight,
+    stroke.points[0][0],
+    stroke.points[0][1],
+    rgb,
+  );
+  ctx.putImageData(image, 0, 0);
+}
+
+/** Paint one stroke (shape or freehand) directly into a 2D context. */
+function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight) {
+  ctx.globalCompositeOperation = stroke.eraser === true ? "destination-out" : "source-over";
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+  const radii = stroke.points.map((point) => strokeRadius(stroke, point));
+
+  if (stroke.kind === "line") {
+    const [x0, y0] = stroke.points[0];
+    const [x1, y1] = stroke.points[1];
+    ctx.lineWidth = stroke.width;
+    ctx.beginPath();
+    if (Math.hypot(x1 - x0, y1 - y0) < 0.25) {
+      ctx.arc(x0, y0, radii[0], 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  if (stroke.kind === "rect") {
+    const [x0, y0] = stroke.points[0];
+    const [x1, y1] = stroke.points[1];
+    ctx.lineWidth = stroke.width;
+    ctx.beginPath();
+    ctx.rect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  if (stroke.kind === "ellipse") {
+    const [x0, y0] = stroke.points[0];
+    const [x1, y1] = stroke.points[1];
+    const radiusX = Math.abs(x1 - x0) / 2;
+    const radiusY = Math.abs(y1 - y0) / 2;
+    if (radiusX < 0.25 || radiusY < 0.25) {
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+    ctx.lineWidth = stroke.width;
+    ctx.beginPath();
+    ctx.ellipse(
+      Math.min(x0, x1) + radiusX,
+      Math.min(y0, y1) + radiusY,
+      radiusX,
+      radiusY,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  if (stroke.points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  const tapered = stroke.points.some((point) => point.length === 3);
+  if (!tapered) {
+    ctx.lineWidth = stroke.width;
+    ctx.beginPath();
+    ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+    for (let i = 1; i < stroke.points.length; i += 1) {
+      ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+    }
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  // Pressure strokes are drawn segment by segment with an interpolated width.
+  for (let i = 1; i < stroke.points.length; i += 1) {
+    const from = stroke.points[i - 1];
+    const to = stroke.points[i];
+    ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+    ctx.beginPath();
+    ctx.moveTo(from[0], from[1]);
+    ctx.lineTo(to[0], to[1]);
+    ctx.stroke();
+  }
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -1192,6 +1312,21 @@ canvas.addEventListener("pointerdown", (event) => {
     points: [drawPoint(event)],
   };
   if (state.tool === "eraser") stroke.eraser = true;
+  if (state.tool === "line" || state.tool === "rect" || state.tool === "ellipse") {
+    // Shapes are a drag from the first point to this one; the second point
+    // follows the pointer until release.
+    stroke.kind = state.tool;
+    stroke.points.push(drawPoint(event));
+  } else if (state.tool === "fill") {
+    stroke.kind = "fill";
+  } else if (state.tool === "brush") {
+    // Per-stroke finish applies to painted strokes (not eraser/fill).
+    if (Number(strokeOpacityInput.value) < 100) {
+      stroke.opacity = Number(strokeOpacityInput.value) / 100;
+    }
+    if (strokeBlendSelect.value !== "normal") stroke.blend = strokeBlendSelect.value;
+  }
+  state.smoothedPoint = stroke.points[stroke.points.length - 1];
 
   drawing.strokes.push(stroke);
   state.strokeBefore = before;
@@ -1204,9 +1339,23 @@ canvas.addEventListener("pointerdown", (event) => {
 canvas.addEventListener("pointermove", (event) => {
   if (!state.drawing) return;
   const point = drawPoint(event);
+
+  if (state.drawing.kind && state.drawing.kind !== "fill") {
+    // Shapes: the second point tracks the pointer for a live preview.
+    state.drawing.points[1] = point;
+    renderCanvas();
+    return;
+  }
+  if (state.drawing.kind === "fill") return; // a fill is a single click
+
+  // Freehand with stabiliser: ease each raw sample toward the running
+  // point so shaky input becomes a smoother path (higher = smoother).
+  const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer);
+  state.smoothedPoint = smoothed;
+
   const last = state.drawing.points[state.drawing.points.length - 1];
-  if (Math.hypot(point[0] - last[0], point[1] - last[1]) < 1.5) return;
-  state.drawing.points.push(point);
+  if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) return;
+  state.drawing.points.push(smoothed);
   renderCanvas();
 });
 
@@ -1245,32 +1394,47 @@ pressureInput.addEventListener("change", () => {
   );
 });
 
+const TOOL_BUTTONS = {
+  brush: () => brushButton,
+  eraser: () => eraserButton,
+  pick: () => pickButton,
+  line: () => lineToolButton,
+  rect: () => rectToolButton,
+  ellipse: () => ellipseToolButton,
+  fill: () => fillToolButton,
+};
+
+const TOOL_STATUS = {
+  brush: "Brush — paint with the selected colour",
+  eraser: "Eraser — removes paint and reveals lower layers or the canvas",
+  pick: "Pick — click the canvas to sample a colour",
+  line: "Line — drag from one point to another (L)",
+  rect: "Rectangle — drag opposite corners (R)",
+  ellipse: "Ellipse — drag the outline (E)",
+  fill: "Fill — click a region to flood it with the colour (F)",
+};
+
 function selectTool(tool) {
   state.tool = tool;
-  const eraser = tool === "eraser";
-  const pick = tool === "pick";
+  const picking = tool === "pick";
 
-  brushButton.classList.toggle("active", !eraser && !pick);
-  eraserButton.classList.toggle("active", eraser);
-  pickButton.classList.toggle("active", pick);
-  brushButton.setAttribute("aria-pressed", String(!eraser && !pick));
-  eraserButton.setAttribute("aria-pressed", String(eraser));
-  pickButton.setAttribute("aria-pressed", String(pick));
-  colorInput.disabled = eraser;
-  canvas.classList.toggle("picking", pick);
-
-  setStatus(
-    pick
-      ? "Pick — click the canvas to sample a colour"
-      : eraser
-        ? "Eraser — removes paint and reveals lower layers or the canvas"
-        : "Brush — paint with the selected colour",
-  );
+  for (const [name, buttonOf] of Object.entries(TOOL_BUTTONS)) {
+    const active = name === tool;
+    buttonOf().classList.toggle("active", active);
+    buttonOf().setAttribute("aria-pressed", String(active));
+  }
+  colorInput.disabled = tool === "eraser" || tool === "fill";
+  canvas.classList.toggle("picking", picking);
+  setStatus(TOOL_STATUS[tool] ?? "Tool ready");
 }
 
 brushButton.addEventListener("click", () => selectTool("brush"));
 eraserButton.addEventListener("click", () => selectTool("eraser"));
 pickButton.addEventListener("click", () => selectTool("pick"));
+lineToolButton.addEventListener("click", () => selectTool("line"));
+rectToolButton.addEventListener("click", () => selectTool("rect"));
+ellipseToolButton.addEventListener("click", () => selectTool("ellipse"));
+fillToolButton.addEventListener("click", () => selectTool("fill"));
 
 function selectedWidth() {
   return Number(widthInput.value);
@@ -1352,6 +1516,9 @@ function loadSettings() {
       state.onion.before = clampOnion(data.onion.before, 2);
       state.onion.after = clampOnion(data.onion.after, 1);
     }
+    if (Number.isFinite(data.stabilizer)) {
+      state.stabilizer = Math.max(0, Math.min(10, Math.round(data.stabilizer)));
+    }
   } catch {
     // A blocked or broken store only loses the remembered preferences.
   }
@@ -1366,6 +1533,7 @@ function saveSettings() {
         touchDraw: state.touchDraw,
         showStart: state.showStart,
         playSpeed: state.playSpeed,
+        stabilizer: state.stabilizer,
         onion: { ...state.onion },
       }),
     );
@@ -1381,6 +1549,8 @@ function syncSettingsUI() {
   touchDrawInput.checked = state.touchDraw;
   showStartInput.checked = state.showStart;
   speedInput.value = String(state.playSpeed);
+  stabilizerInput.value = String(state.stabilizer);
+  stabilizerValue.textContent = String(state.stabilizer);
   onionInput.checked = state.onion.enabled;
   onionBeforeInput.value = String(state.onion.before);
   onionAfterInput.value = String(state.onion.after);
@@ -1414,6 +1584,14 @@ showStartInput.addEventListener("change", () => {
   state.showStart = showStartInput.checked;
   saveSettings();
 });
+
+stabilizerInput.addEventListener("input", () => {
+  const value = Math.max(0, Math.min(10, Math.round(Number(stabilizerInput.value))));
+  state.stabilizer = value;
+  stabilizerValue.textContent = String(value);
+  setStatus(value === 0 ? "Stabiliser off" : `Stabiliser ${value} — new strokes get smoother`);
+});
+stabilizerInput.addEventListener("change", saveSettings);
 
 clearButton.addEventListener("click", clearDrawing);
 undoButton.addEventListener("click", undo);
@@ -2105,7 +2283,7 @@ function flipPaint(frameNumber) {
   const canvas = document.getElementById("flipCanvas");
   canvas.width = project.width;
   canvas.height = project.height;
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
   context.clearRect(0, 0, project.width, project.height);
   context.fillStyle = project.background;
   context.fillRect(0, 0, project.width, project.height);
@@ -2165,6 +2343,10 @@ const KEYS = [
       ["Brush", "B"],
       ["Pick a colour from the canvas", "I"],
       ["Eraser", "E"],
+      ["Line", "L"],
+      ["Rectangle", "R"],
+      ["Ellipse", "V"],
+      ["Fill", "F"],
       ["Smaller / larger brush", "[ / ]"],
       ["Clear the current drawing", "Backspace"],
     ],
@@ -2384,6 +2566,26 @@ document.addEventListener("keydown", (event) => {
     if (key === "e") {
       event.preventDefault();
       selectTool("eraser");
+      return;
+    }
+    if (key === "l") {
+      event.preventDefault();
+      selectTool("line");
+      return;
+    }
+    if (key === "r") {
+      event.preventDefault();
+      selectTool("rect");
+      return;
+    }
+    if (key === "v") {
+      event.preventDefault();
+      selectTool("ellipse");
+      return;
+    }
+    if (key === "f") {
+      event.preventDefault();
+      selectTool("fill");
       return;
     }
     if (key === "i") {
