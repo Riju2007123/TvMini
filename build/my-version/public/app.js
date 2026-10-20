@@ -2,7 +2,7 @@ import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import { decodeSound, soundPeaks } from "./audio.js";
-import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
+import { floodFillRgba, parseHexColor, smoothPoint, strokePathGroups } from "./core/paint.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -861,14 +861,18 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight) {
     return;
   }
 
-  // Pressure strokes are drawn segment by segment with an interpolated width.
-  for (let i = 1; i < stroke.points.length; i += 1) {
-    const from = stroke.points[i - 1];
-    const to = stroke.points[i];
-    ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+  // Pressure strokes are drawn segment by segment with an interpolated
+  // width. Segments that end up with the same width are drawn as one
+  // path: a draw call for every segment is what makes the brush slow on
+  // a big canvas, and a mouse gives the same pressure to every point, so
+  // the whole stroke is one path in that case.
+  for (const group of strokePathGroups(stroke.points, radii)) {
+    ctx.lineWidth = group.width;
     ctx.beginPath();
-    ctx.moveTo(from[0], from[1]);
-    ctx.lineTo(to[0], to[1]);
+    ctx.moveTo(stroke.points[group.from][0], stroke.points[group.from][1]);
+    for (let i = group.from + 1; i <= group.to; i += 1) {
+      ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+    }
     ctx.stroke();
   }
   ctx.globalCompositeOperation = "source-over";
@@ -1009,10 +1013,20 @@ function renderCanvas(frame = state.project.currentFrame) {
     // pixel, and a document that is opened rather than drawn is mostly
     // layers like this.
     const base = drawingImageElement(resolved.drawing);
-    if (base && !resolved.drawing.strokes.length) {
+    const strokes = resolved.drawing.strokes;
+    if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
       ctx.drawImage(base, 0, 0, width, height);
       ctx.globalAlpha = 1;
+      continue;
+    }
+
+    // The same goes for a layer with strokes on it, as long as it is drawn
+    // at full strength: the picture and the strokes can go onto the canvas
+    // as they are, without the round trip through a scratch canvas.
+    if (opacity === 1 && base) {
+      ctx.drawImage(base, 0, 0, width, height);
+      drawStrokesInto(ctx, strokes);
       continue;
     }
 
