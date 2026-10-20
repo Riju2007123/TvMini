@@ -933,6 +933,8 @@ function renderCanvas(frame = state.project.currentFrame) {
     ctx.globalAlpha = 1;
   }
 
+  drawBrushTip();
+
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (view) ctx.restore();
 
@@ -1458,8 +1460,12 @@ function refreshBrushLibrary() {
 
 /** The brush of the drawing that is being drawn on. */
 function currentBrush() {
-  const drawing = ensureDrawing(currentLayer(), state.project.currentFrame);
-  return drawing.brush ?? null;
+  const layer = currentLayer();
+  if (!layer) return null;
+  // The drawing that is being drawn on, without making a new one: the tip
+  // under the pointer must not leave a drawing behind.
+  const drawing = drawingAt(layer, state.project.currentFrame);
+  return drawing?.brush ?? null;
 }
 
 /** Put a brush on the drawing that is being drawn on. */
@@ -1493,7 +1499,9 @@ brushLibrarySelect.addEventListener("change", () => {
 });
 
 brushSaveButton.addEventListener("click", () => {
-  const brush = currentBrush();
+  const layer = currentLayer();
+  if (!layer) return;
+  const brush = ensureDrawing(layer, state.project.currentFrame).brush;
   if (!brush) {
     setStatus("Pick a brush image first", true);
     return;
@@ -1514,6 +1522,75 @@ brushRemoveButton.addEventListener("click", () => {
   writeBrushLibrary(readBrushLibrary().filter((item) => item.name !== name));
   refreshBrushLibrary();
   setStatus(`Removed the brush ${name}`);
+});
+
+/* ---------------------------------------------------------- the brush tip */
+
+/** Where the pointer is, in canvas coordinates, or null when it is away. */
+let tipPoint = null;
+
+/** The pictures of the brushes, so they are only loaded once. */
+const tipImages = new Map();
+
+/**
+ * The picture of a brush, ready to be drawn.
+ *
+ * The picture is loaded in the background and the canvas is drawn again when
+ * it has arrived, so the tip appears as soon as it is ready.
+ */
+function tipImage(brush) {
+  const key = brush.data;
+  if (tipImages.has(key)) return tipImages.get(key);
+  const image = new Image();
+  image.onload = () => renderCanvas();
+  image.src = `data:image/png;base64,${key}`;
+  tipImages.set(key, image);
+  return image;
+}
+
+/**
+ * Draw the shape of the brush under the pointer.
+ *
+ * Clip Studio Paint shows the tip of the brush where the pointer is, and the
+ * preview is the size of the stroke that will be left. A picture brush is
+ * shown as its own picture, so what is painted can be seen before it is
+ * painted.
+ */
+function drawBrushTip() {
+  if (!tipPoint || state.playing) return;
+  if (state.tool !== "brush" && state.tool !== "eraser") return;
+
+  const radius = Math.max(0.5, (Number(widthInput.value) || 1) / 2);
+  const brush = currentBrush();
+
+  ctx.save();
+  if (brush) {
+    const image = tipImage(brush);
+    if (image.complete && image.naturalWidth > 0) {
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(image, tipPoint.x - radius, tipPoint.y - radius, radius * 2, radius * 2);
+    }
+  } else {
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#101418";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(tipPoint.x, tipPoint.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+canvas.addEventListener("pointermove", (event) => {
+  const [x, y] = canvasPoint(event);
+  tipPoint = { x, y };
+  renderCanvas();
+});
+
+canvas.addEventListener("pointerleave", () => {
+  if (!tipPoint) return;
+  tipPoint = null;
+  renderCanvas();
 });
 
 refreshBrushLibrary();
