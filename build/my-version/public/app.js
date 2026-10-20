@@ -955,6 +955,12 @@ function currentCameraKey() {
   return cameraKeyAt(state.project.camera, state.project.currentFrame);
 }
 
+/** Show a panel that the Window menu can hide. */
+function showPane(pane) {
+  const item = document.querySelector(`#windowMenu [data-pane-toggle="${pane}"]`);
+  if (item && item.getAttribute("aria-checked") === "false") item.click();
+}
+
 /** Add a camera key on the current frame, keeping the current framing. */
 function addCameraKey() {
   const project = state.project;
@@ -975,6 +981,8 @@ function addCameraKey() {
   renderTimeline();
   renderCanvas();
   syncCameraControls();
+  // The framing is edited in the Inspector, so show it if it is hidden.
+  showPane("inspector");
   setStatus(`Camera key on frame ${project.currentFrame}`);
 }
 
