@@ -215,11 +215,89 @@ chunks, and camera/timeline chunks (`FCFG`, `TLSD`).
   above; no MoArt markup, CSS, JavaScript or assets were copied. The shell is
   plain HTML/CSS/JS written for this project.
 
-## 11. Validation status
+## 11. The camera (MoArt), and what TVMini does with it
+
+Studied from the shipped `index.html` (ver2958) of the user's own copy. Read
+only; no code, markup or CSS was copied.
+
+### 11.1 What MoArt's camera is (MOART-FACT)
+
+- The camera is a **track of keyframes** on the timeline. Two surfaces exist
+  with two models:
+  - the *conte* surface: `project.camera = { keyframes: [...] }`, each key
+    bound to a **cut** (a timeline segment) with its frame counted inside
+    that cut;
+  - the *genga* surface (the animation canvas): `cameraWork = { x, y, w, h,
+    rotation, keyframes: [...] }` with **absolute** frames.
+- A keyframe carries `{ id, cutId, frame, x, y, scale, rotation, rect, interp? }`.
+  `scale` is clamped to `[0.05, 8]`, `rotation` is stored in **radians**, and
+  `rect` is the paper-space window derived from them. Files store the rect.
+- `interp` is optional and only ever `"ease"` or `"hold"`; absent means
+  linear. The curve is `keyInterpT`: `hold → t >= 1 ? 1 : 0`, `ease → t²(3−2t)`
+  (smoothstep), otherwise linear.
+- The lookup finds the **previous** key (last one at or before the frame) and
+  the **next** key (first one at or after it). Before the first key the first
+  key is already in effect; after the last key it stays. The easing comes
+  from the **previous** key.
+- The window is interpolated in rect space: `x`, `y`, `w`, `h` are lerped and
+  the **rotation takes the shortest path** (350° → 10° goes over the top, not
+  the long way round).
+- The **UI** is a frame drawn over the canvas: drag it to move, corner
+  handles to resize (the aspect ratio is kept), a rotate mark to turn it, a
+  dim fill outside it, a dashed **motion path** with a dot on every key, and
+  a centre mark. The timeline lane shows a "CAMERA" label with ◀/▶ key
+  navigation and a button that **toggles a keyframe at the playhead** — the
+  new key inherits the camera as it is shown at that moment.
+- The **export renders through the camera** (`gengaCameraWorkAt` feeds the
+  frame renderer), so the exported picture is the shot, not the whole paper.
+- During playback the *genga* surface plays "seamless camera view in place":
+  the camera frame stays where it is and the artwork moves through it, with
+  everything outside the frame darkened.
+
+### 11.2 What TVMini does (TVMini's own code)
+
+- The same **idea**, in TVMini's own model: `camera.keys` is a list of
+  `{ frame, x, y, width, height, rotation, interp }` with **absolute frames**
+  (TVMini has no cuts), `rotation` in **degrees** (friendlier for a user
+  facing number fields) and `interp` of `linear` / `ease` / `hold`.
+- The **kernel** lives in `public/timeline.js` (`cameraAt`,
+  `cameraInterpT`, `cameraView`, `cameraCorners`) and is shared by the
+  browser, the PNG renderer and the tests. The previous key's `interp`
+  decides the easing, the rotation takes the shortest path, and the first
+  and last keys hold outwards.
+- The **editor** is a camera tool (`C`): drag the frame to move it, drag a
+  corner to resize it (the shape is kept), drag the handle inside the top
+  edge — or hold `Shift` while dragging — to turn it. The drag writes a
+  keyframe on the current frame, exactly like MoArt's toggle button.
+- The **timeline lane** shows a diamond per key, a button that toggles the
+  key on the current frame (`Shift+C`) and a button that switches between
+  the camera view and the editor view.
+- The **Inspector** carries the framing (x, y, width, height), the rotation
+  and the motion (`linear` / `ease` / `hold`) of the key on the current
+  frame.
+- The **export** (PNG) is cropped to the camera window of the frame being
+  exported, with the rotation applied, so the picture is the shot. The
+  `.clip` and `.tvpp` exports still use the canvas size.
+- The motion path and the key dots are drawn on the canvas in the editor
+  view, and the area outside the frame is dimmed.
+
+### 11.3 Differences (deliberate)
+
+- TVMini has one camera model, not two, and its keys are absolute.
+- TVMini's camera view shows the shot filling the stage; MoArt's genga
+  surface keeps the frame in place and moves the artwork through it. TVMini
+  shows the moving frame over the artwork in the editor view instead.
+- No "position limit" (MoArt's checkbox that keeps the frame centred on one
+  axis) and no separate camera preview window.
+
+## 12. Validation status
 
 - **`.tvpp` round trip**: our writer ↔ our reader, byte-structural tests pass
   (90 tests total green). Real TVPaint validation still pending: **give the
   app one real `.tvpp` save** and we can check the reader both ways.
 - **`.clip`**: our writer already validated in CSP EX v3.0.0 previously.
 - The full-timeline `.clip` reader and the camera system remain the agreed
-  next large batches.
+  next large batches. The **camera system is now built** (section 11): the
+  model, the interpolation, the draggable frame and the cropped export are
+  in, with tests in `test/camera.test.js`. The full-timeline `.clip` reader
+  is still open.

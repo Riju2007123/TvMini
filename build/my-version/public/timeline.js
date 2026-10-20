@@ -16,21 +16,68 @@ export function isBehavior(value) {
 
 /* ------------------------------------------------------------------ camera */
 
+/** How the camera travels from one keyframe to the next. */
+export const CAMERA_INTERP = ["linear", "ease", "hold"];
+
+/**
+ * The easing curve of a camera key.
+ *
+ * "hold" keeps the first key until the next one arrives, "ease" is a
+ * smoothstep and "linear" moves at a constant speed.
+ */
+export function cameraInterpT(interp, t) {
+  if (interp === "hold") return t >= 1 ? 1 : 0;
+  if (interp === "ease") return t * t * (3 - 2 * t);
+  return t;
+}
+
+/** The shortest way round from one angle to another, in degrees. */
+function shortestAngle(from, to) {
+  let difference = (to - from) % 360;
+  if (difference > 180) difference -= 360;
+  if (difference < -180) difference += 360;
+  return difference;
+}
+
 /**
  * The camera window in effect at `frame`.
  *
- * A camera track is a list of keyframes, each one a rectangle over the
- * canvas. Like a drawing's exposure, the camera holds its last key until
- * the next one arrives, so a single key frames the whole animation.
+ * A camera track is a list of keyframes, each one a window over the canvas.
+ * The camera holds its last key until the next one arrives and travels
+ * between two keys with the first key's easing. Before the first key the
+ * first key is already in effect, and after the last key it stays there.
  */
 export function cameraAt(camera, frame) {
-  if (!camera || !Array.isArray(camera.keys) || camera.keys.length === 0) return null;
-  let current = camera.keys[0];
-  for (const key of camera.keys) {
-    if (key.frame > frame) break;
-    current = key;
+  const keys = Array.isArray(camera?.keys) ? camera.keys : [];
+  if (keys.length === 0) return null;
+  if (keys.length === 1) return { ...keys[0] };
+
+  let previous = null;
+  let next = null;
+  for (const key of keys) {
+    if (key.frame <= frame) previous = key;
+    if (!next && key.frame >= frame) next = key;
   }
-  return current;
+  if (!previous) previous = next;
+  if (!next) next = previous;
+  if (!previous || !next) return null;
+  if (previous === next || previous.frame === next.frame) return { ...previous };
+
+  const span = Math.max(1, next.frame - previous.frame);
+  const t = cameraInterpT(
+    previous.interp,
+    Math.min(1, Math.max(0, (frame - previous.frame) / span)),
+  );
+
+  return {
+    frame: previous.frame,
+    x: previous.x + (next.x - previous.x) * t,
+    y: previous.y + (next.y - previous.y) * t,
+    width: previous.width + (next.width - previous.width) * t,
+    height: previous.height + (next.height - previous.height) * t,
+    rotation: previous.rotation + shortestAngle(previous.rotation, next.rotation) * t,
+    interp: previous.interp,
+  };
 }
 
 /** The camera key on `frame` exactly, or null. */
@@ -42,7 +89,17 @@ export function cameraKeyAt(camera, frame) {
 /** Insert or replace a camera key, keeping the list sorted by frame. */
 export function setCameraKey(camera, key) {
   const keys = Array.isArray(camera?.keys) ? camera.keys.filter((k) => k.frame !== key.frame) : [];
-  keys.push(key);
+  // Every key carries the full set of fields, so the maths never meets a
+  // missing number.
+  keys.push({
+    frame: key.frame,
+    x: Number(key.x) || 0,
+    y: Number(key.y) || 0,
+    width: Number(key.width) || 1,
+    height: Number(key.height) || 1,
+    rotation: Number(key.rotation) || 0,
+    interp: CAMERA_INTERP.includes(key.interp) ? key.interp : "linear",
+  });
   keys.sort((a, b) => a.frame - b.frame);
   return { keys };
 }
@@ -69,6 +126,28 @@ export function cameraView(camera, frame, width, height) {
     offsetY: (height - window.height * scale) / 2,
   };
 }
+
+/** The four corners of a camera window, in canvas coordinates. */
+export function cameraCorners(window) {
+  const rotation = ((Number(window.rotation) || 0) * Math.PI) / 180;
+  const centreX = window.x + window.width / 2;
+  const centreY = window.y + window.height / 2;
+  const halfWidth = window.width / 2;
+  const halfHeight = window.height / 2;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+
+  return [
+    [-halfWidth, -halfHeight],
+    [halfWidth, -halfHeight],
+    [halfWidth, halfHeight],
+    [-halfWidth, halfHeight],
+  ].map(([dx, dy]) => ({
+    x: centreX + dx * cos - dy * sin,
+    y: centreY + dx * sin + dy * cos,
+  }));
+}
+
 
 function drawingsOf(layer) {
   return Array.isArray(layer.drawings) ? layer.drawings : [];

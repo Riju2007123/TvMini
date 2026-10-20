@@ -109,6 +109,9 @@
             <button id="ellipseTool" aria-pressed="false" title="Ellipse — drag the outline (V)">Oval</button>
             <button id="fillTool" aria-pressed="false" title="Fill — click a region to flood it (F)">Fill</button>
           </div>
+          <div class="tool-row single">
+            <button id="cameraTool" aria-pressed="false" title="Camera — drag the frame to aim the shot (C)">Camera</button>
+          </div>
           <div class="history-row">
             <button id="undoButton" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
             <button id="redoButton" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z / Ctrl+A)">Redo ↷</button>
@@ -277,6 +280,18 @@
           <label class="field">
             <span>Camera height</span>
             <input id="cameraHeight" type="number" min="16" step="1" value="600" />
+          </label>
+          <label class="field">
+            <span>Camera rotation</span>
+            <input id="cameraRotation" type="number" min="-180" max="180" step="1" value="0" />
+          </label>
+          <label class="field" title="How the camera travels from this key to the next one">
+            <span>Motion</span>
+            <select id="cameraInterp">
+              <option value="linear" selected>Linear</option>
+              <option value="ease">Ease</option>
+              <option value="hold">Hold</option>
+            </select>
           </label>
           <p class="panel-hint" id="cameraHint">No camera key on this frame. The camera
             holds its last key until the next one, so one key frames the whole

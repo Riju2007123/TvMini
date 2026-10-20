@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { findClipDatabase, readClipPreview } from "../src/clip.js";
+import { findClipDatabase, readClipPreview, readClipDocument } from "../src/clip.js";
 import { createProject, normalizeProject, ValidationError } from "../src/model.js";
 import { decodePng, encodePng, renderProject } from "../src/png.js";
 import { openProject, saveProject } from "../src/store.js";
@@ -110,6 +110,24 @@ test("readClipPreview extracts the embedded canvas preview", async () => {
     assert.equal(preview.height, 24);
     assert.equal(preview.name, "Animation15.clip");
     assert.deepEqual(preview.png, png);
+  });
+});
+
+test("readClipDocument reports native container capabilities without claiming editable pixels", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "inspect.clip");
+    const png = encodePng(32, 24, solid(32, 24, [12, 34, 56]));
+    await writeClipFixture(target, { width: 32, height: 24, png });
+
+    const document = await readClipDocument(target);
+    assert.equal(document.name, "inspect.clip");
+    assert.equal(document.format, "clip-studio-native-container");
+    assert.equal(document.readOnly, true);
+    assert.equal(document.preview.width, 32);
+    assert.equal(document.capabilities.preview, true);
+    assert.equal(document.capabilities.editableRasterPixels, false);
+    assert.ok(document.tables.includes("CanvasPreview"));
+    assert.ok(document.limitations.length > 0);
   });
 });
 

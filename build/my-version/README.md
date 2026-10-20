@@ -27,10 +27,10 @@ model. It shares **no code, data or file formats** with TVPaint.
   per-stroke **opacity** slider and **blend modes** (normal / multiply /
   screen). Shape strokes are stored in the project file, so they survive
   save/open and export to PNG, `.clip` and `.tvpp` like any brush stroke.
-- Camera track: keyframes that frame the shot. The stage shows what the
-  camera sees (or the whole canvas with the frame drawn on it), the camera
-  holds its last key until the next one, and the PNG export is cropped to
-  the camera window.
+- Camera track: keyframes that frame the shot. The camera travels from key
+  to key (linear, ease or hold) and can be turned; a draggable frame over
+  the canvas aims the shot, the stage can show the shot or the whole canvas,
+  and the PNG export is cropped to the camera window.
 - Sound track: import an audio file, see its waveform under the frames it
   plays on, and hear it with the playback. The sound travels inside the
   project file, so a project stays self-contained.
@@ -44,7 +44,8 @@ model. It shares **no code, data or file formats** with TVPaint.
 |---|---|---|
 | Tools | Brush / Eraser / Pick colour | `B` / `E` / `I` |
 | Tools | Line / Rectangle / Ellipse / Fill | `L` / `R` / `V` / `F` |
-| Tools | Add a camera key on this frame | `C` |
+| Tools | Add a camera key on this frame | `Shift+C` |
+| Tools | Camera tool (aim the shot) | `C` |
 | Tools | Brush size | `[` / `]` |
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
@@ -114,6 +115,27 @@ The `.clip` writer runs **entirely in the browser**: SQLite is
 [feross/buffer](https://github.com/feross/buffer). The same format code
 (`public/core/`) runs under Node, so a file exported in the browser and one
 exported by the server are the same format.
+
+## Native `.clip` import/export status
+
+- `src/clip.js` exposes `readClipPreview()` for the existing preview import and
+  `readClipDocument()` for read-only structural inspection of the embedded
+  SQLite database (table names, project metadata when available, and layer
+  names/visibility/lock/opacity when the schema exposes them).
+- `public/core/clip.js` exports `readClipDocumentFromBytes()` for the same
+  inspection in browser-compatible code.
+- `src/clip-write.js` and `public/core/clip-write.js` export a layered `.clip`
+  document from this application's rasterized animation layers using the
+  bundled Clip Studio template.
+
+**Compatibility limitation:** this is not a full native `.clip` editor. The
+reader does not decode Clip Studio's raster tile payloads into editable pixels,
+and does not interpret masks, vector layers, animation folders, or every
+version-specific field. The writer creates a new document from the template;
+it does not preserve all unknown data from an imported source file. Treat
+imports as preview/metadata inspection and exports as a newly generated layered
+raster document. Always keep the original `.clip` file and test generated files
+in Clip Studio Paint before relying on them.
 
 ## Test
 
@@ -346,26 +368,37 @@ one a window over the canvas:
 ```json
 "camera": {
   "keys": [
-    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600 },
-    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300 }
+    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600, "rotation": 0, "interp": "linear" },
+    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300, "rotation": 0, "interp": "ease" }
   ]
 }
 ```
 
-- The camera **holds** its last key until the next one arrives, so one key
-  frames the whole animation. A camera key also counts as content, so the
-  timeline grows to reach it.
-- The stage can show two things: the **camera view** (the shot, scaled to
-  fit, with a letterbox around it) or the **whole canvas** with the camera
-  frame drawn on it. The 🎥 button in the camera row switches between them,
-  and the Inspector has the position, width and height of the key.
-- Drawing works in both: the pointer is mapped back through the camera, so a
-  stroke lands where you clicked.
-- The PNG export is cropped to the camera window, so the picture is the shot
-  and not the whole canvas. The `.clip` and `.tvpp` exports still use the
-  canvas size.
-- `C` adds a key on the current frame; the ✕ button in the camera row removes
-  it. Camera edits are undoable like any other change.
+- The camera **travels** from one key to the next. The **Motion** setting of
+  the first key decides how: `linear` (even speed), `ease` (slow at the
+  start and the end) or `hold` (the camera stays until the next key). Before
+  the first key and after the last one the camera holds.
+- The **rotation** is in degrees and the camera always turns the short way
+  round (350° to 10° goes over the top, not the long way).
+- The **camera tool** (`C`) aims the shot:
+  - drag inside the frame to move it,
+  - drag a corner to resize it (the shape is kept),
+  - drag the handle in the top edge — or hold `Shift` while dragging — to
+    turn it.
+  Every drag writes a key on the current frame, and the key inherits the
+  camera as it is shown at that moment.
+- The timeline lane shows a diamond on every key, a button that toggles the
+  key on the current frame (`Shift+C`) and a button that switches between
+  the **camera view** (the stage shows the shot) and the **editor view** (the
+  whole canvas with the frame on it). In the editor view the camera draws
+  its motion path and a dot on every key.
+- The Inspector carries the framing (x, y, width, height), the rotation and
+  the motion of the key on the current frame.
+- The PNG export is cropped to the camera window of the frame being
+  exported, with the rotation applied, so the picture is the shot and not
+  the whole canvas. The `.clip` and `.tvpp` exports still use the canvas
+  size.
+- Camera edits are undoable like any other change.
 
 ## Sound track
 

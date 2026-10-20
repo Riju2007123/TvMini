@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Buffer } from "../public/core/bytes.js";
-import { readClipPreviewFromBytes } from "../public/core/clip.js";
+import { readClipPreviewFromBytes, readClipDocumentFromBytes } from "../public/core/clip.js";
 import { ValidationError } from "../public/core/model.js";
 
-export { findClipDatabase, readClipPreviewFromBytes } from "../public/core/clip.js";
+export { findClipDatabase, readClipPreviewFromBytes, readClipDocumentFromBytes } from "../public/core/clip.js";
 
 /**
  * Read the canvas preview from a `.clip` file on disk.
@@ -25,4 +25,22 @@ export async function readClipPreview(filePath) {
   const data = Buffer.from(await fs.readFile(clean));
   const preview = await readClipPreviewFromBytes(data);
   return { path: clean, name: path.basename(clean), ...preview };
+}
+
+
+/** Read the preview plus inspectable native .clip document metadata. */
+export async function readClipDocument(filePath) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  const clean = path.normalize(filePath.trim());
+  if (path.extname(clean).toLowerCase() !== ".clip") {
+    throw new ValidationError("choose a .clip file");
+  }
+  const data = Buffer.from(await fs.readFile(clean));
+  const [preview, document] = await Promise.all([
+    readClipPreviewFromBytes(data),
+    readClipDocumentFromBytes(data),
+  ]);
+  return { path: clean, name: path.basename(clean), ...document, preview };
 }

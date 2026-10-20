@@ -336,7 +336,8 @@ function sampleRgba(data, width, height, x, y) {
 
 /**
  * Crop a straight-alpha RGBA buffer to the camera window and scale it to the
- * camera's own pixel size.
+ * camera's own pixel size. A rotated window is sampled back through the
+ * rotation, so the export is the shot the camera takes.
  */
 export function cropToCamera(rgba, project, frame = project.currentFrame) {
   const camera = cameraAt(project.camera, frame);
@@ -345,11 +346,20 @@ export function cropToCamera(rgba, project, frame = project.currentFrame) {
   const buffer = new Uint8Array(out.width * out.height * 4);
   const stepX = camera.width / out.width;
   const stepY = camera.height / out.height;
+  // The content turns with the camera, so the window's own space is turned
+  // back to find the pixel it looks at.
+  const angle = -((Number(camera.rotation) || 0) * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const centreX = camera.x + camera.width / 2;
+  const centreY = camera.y + camera.height / 2;
 
   for (let y = 0; y < out.height; y += 1) {
-    const sourceY = camera.y + (y + 0.5) * stepY - 0.5;
+    const localY = (y + 0.5) * stepY - camera.height / 2;
     for (let x = 0; x < out.width; x += 1) {
-      const sourceX = camera.x + (x + 0.5) * stepX - 0.5;
+      const localX = (x + 0.5) * stepX - camera.width / 2;
+      const sourceX = centreX + localX * cos - localY * sin;
+      const sourceY = centreY + localX * sin + localY * cos;
       const pixel = sampleRgba(rgba, project.width, project.height, sourceX, sourceY);
       const index = (y * out.width + x) * 4;
       buffer[index] = Math.round(pixel[0]);
@@ -415,6 +425,11 @@ function cropRgbToCamera(data, width, height, camera, outWidth, outHeight) {
   const out = new Uint8Array(outWidth * outHeight * 3);
   const stepX = camera.width / outWidth;
   const stepY = camera.height / outHeight;
+  const angle = -((Number(camera.rotation) || 0) * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const centreX = camera.x + camera.width / 2;
+  const centreY = camera.y + camera.height / 2;
   const read = (x, y, channel) => {
     const cx = Math.min(width - 1, Math.max(0, Math.round(x)));
     const cy = Math.min(height - 1, Math.max(0, Math.round(y)));
@@ -422,9 +437,11 @@ function cropRgbToCamera(data, width, height, camera, outWidth, outHeight) {
   };
 
   for (let y = 0; y < outHeight; y += 1) {
-    const sourceY = camera.y + (y + 0.5) * stepY - 0.5;
+    const localY = (y + 0.5) * stepY - camera.height / 2;
     for (let x = 0; x < outWidth; x += 1) {
-      const sourceX = camera.x + (x + 0.5) * stepX - 0.5;
+      const localX = (x + 0.5) * stepX - camera.width / 2;
+      const sourceX = centreX + localX * cos - localY * sin;
+      const sourceY = centreY + localX * sin + localY * cos;
       const index = (y * outWidth + x) * 3;
       for (let channel = 0; channel < 3; channel += 1) {
         out[index + channel] = read(sourceX, sourceY, channel);

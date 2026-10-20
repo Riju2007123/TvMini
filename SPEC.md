@@ -327,14 +327,16 @@ combined with `eraser`.
 ```json
 "camera": {
   "keys": [
-    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600 },
-    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300 }
+    { "frame": 1, "x": 0, "y": 0, "width": 960, "height": 600, "rotation": 0, "interp": "linear" },
+    { "frame": 24, "x": 240, "y": 150, "width": 480, "height": 300, "rotation": 0, "interp": "ease" }
   ]
 }
 ```
 
-The camera holds its last key until the next one. A PNG export is cropped to
-the camera window.
+The camera travels from one key to the next with the **first** key's `interp`
+(`linear`, `ease` or `hold`); before the first key and after the last one it
+holds. `rotation` is in degrees and always takes the short way round. A PNG
+export is cropped to the camera window of the exported frame.
 
 `audio` is optional. It holds the sound that plays with the animation:
 
@@ -393,7 +395,7 @@ If the flat array is empty, the layer has no drawings.
 | stroke `opacity` | optional number 0…1; absent means fully opaque |
 | stroke `blend` | optional; `normal`, `multiply` or `screen`; absent means `normal` |
 | stroke `points` | at least 1; `[x, y]` or `[x, y, p]`, `p` is 0…1; max 200000 per stroke |
-| `camera` | optional; `{ keys: [{ frame, x, y, width, height }] }`, max 1000 keys, sorted by frame, no two keys on one frame |
+| `camera` | optional; `{ keys: [{ frame, x, y, width, height, rotation, interp }] }`, max 1000 keys, sorted by frame, no two keys on one frame |
 | `audio` | optional; `{ name, data, duration, offset }`; `data` is base64, max 12,000,000 characters |
 | total `strokes` | max 10000 in the whole project |
 
@@ -436,10 +438,12 @@ text; it never fails silently.
 - File menu: New, Open…, Import .clip preview…, Save, Save As…, Export current
   frame PNG…, Export layered .clip (current frame)…, Recent ▸.
 - Tools: Brush / Eraser / Pick buttons (`B` / `E` / `I`), Line / Rect / Oval /
-  Fill buttons (`L` / `R` / `V` / `F`), colour, width, pen pressure, stabiliser
-  (0–10), stroke opacity (1–100 %) and blend mode, undo / redo.
-- Timeline: a camera row (keyframes that frame the shot, `C` adds a key), the
-  layer rows, and a sound row with the waveform.
+  Fill buttons (`L` / `R` / `V` / `F`), Camera button (`C`), colour, width,
+  pen pressure, stabiliser (0–10), stroke opacity (1–100 %) and blend mode,
+  undo / redo.
+- Timeline: a camera row (keyframes that frame the shot, `Shift+C` toggles a
+  key on the current frame), the layer rows, and a sound row with the
+  waveform.
 - Top bar: a document tab strip (one tab per open project, each with its own
   undo history), open, save and export. `Ctrl+Tab` walks through the tabs.
 - Stage: a quick bar over the canvas with the colour, the brush width and

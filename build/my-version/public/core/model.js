@@ -1,4 +1,4 @@
-import { BEHAVIORS, isBehavior } from "../timeline.js";
+import { BEHAVIORS, CAMERA_INTERP, isBehavior } from "../timeline.js";
 import { Buffer } from "./bytes.js";
 
 export const FORMAT = "tvmini";
@@ -357,7 +357,15 @@ function normalizeCamera(value, label, width, height) {
       1,
       MAX_SIZE * 4,
     );
-    return { frame, x, y, width: keyWidth, height: keyHeight };
+    const rotation = finiteNumber(
+      key.rotation === undefined ? 0 : key.rotation,
+      `${kLabel}.rotation`,
+    );
+    const interp = key.interp === undefined ? "linear" : key.interp;
+    if (!CAMERA_INTERP.includes(interp)) {
+      throw new ValidationError(`${kLabel}.interp must be one of ${CAMERA_INTERP.join(", ")}`);
+    }
+    return { frame, x, y, width: keyWidth, height: keyHeight, rotation, interp };
   });
 
   keys.sort((a, b) => a.frame - b.frame);

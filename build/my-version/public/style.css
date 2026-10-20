@@ -648,8 +648,12 @@ body.hide-inspector.hide-stage .workspace {
   text-overflow: ellipsis;
 }
 
-.tool-row.four {
-  grid-template-columns: repeat(4, 1fr);
+.tool-row.single {
+  grid-template-columns: 1fr;
+}
+
+.camera-tool {
+  cursor: crosshair;
 }
 
 .history-row {

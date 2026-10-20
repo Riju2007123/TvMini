@@ -5,6 +5,7 @@ import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
 import {
   cameraAt,
+  cameraCorners,
   cameraKeyAt,
   cameraView,
   contentEnd,
@@ -59,6 +60,7 @@ const lineToolButton = document.getElementById("lineTool");
 const rectToolButton = document.getElementById("rectTool");
 const ellipseToolButton = document.getElementById("ellipseTool");
 const fillToolButton = document.getElementById("fillTool");
+const cameraToolButton = document.getElementById("cameraTool");
 const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
@@ -71,6 +73,8 @@ const cameraXInput = document.getElementById("cameraX");
 const cameraYInput = document.getElementById("cameraY");
 const cameraWidthInput = document.getElementById("cameraWidth");
 const cameraHeightInput = document.getElementById("cameraHeight");
+const cameraRotationInput = document.getElementById("cameraRotation");
+const cameraInterpSelect = document.getElementById("cameraInterp");
 const cameraHint = document.getElementById("cameraHint");
 const quickBar = document.getElementById("quickBar");
 const quickSwatch = document.getElementById("quickSwatch");
@@ -146,6 +150,9 @@ const state = {
   tool: "brush",
   // Show the camera's shot in the stage (off = whole canvas with a frame on it).
   cameraView: true,
+  // The camera frame being dragged, and the drag itself.
+  cameraLive: null,
+  cameraDrag: null,
   // Waveform of the sound track, and the element that plays it.
   audioPeaks: null,
   audioElement: null,
@@ -864,7 +871,9 @@ function renderCanvas(frame = state.project.currentFrame) {
   const camera = cameraAt(project.camera, frame);
   // The stage shows the shot the camera takes; switching the camera view off
   // shows the whole canvas with the camera frame drawn on it instead.
-  const view = state.cameraView ? cameraView(project.camera, frame, width, height) : null;
+  const view = state.cameraView && state.tool !== "camera"
+    ? cameraView(project.camera, frame, width, height)
+    : null;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
@@ -924,21 +933,92 @@ function renderCanvas(frame = state.project.currentFrame) {
   if (view) ctx.restore();
 
   // With the camera view off, mark the shot on the canvas.
-  if (camera && !view) drawCameraOverlay(camera);
+  if (camera && !view) drawCameraOverlay(camera, frame);
 }
 
-/** Dim everything outside the camera window and outline the window itself. */
-function drawCameraOverlay(camera) {
-  const { width, height } = state.project;
+/**
+ * Draw the camera over the canvas: the frame with its corner marks, the
+ * path it travels along and a dot for every keyframe.
+ */
+function drawCameraOverlay(camera, frame) {
+  const project = state.project;
+  const keys = project.camera?.keys ?? [];
+  const live = state.cameraLive ?? camera;
+
   ctx.save();
+
+  // Everything outside the frame is dimmed, so the shot stands out.
   ctx.fillStyle = "rgba(6, 10, 16, 0.55)";
   ctx.beginPath();
-  ctx.rect(0, 0, width, height);
-  ctx.rect(camera.x, camera.y, camera.width, camera.height);
+  ctx.rect(0, 0, project.width, project.height);
+  ctx.rect(live.x, live.y, live.width, live.height);
   ctx.fill("evenodd");
+
+  // The path between the keys.
+  if (keys.length > 1) {
+    ctx.strokeStyle = "rgba(63, 163, 236, 0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    keys.forEach((key, index) => {
+      const centreX = key.x + key.width / 2;
+      const centreY = key.y + key.height / 2;
+      if (index === 0) ctx.moveTo(centreX, centreY);
+      else ctx.lineTo(centreX, centreY);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // A dot on every key.
+    for (const key of keys) {
+      const centreX = key.x + key.width / 2;
+      const centreY = key.y + key.height / 2;
+      const onFrame = key.frame === frame;
+      ctx.beginPath();
+      ctx.arc(centreX, centreY, onFrame ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = onFrame ? "#3fa3ec" : "rgba(63, 163, 236, 0.7)";
+      ctx.fill();
+    }
+  }
+
+  // The frame itself, with the rotation it has.
+  const angle = ((Number(live.rotation) || 0) * Math.PI) / 180;
+  ctx.translate(live.x + live.width / 2, live.y + live.height / 2);
+  ctx.rotate(angle);
+  ctx.translate(-(live.x + live.width / 2), -(live.y + live.height / 2));
+
   ctx.strokeStyle = "#3fa3ec";
   ctx.lineWidth = 2;
-  ctx.strokeRect(camera.x, camera.y, camera.width, camera.height);
+  ctx.strokeRect(live.x, live.y, live.width, live.height);
+
+  // Corner marks and a centre dot.
+  const mark = Math.min(18, live.width / 4, live.height / 4);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (const [cornerX, cornerY, dx, dy] of [
+    [live.x, live.y, 1, 1],
+    [live.x + live.width, live.y, -1, 1],
+    [live.x + live.width, live.y + live.height, -1, -1],
+    [live.x, live.y + live.height, 1, -1],
+  ]) {
+    ctx.moveTo(cornerX + dx * mark, cornerY);
+    ctx.lineTo(cornerX, cornerY);
+    ctx.lineTo(cornerX, cornerY + dy * mark);
+  }
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(live.x + live.width / 2, live.y + live.height / 2, 3, 0, Math.PI * 2);
+  ctx.fillStyle = "#3fa3ec";
+  ctx.fill();
+
+  // The handle that turns the frame.
+  const handle = cameraRotateHandle(live);
+  ctx.beginPath();
+  ctx.arc(handle.x, handle.y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#3fa3ec";
+  ctx.fill();
+
   ctx.restore();
 }
 
@@ -953,6 +1033,194 @@ function timelineColumnCount() {
 /** The camera key that sits on the current frame, if any. */
 function currentCameraKey() {
   return cameraKeyAt(state.project.camera, state.project.currentFrame);
+}
+
+/** The camera window as it is shown: the drag in progress, or the one at this frame. */
+function currentCameraWindow(frame = state.project.currentFrame) {
+  if (state.cameraLive) return state.cameraLive;
+  return cameraAt(state.project.camera, frame);
+}
+
+/** A canvas point in the frame's own space (the frame is not rotated). */
+function cameraToLocal(point, window) {
+  const angle = -((Number(window.rotation) || 0) * Math.PI) / 180;
+  const centreX = window.x + window.width / 2;
+  const centreY = window.y + window.height / 2;
+  const dx = point.x - centreX;
+  const dy = point.y - centreY;
+  return {
+    x: dx * Math.cos(angle) - dy * Math.sin(angle),
+    y: dx * Math.sin(angle) + dy * Math.cos(angle),
+  };
+}
+
+/** A point of the frame's own space back in canvas coordinates. */
+function cameraFromLocal(local, window) {
+  const angle = ((Number(window.rotation) || 0) * Math.PI) / 180;
+  const centreX = window.x + window.width / 2;
+  const centreY = window.y + window.height / 2;
+  return {
+    x: centreX + local.x * Math.cos(angle) - local.y * Math.sin(angle),
+    y: centreY + local.x * Math.sin(angle) + local.y * Math.cos(angle),
+  };
+}
+
+/** How many canvas units one screen pixel is worth. */
+function cameraTolerance() {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width) return 10;
+  return (10 * state.project.width) / rect.width;
+}
+
+/** The handle inside the top edge that turns the frame. */
+function cameraRotateHandle(window) {
+  const halfHeight = window.height / 2;
+  return cameraFromLocal({ x: 0, y: -halfHeight + cameraTolerance() * 2.4 }, window);
+}
+
+/** What is under the pointer: a corner, the turn handle, the frame or nothing. */
+function cameraHitTest(point) {
+  const window = currentCameraWindow();
+  if (!window) return null;
+  const tolerance = cameraTolerance();
+  const corners = cameraCorners(window);
+
+  for (let index = 0; index < corners.length; index += 1) {
+    if (Math.hypot(point.x - corners[index].x, point.y - corners[index].y) <= tolerance) {
+      return { kind: "resize", corner: index };
+    }
+  }
+
+  const rotate = cameraRotateHandle(window);
+  if (Math.hypot(point.x - rotate.x, point.y - rotate.y) <= tolerance) {
+    return { kind: "rotate" };
+  }
+
+  const local = cameraToLocal(point, window);
+  if (
+    Math.abs(local.x) <= window.width / 2 &&
+    Math.abs(local.y) <= window.height / 2
+  ) {
+    return { kind: "move" };
+  }
+
+  return null;
+}
+
+/** Start a drag of the camera frame. */
+function startCameraDrag(point, options = {}) {
+  const hit = options.forceRotate ? { kind: "rotate" } : cameraHitTest(point);
+  if (!hit) {
+    setStatus("The camera frame is not under the pointer", true);
+    return;
+  }
+
+  const window = currentCameraWindow();
+  state.cameraDrag = {
+    kind: hit.kind,
+    corner: hit.corner,
+    start: { ...window },
+    startPoint: point,
+    startCentre: cameraFromLocal({ x: 0, y: 0 }, window),
+    startAngle: Math.atan2(point.y - (window.y + window.height / 2), point.x - (window.x + window.width / 2)),
+  };
+  state.cameraLive = { ...window };
+}
+
+/** Move the frame while the pointer is down. */
+function updateCameraDrag(point) {
+  const drag = state.cameraDrag;
+  if (!drag) return;
+  const start = drag.start;
+
+  if (drag.kind === "move") {
+    state.cameraLive = {
+      ...start,
+      x: start.x + (point.x - drag.startPoint.x),
+      y: start.y + (point.y - drag.startPoint.y),
+    };
+    return;
+  }
+
+  if (drag.kind === "rotate") {
+    const angle = Math.atan2(
+      point.y - drag.startCentre.y,
+      point.x - drag.startCentre.x,
+    );
+    const degrees = (angle - drag.startAngle) * (180 / Math.PI);
+    state.cameraLive = { ...start, rotation: (Number(start.rotation) || 0) + degrees };
+    return;
+  }
+
+  // A corner scales the frame and keeps its shape.
+  const corners = cameraCorners(start);
+  const corner = corners[drag.corner];
+  const opposite = corners[(drag.corner + 2) % 4];
+  const signX = corner.x >= opposite.x ? 1 : -1;
+  const signY = corner.y >= opposite.y ? 1 : -1;
+  const local = cameraToLocal(point, start);
+  const localOpposite = cameraToLocal(opposite, start);
+  const aspect = start.width / Math.max(1, start.height);
+  const minimum = 16;
+
+  let halfWidth = Math.abs(local.x - localOpposite.x);
+  let halfHeight = Math.abs(local.y - localOpposite.y);
+  if (drag.corner === 0 || drag.corner === 2) halfHeight = halfWidth / aspect;
+  else halfWidth = halfHeight * aspect;
+
+  halfWidth = Math.max(minimum / 2, halfWidth);
+  halfHeight = Math.max(minimum / 2, halfHeight);
+
+  // The opposite corner stays where it was.
+  const centreLocal = {
+    x: localOpposite.x + signX * halfWidth,
+    y: localOpposite.y + signY * halfHeight,
+  };
+  const centre = cameraFromLocal(centreLocal, start);
+  const rotated = cameraFromLocal({ x: 0, y: 0 }, start);
+
+  state.cameraLive = {
+    ...start,
+    x: centre.x - halfWidth,
+    y: centre.y - halfHeight,
+    width: halfWidth * 2,
+    height: halfHeight * 2,
+    rotation: start.rotation,
+  };
+  void rotated;
+}
+
+/** Write the dragged frame into the key on the current frame. */
+function commitCameraDrag() {
+  const drag = state.cameraDrag;
+  const live = state.cameraLive;
+  state.cameraDrag = null;
+  state.cameraLive = null;
+  if (!drag || !live) return;
+
+  const project = state.project;
+  const before = snapshot();
+  const key = currentCameraKey();
+  const window = {
+    frame: project.currentFrame,
+    x: Math.round(live.x),
+    y: Math.round(live.y),
+    width: Math.round(live.width),
+    height: Math.round(live.height),
+    rotation: Number(((live.rotation || 0) % 360).toFixed(2)),
+    interp: key?.interp ?? "linear",
+  };
+
+  project.camera = setCameraKey(project.camera, window);
+  recordHistory(before);
+  markDirty();
+  renderTimeline();
+  renderCanvas();
+  syncCameraControls();
+  setStatus(
+    `Camera key on frame ${project.currentFrame} — ${window.width}×${window.height}` +
+      (window.rotation ? ` at ${window.rotation}°` : ""),
+  );
 }
 
 /** Show a panel that the Window menu can hide. */
@@ -974,6 +1242,8 @@ function addCameraKey() {
     y: existing?.y ?? shown?.y ?? 0,
     width: existing?.width ?? shown?.width ?? project.width,
     height: existing?.height ?? shown?.height ?? project.height,
+    rotation: existing?.rotation ?? shown?.rotation ?? 0,
+    interp: existing?.interp ?? "linear",
   });
 
   recordHistory(before);
@@ -984,6 +1254,15 @@ function addCameraKey() {
   // The framing is edited in the Inspector, so show it if it is hidden.
   showPane("inspector");
   setStatus(`Camera key on frame ${project.currentFrame}`);
+}
+
+/** Add or remove the camera key on the current frame. */
+function toggleCameraKey() {
+  if (currentCameraKey()) {
+    removeCameraKey();
+    return;
+  }
+  addCameraKey();
 }
 
 /** Remove the camera key on the current frame. */
@@ -1020,12 +1299,21 @@ function syncCameraControls() {
   cameraYInput.value = String(Math.round(shown?.y ?? 0));
   cameraWidthInput.value = String(Math.round(shown?.width ?? project.width));
   cameraHeightInput.value = String(Math.round(shown?.height ?? project.height));
+  cameraRotationInput.value = String(Math.round(shown?.rotation ?? 0));
+  cameraInterpSelect.value = key?.interp ?? "linear";
 
   const hasKey = Boolean(key);
   cameraRemoveButton.disabled = !hasKey;
-  for (const input of [cameraXInput, cameraYInput, cameraWidthInput, cameraHeightInput]) {
+  for (const input of [
+    cameraXInput,
+    cameraYInput,
+    cameraWidthInput,
+    cameraHeightInput,
+    cameraRotationInput,
+  ]) {
     input.disabled = !hasKey;
   }
+  cameraInterpSelect.disabled = !hasKey;
   cameraHint.textContent = hasKey
     ? `Camera key on frame ${project.currentFrame}. The camera holds this framing until the next key.`
     : "No camera key on this frame. The camera holds its last key until the next one, so one key frames the whole animation.";
@@ -1066,6 +1354,7 @@ for (const [input, field] of [
   [cameraYInput, "y"],
   [cameraWidthInput, "width"],
   [cameraHeightInput, "height"],
+  [cameraRotationInput, "rotation"],
 ]) {
   input.addEventListener("change", () => {
     const value = Number(input.value);
@@ -1076,9 +1365,14 @@ for (const [input, field] of [
     const patch = { [field]: Math.round(value) };
     if (field === "width") patch.width = Math.max(16, patch.width);
     if (field === "height") patch.height = Math.max(16, patch.height);
+    if (field === "rotation") patch.rotation = patch.rotation % 360;
     updateCameraKey(patch);
   });
 }
+
+cameraInterpSelect.addEventListener("change", () => {
+  updateCameraKey({ interp: cameraInterpSelect.value });
+});
 
 /** Change the framing of the camera key on the current frame. */
 function updateCameraKey(patch) {
@@ -1116,10 +1410,10 @@ function renderCameraRow(columns, start) {
   head.append(name);
 
   const add = element("button", "tl-icon", "◆");
-  add.title = "Add a camera key on the current frame";
+  add.title = "Add or remove the camera key on the current frame";
   add.addEventListener("click", (event) => {
     event.stopPropagation();
-    addCameraKey();
+    toggleCameraKey();
   });
 
   const remove = element("button", "tl-icon", "✕");
@@ -1841,8 +2135,9 @@ function canvasPoint(event) {
   const canvasY = ((event.clientY - rect.top) * state.project.height) / rect.height;
 
   // In the camera view the stage shows a crop, so the pointer has to be
-  // mapped back through the camera to find the canvas position.
-  const view = state.cameraView
+  // mapped back through the camera to find the canvas position. The camera
+  // tool works on the whole canvas, so it is never mapped.
+  const view = state.cameraView && state.tool !== "camera"
     ? cameraView(state.project.camera, state.project.currentFrame, state.project.width, state.project.height)
     : null;
   if (!view) return [canvasX, canvasY];
@@ -1905,6 +2200,18 @@ canvas.addEventListener("pointerdown", (event) => {
     pickColourAt(event);
     return;
   }
+  if (state.tool === "camera") {
+    // The camera tool aims the shot instead of painting.
+    try {
+      canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic or already-released pointers have nothing to capture.
+    }
+    const [x, y] = canvasPoint(event);
+    // Holding Shift turns the frame instead of moving it.
+    startCameraDrag({ x, y }, { forceRotate: event.shiftKey });
+    return;
+  }
   if (event.pointerType === "touch" && !state.touchDraw) {
     setStatus("Touch drawing is off — turn it on in the tool panel");
     return;
@@ -1953,6 +2260,12 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (state.cameraDrag) {
+    const [x, y] = canvasPoint(event);
+    updateCameraDrag({ x, y });
+    renderCanvas();
+    return;
+  }
   if (!state.drawing) return;
   const point = drawPoint(event);
 
@@ -1976,6 +2289,10 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 function endStroke() {
+  if (state.cameraDrag) {
+    commitCameraDrag();
+    return;
+  }
   if (!state.drawing) return;
   state.drawing = null;
 
@@ -2023,6 +2340,7 @@ const TOOL_BUTTONS = {
   rect: () => rectToolButton,
   ellipse: () => ellipseToolButton,
   fill: () => fillToolButton,
+  camera: () => cameraToolButton,
 };
 
 const TOOL_STATUS = {
@@ -2033,6 +2351,7 @@ const TOOL_STATUS = {
   rect: "Rectangle — drag opposite corners (R)",
   ellipse: "Ellipse — drag the outline (E)",
   fill: "Fill — click a region to flood it with the colour (F)",
+  camera: "Camera — drag the frame to aim the shot, drag a corner to resize (C)",
 };
 
 function selectTool(tool) {
@@ -2044,8 +2363,9 @@ function selectTool(tool) {
     buttonOf().classList.toggle("active", active);
     buttonOf().setAttribute("aria-pressed", String(active));
   }
-  colorInput.disabled = tool === "eraser" || tool === "fill";
+  colorInput.disabled = tool === "eraser" || tool === "fill" || tool === "camera";
   canvas.classList.toggle("picking", picking);
+  canvas.classList.toggle("camera-tool", tool === "camera");
   setStatus(TOOL_STATUS[tool] ?? "Tool ready");
 }
 
@@ -2056,6 +2376,7 @@ lineToolButton.addEventListener("click", () => selectTool("line"));
 rectToolButton.addEventListener("click", () => selectTool("rect"));
 ellipseToolButton.addEventListener("click", () => selectTool("ellipse"));
 fillToolButton.addEventListener("click", () => selectTool("fill"));
+cameraToolButton.addEventListener("click", () => selectTool("camera"));
 
 function selectedWidth() {
   return Number(widthInput.value);
@@ -3039,7 +3360,8 @@ const KEYS = [
       ["Rectangle", "R"],
       ["Ellipse", "V"],
       ["Fill", "F"],
-      ["Add a camera key on this frame", "C"],
+      ["Add a camera key on this frame", "Shift+C"],
+      ["Camera tool", "C"],
       ["Smaller / larger brush", "[ / ]"],
       ["Clear the current drawing", "Backspace"],
     ],
@@ -3282,9 +3604,14 @@ document.addEventListener("keydown", (event) => {
       selectTool("fill");
       return;
     }
+    if (key === "c" && event.shiftKey) {
+      event.preventDefault();
+      toggleCameraKey();
+      return;
+    }
     if (key === "c") {
       event.preventDefault();
-      addCameraKey();
+      selectTool("camera");
       return;
     }
     if (key === "i") {
