@@ -257,6 +257,40 @@ test("the id inside a blob is the id the database names", async () => {
   }
 });
 
+test("the paper colour is written where Clip Studio Paint reads it", async () => {
+  // Clip Studio Paint does not draw the paper from pixels. It reads the
+  // colour from the document settings and from the draw colour of the
+  // paper layer, and each channel sits in the top byte of a 32 bit word.
+  // A white paper therefore has 0xffffffff in every one of them.
+  const project = createProject(64, 48, "#ff00ff");
+  const written = await createClipBuffer(project, { name: "paper" });
+  const chunks = readChunks(new Buffer(written.buffer));
+  const database = await openDatabase(
+    new Buffer(chunks.find((chunk) => chunk.name === "CHNKSQLi").payload),
+  );
+  try {
+    const settings = database
+      .prepare(
+        "SELECT DefaultPagePaperRed AS red, DefaultPagePaperGreen AS green, DefaultPagePaperBlue AS blue FROM Project LIMIT 1",
+      )
+      .get();
+    assert.equal(settings.red, 0xff000000);
+    assert.equal(settings.green, 0);
+    assert.equal(settings.blue, 0xff000000);
+
+    const layer = database
+      .prepare(
+        "SELECT DrawColorMainRed AS red, DrawColorMainGreen AS green, DrawColorMainBlue AS blue FROM Layer WHERE LayerType = 1584 LIMIT 1",
+      )
+      .get();
+    assert.equal(layer.red, 0xff000000);
+    assert.equal(layer.green, 0);
+    assert.equal(layer.blue, 0xff000000);
+  } finally {
+    await database.close();
+  }
+});
+
 test("a blob whose id the database does not name is caught", async () => {
   const file = await broken((db) => {
     db.prepare(

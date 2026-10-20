@@ -457,6 +457,35 @@ the one thing that could make Clip Studio Paint reject a file that otherwise
 opens, and a static file that opens is worth more than an animated file that
 does not.
 
+## The paper
+
+The paper is not a picture. Clip Studio Paint reads its colour from the
+document settings and from the draw colour of the paper layer, and each
+channel sits in the **top byte of a 32 bit word**:
+
+| Column | Meaning |
+|---|---|
+| `Project.DefaultPagePaperRed` | the red channel, in the top byte |
+| `Project.DefaultPagePaperGreen` | the green channel, in the top byte |
+| `Project.DefaultPagePaperBlue` | the blue channel, in the top byte |
+| `Layer.DrawColorMainRed` and its two sisters | the same, on the paper layer |
+
+A white paper therefore has `0xffffffff` in every one of them, and the
+`Layer` row of the paper also carries `DrawColorEnable = 1` and
+`DrawToRenderOffscreenType = 61`.
+
+The initial colour in the `Offscreen.Attribute` of the paper layer holds
+the same colour as a packed `RRGGBBAA` word, but Clip Studio Paint does
+**not** read the paper from it: a document whose initial colour says
+magenta and whose settings say white is drawn with a white paper. The
+settings are what the application reads.
+
+This was found by measurement, not by reading the program: writing
+`0x11000000`, `0x00220000` and `0x00003300` into the three channels and
+looking at the canvas in Clip Studio Paint gave red `0x11`, green `0x00`
+and blue `0x00`, which says the top byte of each word is the channel and
+nothing else.
+
 ## How CSP writes a file
 
 Putting it together, the method CSP uses is:

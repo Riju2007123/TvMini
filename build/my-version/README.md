@@ -203,6 +203,24 @@ documents on every change to the writer and
 The two agree today: the composite of a written document is identical to the
 render of the same project.
 
+### Opening it in Clip Studio Paint
+
+The documents are also opened in Clip Studio Paint itself, which is the only
+way to know that the real application agrees:
+
+```powershell
+node tools\clip-csp-verify.mjs out
+```
+
+It writes a document whose paper is a colour that occurs nowhere else,
+opens it in Clip Studio Paint, takes a picture of the window, finds the
+canvas in that picture by that colour and compares every pixel of it with
+the picture this application renders. The comparison is exact, and it
+passes.
+
+This one needs Clip Studio Paint to be installed, so it does not run in
+the workflow; it is a check to run by hand.
+
 ## What each feature does
 
 | Feature | Behaviour | Code |

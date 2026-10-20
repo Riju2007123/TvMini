@@ -553,7 +553,29 @@ function setLayerPixels(database, layerId, rgba, pixels) {
   pixels.set(id, payload);
 }
 
+/**
+ * The colour of the paper.
+ *
+ * Clip Studio Paint does not draw the paper from pixels: it reads the
+ * colour from the document settings and from the draw colour of the paper
+ * layer. Each channel sits in the top byte of a 32 bit word, so a paper that
+ * is white has 0xffffffff in every one of them.
+ */
+function paperChannel(value) {
+  return (value << 24) >>> 0;
+}
+
 function setPaperColor(database, rgba) {
+  const [red, green, blue] = [rgba[0], rgba[1], rgba[2]].map(paperChannel);
+  database
+    .prepare("UPDATE Project SET DefaultPagePaperRed = ?, DefaultPagePaperGreen = ?, DefaultPagePaperBlue = ?")
+    .run(red, green, blue);
+  database
+    .prepare(
+      "UPDATE Layer SET DrawColorMainRed = ?, DrawColorMainGreen = ?, DrawColorMainBlue = ? WHERE LayerType = 1584",
+    )
+    .run(red, green, blue);
+
   const paper = readOne(
     database,
     "SELECT MainId, LayerRenderMipmap FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
@@ -740,7 +762,10 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     const projectLayers = project.layers.length
       ? project.layers
       : [{ name: "Layer 1", visible: true, locked: false, opacity: 1, drawings: [] }];
-    const bottomToTop = [...projectLayers].reverse();
+    // A folder holds other layers and has no picture of its own, so it is
+    // left out: the layers inside it are written as layers of their own.
+    const drawable = projectLayers.filter((layer) => layer.type !== "group");
+    const bottomToTop = [...drawable].reverse();
     const created = [];
 
     for (let index = 0; index < bottomToTop.length; index += 1) {
