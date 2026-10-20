@@ -17,10 +17,13 @@ const TEMPLATE = path.join(__dirname, "..", "public", "assets", "clip-template.c
  * can reuse it. Under Node the blank template is read from disk instead of
  * being fetched over HTTP.
  */
-export async function createClipBuffer(project, { name = "TVMini export", animation = false } = {}) {
+export async function createClipBuffer(
+  project,
+  { name = "TVMini export", animation = false, validate = true } = {},
+) {
   const restore = setTemplateLoader(async () => Buffer.from(await fs.readFile(TEMPLATE)));
   try {
-    return await createClipBufferCore(project, { name, animation });
+    return await createClipBufferCore(project, { name, animation, validate });
   } finally {
     restore();
   }

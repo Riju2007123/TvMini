@@ -1,0 +1,86 @@
+name: Check the .clip files
+
+# The `.clip` writer has to produce files that Clip Studio Paint opens. A
+# file with a dangling pointer does not fail in CSP - it opens and the layer
+# is simply empty - so the result is checked by a second implementation that
+# was written separately:
+#
+#   - `clip-validate` says whether every reference inside the document
+#     resolves;
+#   - `clip_cross_check.py` composites the document and compares it with the
+#     picture this application renders, pixel by pixel.
+#
+# The check needs Python, so it runs in its own job; the site itself is
+# still built by pages.yml.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "build/my-version/public/core/clip*.js"
+      - "build/my-version/public/core/png.js"
+      - "build/my-version/public/core/model.js"
+      - "build/my-version/public/core/timeline.js"
+      - "build/my-version/src/clip*.js"
+      - "build/my-version/src/model.js"
+      - "build/my-version/public/assets/clip-template.clip"
+      - "build/my-version/tools/clip*"
+      - ".github/workflows/clip-check.yml"
+  pull_request:
+    paths:
+      - "build/my-version/public/core/clip*.js"
+      - "build/my-version/public/core/png.js"
+      - "build/my-version/public/core/model.js"
+      - "build/my-version/public/core/timeline.js"
+      - "build/my-version/src/clip*.js"
+      - "build/my-version/src/model.js"
+      - "build/my-version/public/assets/clip-template.clip"
+      - "build/my-version/tools/clip*"
+      - ".github/workflows/clip-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-check:
+    name: Cross-check against clipparse
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        # Node 22.5 or newer: the .clip writer uses the built-in
+        # node:sqlite module.
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the reference implementation
+        # The image extra brings numpy and Pillow, which the comparison
+        # needs.
+        run: pip install "clipparse[image]"
+
+      - name: Export the documents
+        working-directory: build/my-version
+        run: |
+          node tools/clip-export-all.mjs out
+          node tools/clip-cross-check.mjs out
+
+      - name: Check the structure of every document
+        working-directory: build/my-version
+        run: |
+          for file in out/*.clip; do
+            echo "== $file"
+            clip-validate "$file" || exit 1
+          done
+
+      - name: Compare the composite with our own render
+        working-directory: build/my-version
+        run: python tools/clip_cross_check.py out/cross-check.clip out/tvmini-render.png

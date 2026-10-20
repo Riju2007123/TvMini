@@ -3,6 +3,7 @@ import { openDatabase } from "./sqlite.js";
 import { ValidationError } from "./model.js";
 import { decodePng, encodePng, renderLayerRgba, renderProject } from "./png.js";
 import { parseClipContainer } from "./clip.js";
+import { validateClipBytes } from "./clip-validate.js";
 import {
   ALPHA_TILE,
   BLOCK_BEGIN,
@@ -663,6 +664,36 @@ function updateExternalChunks(database, headBody, pixels) {
 }
 
 /** Read the blank CSP document that every generated .clip is built from. */
+/**
+ * Make sure a layer really has its pixels behind it.
+ *
+ * A `.clip` that names a blob the file does not hold does not fail in Clip
+ * Studio Paint - the document opens and the layer is empty. The writer knows
+ * which layers it filled, so it can say so instead of leaving a broken file
+ * behind.
+ */
+function assertLayerHasPixels(database, layerId, pixels) {
+  const row = readOne(
+    database,
+    `SELECT o.BlockData AS blockData
+     FROM Layer l
+     JOIN Mipmap m ON m.MainId = l.LayerRenderMipmap
+     JOIN MipmapInfo mi ON mi.MainId = m.BaseMipmapInfo
+     JOIN Offscreen o ON o.MainId = mi.Offscreen
+     WHERE l.MainId = ?`,
+    layerId,
+  );
+  if (!row) {
+    throw new ValidationError(`layer ${layerId} has no offscreen to hold its pixels`);
+  }
+  const id = asciiExternalId(row.blockData);
+  if (!id || !pixels.has(id)) {
+    throw new ValidationError(
+      `layer ${layerId} would open empty: its pixels are not in the file`,
+    );
+  }
+}
+
 async function loadTemplate() {
   return templateLoader();
 }
@@ -677,7 +708,7 @@ async function loadTemplate() {
  * that opens is worth more than an animated file that does not, so the
  * writer refuses to guess.
  */
-export async function createClipBuffer(project, { name = "TVMini export", animation = false } = {}) {
+export async function createClipBuffer(project, { name = "TVMini export", animation = false, validate = true } = {}) {
   if (animation) {
     throw new ValidationError(
       "writing the animation of a .clip is not ready yet; the keyframes of a Clip Studio track cannot be written safely",
@@ -773,6 +804,10 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       currentLayerId = target.layerId;
     }
 
+    // Every layer that was filled has to end up with its pixels in the file.
+    if (imageLayer) assertLayerHasPixels(database, imageLayer.layerId, pixels);
+    for (const target of created) assertLayerHasPixels(database, target.layerId, pixels);
+
     if (imageLayer) {
       if (projectLayers.length === 0) currentLayerId = imageLayer.layerId;
     }
@@ -818,6 +853,20 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     database = null;
 
     const output = buildContainer(external.head, bytes, external.entries);
+
+    // The document is checked before it is handed over. A `.clip` that has a
+    // dangling pointer does not fail in Clip Studio Paint - it opens and the
+    // layer is simply empty - so a broken file has to be caught here, where
+    // there is still something to say about it.
+    if (validate) {
+      const report = await validateClipBytes(output);
+      if (!report.ok) {
+        throw new ValidationError(
+          `the .clip that was written is not consistent: ${report.problems.join("; ")}`,
+        );
+      }
+    }
+
     return {
       buffer: output,
       width: project.width,

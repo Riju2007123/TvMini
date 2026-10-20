@@ -352,3 +352,16 @@ test("sampleEllipse builds a closed ring around the bounding box", () => {
   }
   assert.equal(sampleEllipse(5, 5, 5, 9), null); // zero width
 });
+
+test("a layer with no drawing paints nothing instead of failing", () => {
+  // A layer can have no drawing at the frame that is being painted: an
+  // empty layer, or a frame the layer does not cover. The `.clip` export
+  // paints every layer, so this has to give an empty picture rather than
+  // throw.
+  const project = createProject(32, 24);
+  project.layers[0].drawings = [];
+
+  const rgba = renderLayerRgba(project, project.layers[0], 1);
+  assert.equal(rgba.length, 32 * 24 * 4);
+  assert.ok(rgba.every((value) => value === 0), "the picture should be empty");
+});

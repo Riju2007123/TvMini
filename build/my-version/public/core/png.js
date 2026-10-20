@@ -332,8 +332,10 @@ function needsMaskPass(stroke) {
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
 function paintDrawing(width, height, drawing) {
   // A drawing may carry a brush image; it is the shape of the brush for the
-  // time of this drawing.
-  brushStamp = stampFor(drawing.brush);
+  // time of this drawing. A layer can have no drawing at the frame that is
+  // being painted - an empty layer, or a frame the layer does not cover -
+  // and that paints nothing rather than failing.
+  brushStamp = drawing ? stampFor(drawing.brush) : null;
   try {
     return paintDrawingInner(width, height, drawing);
   } finally {

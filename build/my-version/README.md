@@ -137,6 +137,11 @@ field by field.
   bundled Clip Studio template. Every export gets a fresh document id, the
   container is written the way CSP writes it, and the frame rate and the frame
   range of the project are written into the timeline.
+- `public/core/clip-validate.js` checks that every pointer in a document
+  resolves — the layer tree, the mipmap chains, the thumbnails and the blobs.
+  The writer runs it on every file it produces and refuses to hand out a
+  document that fails it, because a `.clip` with a dangling pointer does not
+  fail in Clip Studio Paint: it opens and the layer is simply empty.
 
 **What the reader does:** it reads the container, every table, every layer row
 with its kind, the mipmap chain, the timeline, the tracks, and the raster
@@ -167,6 +172,37 @@ npm test
 node --test
 ```
 
+## Checking a written `.clip`
+
+A `.clip` that points at something the file does not hold does not fail in
+Clip Studio Paint. The document opens and the layer is simply empty, so the
+fault has to be found mechanically.
+
+```powershell
+# check a document with this application's own check
+node tools\clip-validate.mjs file.clip
+
+# export a set of documents that cover the writer's paths
+node tools\clip-export-all.mjs out
+
+# show the layer tree, the mipmap chain and which blobs are in the file
+node tools\clip-structure.mjs file.clip
+```
+
+The check is also run against a second implementation that was written
+separately — [clipparse](https://github.com/wamsoft/clipparse) — so the
+documents are not only checked against themselves. The
+`clip-check` workflow in `.github/workflows/clip-check.yml` exports the
+documents on every change to the writer and
+
+- runs `clip-validate` on each of them, which says whether every reference
+  inside the document resolves, and
+- composites a document with that implementation and compares it with the
+  picture this application renders, pixel by pixel.
+
+The two agree today: the composite of a written document is identical to the
+render of the same project.
+
 ## What each feature does
 
 | Feature | Behaviour | Code |
@@ -175,6 +211,7 @@ node --test
 | Save As | picks a path, appends `.tvmini`, confirms overwrite | `public/app.js` `saveAs` |
 | Export PNG | renders the current frame and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
 | Export `.clip` | writes the current frame as a layered Clip Studio document | `src/clip-write.js`, `src/store.js` `exportClip` |
+| Check a written `.clip` | says whether every pointer in the document resolves; the writer refuses to produce one that does not | `public/core/clip-validate.js` |
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
 | Inspect `.clip` | the container, every table, the layers, the timeline and the external blobs | `src/clip.js` `readClipDocument` |
 | Read `.clip` pixels | the raster of every layer, decoded out of the `CHNKExta` blobs | `src/clip.js` `readClipLayers` |
