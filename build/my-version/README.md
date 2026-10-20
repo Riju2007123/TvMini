@@ -143,6 +143,14 @@ with its kind, the mipmap chain, the timeline, the tracks, and the raster
 pixels of the layers, which are decoded out of the `CHNKExta` blobs the
 database points at.
 
+**What the writer does not do:** it writes a static document. The animation of a
+Clip Studio track lives in CSP's own serialised action data, and a malformed
+mixer is the one thing that could make Clip Studio Paint reject a file that
+otherwise opens, so `createClipBuffer` takes an `animation` option that
+defaults to off and refuses with a clear message until the keyframes can be
+written safely. The reader has no such limit: it reads the timeline, the
+tracks and the properties each track animates.
+
 **Compatibility limitation:** this is not a full native `.clip` editor. The
 reader does not decode masks, vector layers, the animation mixers or every
 version-specific field. The writer creates a new document from the template;

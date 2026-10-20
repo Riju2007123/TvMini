@@ -667,8 +667,22 @@ async function loadTemplate() {
   return templateLoader();
 }
 
-/** Build a CSP-openable .clip from a TVMini project. */
-export async function createClipBuffer(project, { name = "TVMini export" } = {}) {
+/**
+ * Build a CSP-openable .clip from a TVMini project.
+ *
+ * `animation` is off by default and has to stay off until the mixer of a
+ * Clip Studio track can be written. The action data of a track is CSP's own
+ * serialised document, and a malformed one is the single thing that could
+ * make Clip Studio Paint reject a file that otherwise opens. A static file
+ * that opens is worth more than an animated file that does not, so the
+ * writer refuses to guess.
+ */
+export async function createClipBuffer(project, { name = "TVMini export", animation = false } = {}) {
+  if (animation) {
+    throw new ValidationError(
+      "writing the animation of a .clip is not ready yet; the keyframes of a Clip Studio track cannot be written safely",
+    );
+  }
   const template = parseContainer(await loadTemplate());
   let database;
 

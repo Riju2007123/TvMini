@@ -336,6 +336,14 @@ test("a written .clip reads back with the same pixels", async () => {
   assert.ok(matching > 100, `only ${matching} pixels matched`);
 });
 
+test("writing an animation is refused until the mixer can be written", async () => {
+  const project = createProject(320, 240);
+  await assert.rejects(
+    () => createClipBuffer(project, { animation: true }),
+    /not ready yet/,
+  );
+});
+
 test("an action document is read and its properties are named", async () => {
   await withTempDir(async (dir) => {
     // The header of the serialised form CSP writes for a track: the magic,
