@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProject, normalizeProject, ValidationError } from "./src/model.js";
-import { readClipPreview } from "./src/clip.js";
+import { readClipDocument, readClipPreview } from "./src/clip.js";
 import { createTvppBuffer, importTvppBytes } from "./src/tvpp.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
 import { exportClip, exportPng, openProject, saveProject, exportTvpp } from "./src/store.js";
@@ -198,6 +198,21 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
           },
         });
         sendJson(res, 200, { path: preview.path, name: preview.name, project });
+        return;
+      }
+
+      if (route === "GET /api/inspect-clip") {
+        // A read-only report of what is inside a .clip file. The file is
+        // opened, never written.
+        const document = await readClipDocument(url.searchParams.get("path"));
+        sendJson(res, 200, {
+          ...document,
+          preview: {
+            width: document.preview.width,
+            height: document.preview.height,
+            png: document.preview.png.toString("base64"),
+          },
+        });
         return;
       }
 

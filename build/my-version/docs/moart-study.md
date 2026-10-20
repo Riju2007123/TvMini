@@ -301,3 +301,8 @@ only; no code, markup or CSS was copied.
   model, the interpolation, the draggable frame and the cropped export are
   in, with tests in `test/camera.test.js`. The full-timeline `.clip` reader
   is still open.
+- A **read-only `.clip` container inspector** came with it
+  (`readClipDocument` in `src/clip.js`): it reports the tables, the layer
+  records, the canvas size and its own limits, and it never writes to the
+  file. It reports the native structure, it does not claim to decode CSP's
+  raster tiles into editable pixels.

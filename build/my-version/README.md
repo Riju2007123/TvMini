@@ -154,6 +154,7 @@ node --test
 | Export PNG | renders the current frame and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
 | Export `.clip` | writes the current frame as a layered Clip Studio document | `src/clip-write.js`, `src/store.js` `exportClip` |
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
+| Inspect `.clip` | read-only report of the tables, layers and limits inside a `.clip` | `src/clip.js` `readClipDocument` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
 | Eraser | clears its own layer, revealing lower layers/image | `public/app.js`, `src/png.js` |
@@ -359,6 +360,34 @@ A transparent or blending stroke is painted into a mask first and then applied
 in one pass, so a stroke never darkens its own overlaps. The blend maths
 follows the canvas rule (blend the colours, then composite by source alpha),
 which keeps the browser preview and the exported pixels in step.
+
+## Reading a `.clip` file
+
+TVMini can read two things out of a Clip Studio `.clip` file:
+
+1. **The preview** — the `CanvasPreview` PNG inside the embedded database.
+   This is what File → *Import .clip preview…* uses; the preview becomes the
+   canvas and the original file is never touched.
+2. **The container itself** — `readClipDocument()` in `src/clip.js` opens the
+   embedded SQLite database read-only and reports what is in it: the table
+   list, the layer records (folder and paper rows are skipped), the canvas
+   size, and the limits of the reader.
+
+The container reader is **inspection only**. It says so in its own output:
+
+```json
+{
+  "format": "clip-studio-native-container",
+  "readOnly": true,
+  "capabilities": { "preview": true, "layerMetadata": true, "editableRasterPixels": false },
+  "limitations": ["Raster tile payloads are not decoded into editable pixels.", "…"]
+}
+```
+
+CSP's raster tiles are a proprietary format, so TVMini does **not** claim to
+decode them into editable pixels. Unknown tables and columns are reported
+rather than rewritten or dropped, and a file is never modified by reading
+it. A `.clip` that is opened in TVMini is never written back.
 
 ## Camera track
 

@@ -425,6 +425,7 @@ If any step fails, unlink the temp file and return the error.
 | `GET` | `/api/stat?path=` | — | `{ exists, dir, size, path }` |
 | `POST` | `/api/open` | `{ path }` | `{ project, path, recent }` (v1 migrated) |
 | `POST` | `/api/import-clip` | `{ path }` | `{ project, path, name }` (read-only preview import; one empty animation layer) |
+| `GET` | `/api/inspect-clip` | `?path=…` | `{ name, format, readOnly, tables, layers, capabilities, limitations, preview }` (read-only report of the native container) |
 | `POST` | `/api/save` | `{ path, project }` | `{ path, bytes, recent }` |
 | `POST` | `/api/export` | `{ path, project }` | `{ path, bytes, width, height }` (current frame PNG) |
 | `POST` | `/api/export-clip` | `{ path, project }` | `{ path, bytes, width, height, layers }` (current frame layered `.clip`) |

@@ -131,6 +131,49 @@ test("readClipDocument reports native container capabilities without claiming ed
   });
 });
 
+test("readClipDocument reads the layer metadata and leaves the folder rows out", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "layers.clip");
+    const png = encodePng(32, 24, solid(32, 24, [40, 80, 120]));
+    await writeClipFixture(target, {
+      width: 32,
+      height: 24,
+      png,
+      project: { name: "My Animation", width: 1920, height: 1080 },
+      layers: [
+        // A paper row and a folder row are structure, not paint layers.
+        { id: 1, name: "Background", type: 1584 },
+        { id: 2, name: "Folder", folder: 1 },
+        { id: 3, name: "Ink", opacity: 128 },
+        { id: 4, name: "Hidden", visible: 0, locked: 1 },
+      ],
+    });
+
+    const document = await readClipDocument(target);
+
+    assert.equal(document.projectName, "My Animation");
+    assert.equal(document.width, 1920);
+    assert.equal(document.height, 1080);
+    assert.equal(document.capabilities.layerMetadata, true);
+
+    // Only the two paint layers survive.
+    assert.equal(document.layers.length, 2);
+    assert.deepEqual(document.layers.map((layer) => layer.name), ["Ink", "Hidden"]);
+
+    const [ink, hidden] = document.layers;
+    assert.equal(ink.opacity, 0.5);
+    assert.equal(ink.visible, true);
+    assert.equal(ink.locked, false);
+    assert.equal(hidden.opacity, 1);
+    assert.equal(hidden.visible, false);
+    assert.equal(hidden.locked, true);
+    assert.equal(ink.pixelDataSupported, false);
+
+    assert.ok(document.tables.includes("Layer"));
+    assert.ok(document.layerColumns.includes("LayerOpacity"));
+  });
+});
+
 test("readClipPreview rejects foreign files and damaged databases", async () => {
   await withTempDir(async (dir) => {
     const text = path.join(dir, "notes.clip");
