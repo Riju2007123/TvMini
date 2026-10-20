@@ -223,6 +223,38 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
   return { data: value.data, width: imageWidth, height: imageHeight };
 }
 
+/**
+ * Check a brush image.
+ *
+ * A brush keeps its own size, not the size of the canvas, so it is checked
+ * on its own. The size is read out of the picture itself rather than taken
+ * on trust.
+ */
+function normalizeBrush(value, maxBase64, label) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  if (typeof value.data !== "string" || value.data.length === 0) {
+    throw new ValidationError(`${label}.data must be base64 text`);
+  }
+  if (value.data.length > maxBase64) {
+    throw new ValidationError(`${label}.data is too large`);
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) {
+    throw new ValidationError(`${label}.data must be base64 text`);
+  }
+  const bytes = Buffer.from(value.data, "base64");
+  if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47) {
+    throw new ValidationError(`${label}.data must be a PNG`);
+  }
+  return {
+    data: value.data,
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+  };
+}
+
 function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   const label = `layers[${index}]`;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -297,6 +329,12 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
         `${dLabel}.image`,
       );
       if (image) clean.image = image;
+    }
+    // A drawing may carry a brush image, the way a Clip Studio Paint brush
+    // does. Its alpha is the shape of the brush.
+    if (drawing.brush !== undefined) {
+      const brush = normalizeBrush(drawing.brush, 8_000_000, `${dLabel}.brush`);
+      if (brush) clean.brush = brush;
     }
     return clean;
   });

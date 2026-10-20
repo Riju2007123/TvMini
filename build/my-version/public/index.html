@@ -134,6 +134,16 @@
           </div>
 
           <div class="panel-title">Brush</div>
+
+          <div class="brush-image-row">
+
+            <button id="brushImageButton" type="button" title="Use a picture as the shape of the brush. A PNG works, and so does a Clip Studio Paint brush.">Brush image…</button>
+
+            <span id="brushImageName" class="brush-image-name">the round tip</span>
+
+          </div>
+
+          <input id="brushImageInput" type="file" accept="image/png,.sut" hidden />
           <label class="field">
             <span>Width <output id="widthValue">6</output></span>
             <input id="width" type="range" min="1" max="60" value="6" />

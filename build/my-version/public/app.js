@@ -3,6 +3,7 @@ import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
+import { brushImageFromBytes } from "./core/brush.js";
 import {
   cameraAt,
   cameraCorners,
@@ -1363,6 +1364,47 @@ cameraZoomOutButton.addEventListener("click", () => {
   const box = canvas.getBoundingClientRect();
   zoomStage(1 / (1 + ZOOM_STEP), box.left + box.width / 2, box.top + box.height / 2);
   setStatus("Zoomed out");
+});
+
+/* ------------------------------------------------------- the brush image */
+
+const brushImageButton = document.getElementById("brushImageButton");
+const brushImageInput = document.getElementById("brushImageInput");
+const brushImageName = document.getElementById("brushImageName");
+
+brushImageButton.addEventListener("click", () => brushImageInput.click());
+
+/**
+ * Use a picture as the shape of the brush.
+ *
+ * A PNG works, and so does a Clip Studio Paint brush, because the picture is
+ * looked for inside the file. The picture becomes the tip of the brush of
+ * the drawing that is being drawn on.
+ */
+brushImageInput.addEventListener("change", async () => {
+  const file = brushImageInput.files?.[0];
+  brushImageInput.value = "";
+  if (!file) return;
+
+  const picture = brushImageFromBytes(new Uint8Array(await file.arrayBuffer()));
+  if (!picture) {
+    setStatus("That file holds no picture the brush can use", true);
+    return;
+  }
+
+  const layer = currentLayer();
+  if (layer.locked) {
+    setStatus("This layer is locked — unlock it first", true);
+    return;
+  }
+  const drawing = ensureDrawing(layer, state.project.currentFrame);
+  const before = snapshot();
+  drawing.brush = { data: picture.data };
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  brushImageName.textContent = file.name;
+  setStatus(`The brush is now ${file.name}`);
 });
 
 /**

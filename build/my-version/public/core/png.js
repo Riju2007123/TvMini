@@ -28,8 +28,99 @@ function setPixel(layer, width, height, x, y, rgb, erase) {
   layer[index + 3] = 255;
 }
 
+/**
+ * The brush stamp in use while a drawing is painted.
+ *
+ * A drawing may carry a brush image, the way a Clip Studio Paint brush does.
+ * Its alpha is the shape of the brush, so the disc below becomes the stamp.
+ * It is set for the time of one drawing, so nothing has to be threaded
+ * through every step of the painting.
+ */
+let brushStamp = null;
+
+/** The stamps that have been unpacked, so a stroke does not unpack it again. */
+const stampCache = new Map();
+
+/**
+ * Unpack a brush image into the plane of its alpha.
+ *
+ * `brush.data` is the base64 of a PNG, the same way a drawing's own image is
+ * kept.
+ */
+function stampFor(brush) {
+  if (!brush) return null;
+  const key = brush.data;
+  if (stampCache.has(key)) return stampCache.get(key);
+
+  let stamp = null;
+  try {
+    const bytes = typeof key === "string" ? Buffer.from(key, "base64") : key;
+    const image = decodePng(bytes);
+    const alpha = new Uint8Array(image.width * image.height);
+    for (let index = 0; index < alpha.length; index += 1) {
+      alpha[index] = image.data[index * 4 + 3];
+    }
+    stamp = { width: image.width, height: image.height, alpha };
+  } catch {
+    stamp = null;
+  }
+  if (stampCache.size > 8) stampCache.clear();
+  stampCache.set(key, stamp);
+  return stamp;
+}
+
+/** Paint one pixel of the mask with a coverage that is not full. */
+function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  if (px < 0 || py < 0 || px >= width || py >= height) return;
+  const index = (py * width + px) * 4;
+
+  if (erase) {
+    layer[index + 3] = 0;
+    return;
+  }
+
+  layer[index] = rgb[0];
+  layer[index + 1] = rgb[1];
+  layer[index + 2] = rgb[2];
+  if (alpha > layer[index + 3]) layer[index + 3] = alpha;
+}
+
+/**
+ * Paint the brush image instead of a disc.
+ *
+ * The image is fitted to the size of the brush, the way Clip Studio Paint
+ * fits a brush texture, and its alpha is the coverage of every pixel.
+ */
+function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
+  const size = Math.max(1, radius * 2);
+  const x0 = Math.max(0, Math.floor(cx - radius));
+  const x1 = Math.min(width - 1, Math.ceil(cx + radius));
+  const y0 = Math.max(0, Math.floor(cy - radius));
+  const y1 = Math.min(height - 1, Math.ceil(cy + radius));
+  const stepX = brush.width / size;
+  const stepY = brush.height / size;
+  const left = cx - radius;
+  const top = cy - radius;
+
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const sx = Math.min(brush.width - 1, Math.floor((x + 0.5 - left) * stepX));
+      const sy = Math.min(brush.height - 1, Math.floor((y + 0.5 - top) * stepY));
+      const alpha = brush.alpha[sy * brush.width + sx];
+      if (alpha === 0) continue;
+      setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase);
+    }
+  }
+}
+
 /** Paint or erase a disc with hard edges (distance test) inside a bounding box. */
 function disc(layer, width, height, cx, cy, radius, rgb, erase) {
+  if (brushStamp) {
+    stamp(layer, width, height, cx, cy, radius, rgb, erase, brushStamp);
+    return;
+  }
   const x0 = Math.max(0, Math.floor(cx - radius));
   const x1 = Math.min(width - 1, Math.ceil(cx + radius));
   const y0 = Math.max(0, Math.floor(cy - radius));
@@ -240,6 +331,17 @@ function needsMaskPass(stroke) {
 
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
 function paintDrawing(width, height, drawing) {
+  // A drawing may carry a brush image; it is the shape of the brush for the
+  // time of this drawing.
+  brushStamp = stampFor(drawing.brush);
+  try {
+    return paintDrawingInner(width, height, drawing);
+  } finally {
+    brushStamp = null;
+  }
+}
+
+function paintDrawingInner(width, height, drawing) {
   const paint = new Uint8Array(width * height * 4);
   if (!drawing) return paint;
 
