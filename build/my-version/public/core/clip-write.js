@@ -1,8 +1,24 @@
-import { Buffer } from "./bytes.js";
-import { deflateSync } from "./zlib.js";
+﻿import { Buffer } from "./bytes.js";
 import { openDatabase } from "./sqlite.js";
 import { ValidationError } from "./model.js";
 import { decodePng, encodePng, renderLayerRgba, renderProject } from "./png.js";
+import { parseClipContainer } from "./clip.js";
+import {
+  ALPHA_TILE,
+  BLOCK_BEGIN,
+  BLOCK_END,
+  BLOCK_SIZE,
+  EMPTY_RECORD_SIZE,
+  buildBlockRecord,
+  buildTrailers,
+  encodeRgbaBlock,
+  joinAttribute,
+  parseAttribute,
+  splitAttribute,
+  u32,
+  u64,
+  utf16be,
+} from "./clip-blocks.js";
 
 const TEMPLATE_URL = new URL("../assets/clip-template.clip", import.meta.url);
 
@@ -27,28 +43,6 @@ export function setTemplateLoader(loader) {
   return () => {
     templateLoader = previous;
   };
-}
-
-const BLOCK_SIZE = 256;
-const EMPTY_RECORD_SIZE = 104;
-const ALPHA_TILE = 64;
-const BLOCK_BEGIN = Buffer.from("BlockDataBeginChunk", "utf16le").swap16();
-const BLOCK_END = Buffer.from("BlockDataEndChunk", "utf16le").swap16();
-
-function u32(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32BE(value >>> 0, 0);
-  return buffer;
-}
-
-function u64(value) {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64BE(BigInt(value), 0);
-  return buffer;
-}
-
-function utf16be(value) {
-  return Buffer.from(value, "utf16le").swap16();
 }
 
 function grid(width, height) {
@@ -79,75 +73,6 @@ export function mipLevels(width, height) {
     w = Math.max(1, Math.floor(w / 2));
     h = Math.max(1, Math.floor(h / 2));
   }
-}
-
-function splitAttribute(attribute) {
-  const sizes = [0, 1, 2, 3].map((index) => attribute.readUInt32BE(index * 4));
-  let offset = sizes[0];
-  const sections = [];
-  for (let index = 1; index < 4; index += 1) {
-    if (offset + sizes[index] > attribute.length) {
-      throw new ValidationError("the .clip template has a damaged offscreen description");
-    }
-    sections.push(attribute.subarray(offset, offset + sizes[index]));
-    offset += sizes[index];
-  }
-  if (offset !== attribute.length) {
-    throw new ValidationError("the .clip template has a damaged offscreen description");
-  }
-  return { sizes, sections };
-}
-
-function joinAttribute(sections) {
-  return Buffer.concat([
-    u32(16),
-    ...sections.map((section) => u32(section.length)),
-    ...sections,
-  ]);
-}
-
-/** Read the pieces of Offscreen.Attribute we need. */
-export function parseAttribute(attribute) {
-  const { sections } = splitAttribute(attribute);
-  const [parameter, initColor, blockSize] = sections;
-  const values = [];
-  for (let index = 0; index < 20; index += 1) {
-    values.push(parameter.readUInt32BE(22 + index * 4));
-  }
-  const blockMagic = blockSize.readUInt32BE(22);
-  const blockCount = blockSize.readUInt32BE(26);
-  const channels = blockSize.readUInt32BE(30);
-  const blockSizes = [];
-  for (let index = 0; index < blockCount; index += 1) {
-    blockSizes.push(blockSize.readUInt32BE(34 + index * 4));
-  }
-
-  const initMagic = initColor.readUInt32BE(22);
-  const hasInitColor = initColor.readUInt32BE(26) !== 0;
-  const initPacked = initColor.readUInt32BE(30);
-  const extraColors = initColor.readUInt32BE(34);
-  const initChannels = initColor.readUInt32BE(38);
-
-  return {
-    width: values[0],
-    height: values[1],
-    cols: values[2],
-    rows: values[3],
-    colorMode: values[4],
-    numChannels: values[6],
-    bitDepth: values[7],
-    blockHeight: values[14],
-    blockWidth: values[15],
-    blockMagic,
-    blockCount,
-    blockChannels: channels,
-    blockSizes,
-    initMagic,
-    hasInitColor,
-    initPacked,
-    extraColors,
-    initChannels,
-  };
 }
 
 /** Rebuild an Offscreen.Attribute for a new size, keeping its initial colour. */
@@ -226,87 +151,9 @@ function patchBlockSizes(attribute, sizes) {
   return joinAttribute([parameter, initColor, newBlockSize]);
 }
 
-function encodeRgbaBlock(rgba, width, height) {
-  const output = Buffer.alloc((height + ALPHA_TILE) * width * 4);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const source = (y * width + x) * 4;
-      const target = ((y + ALPHA_TILE) * width + x) * 4;
-      output[target] = rgba[source + 2];
-      output[target + 1] = rgba[source + 1];
-      output[target + 2] = rgba[source];
-      output[target + 3] = rgba[source + 3];
-    }
-  }
+/** The block codec lives in `clip-blocks.js` so the reader can decode it too. */
+export { parseAttribute };
 
-  // 256x256 alpha is folded into a 64x64 grid of 4x4 super-pixels, split
-  // into four 64-column tiles. This is the inverse of the CSP decoder.
-  for (let y = 0; y < ALPHA_TILE; y += 1) {
-    for (let tile = 0; tile < 4; tile += 1) {
-      for (let column = 0; column < ALPHA_TILE; column += 1) {
-        for (let channel = 0; channel < 4; channel += 1) {
-          const sourceY = y * 4 + tile;
-          const sourceX = column * 4 + channel;
-          const target = (y * width + tile * ALPHA_TILE + column) * 4 + channel;
-          output[target] = rgba[(sourceY * width + sourceX) * 4 + 3];
-        }
-      }
-    }
-  }
-  return output;
-}
-
-function buildBlockRecord(index, raw, width, height) {
-  const decompressed = (height + ALPHA_TILE) * width * 4;
-  const tail = Buffer.concat([u32(17), BLOCK_END]);
-  if (!raw) {
-    return Buffer.concat([
-      u32(EMPTY_RECORD_SIZE),
-      u32(19),
-      BLOCK_BEGIN,
-      u32(index),
-      u32(decompressed),
-      u32(width),
-      u32(height),
-      u32(0),
-      tail,
-    ]);
-  }
-
-  const compressed = deflateSync(raw);
-  return Buffer.concat([
-    u32(compressed.length + 112),
-    u32(19),
-    BLOCK_BEGIN,
-    u32(index),
-    u32(decompressed),
-    u32(width),
-    u32(height),
-    u32(1),
-    u32(compressed.length + 4),
-    writeU32LE(compressed.length),
-    compressed,
-    tail,
-  ]);
-}
-
-function buildTrailers(count) {
-  const parts = [];
-  for (const [name, value] of [
-    ["BlockStatus", 1],
-    ["BlockCheckSum", 0],
-  ]) {
-    parts.push(
-      u32(name.length),
-      utf16be(name),
-      u32(12),
-      u32(count),
-      u32(4),
-      ...Array(count).fill(u32(value)),
-    );
-  }
-  return Buffer.concat(parts);
-}
 
 /** Build the CHNKExta payload for one RGBA canvas image. */
 function buildPixelPayload(rgba, attribute) {
@@ -349,12 +196,6 @@ function buildPixelPayload(rgba, attribute) {
   };
 }
 
-function writeU32LE(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value >>> 0, 0);
-  return buffer;
-}
-
 function asciiExternalId(value) {
   if (!value) return null;
   const buffer = Buffer.from(value);
@@ -369,40 +210,39 @@ function newExternalId() {
   return Buffer.from(`extrnlid${hex.toUpperCase()}`, "ascii");
 }
 
+/**
+ * Read the container of the bundled template.
+ *
+ * The container format itself is shared with the reader, so the template is
+ * parsed with the same code that parses a document CSP wrote.
+ */
 function parseContainer(input) {
-  // A plain Uint8Array has no readBigUInt64BE, so wrap it first.
-  const data = Buffer.isBuffer(input) ? input : Buffer.from(input);
-  if (data.length < 24 || data.toString("ascii", 0, 8) !== "CSFCHUNK") {
+  let container;
+  try {
+    container = parseClipContainer(input);
+  } catch {
     throw new ValidationError("the bundled .clip template is not a Clip Studio file");
   }
-  const headerLength = Number(data.readBigUInt64BE(16));
-  let offset = headerLength;
-  let headBody = null;
-  let database = null;
-  let footLength = 0;
-
-  while (offset + 16 <= data.length) {
-    const name = data.toString("ascii", offset, offset + 8);
-    const length = Number(data.readBigUInt64BE(offset + 8));
-    const body = offset + 16;
-    if (!/^[\x20-\x7e]{8}$/.test(name) || length < 0 || body + length > data.length) {
-      throw new ValidationError("the bundled .clip template has a damaged container");
-    }
-    if (name === "CHNKHead") headBody = data.subarray(body, body + length);
-    else if (name === "CHNKSQLi") database = data.subarray(body, body + length);
-    else if (name === "CHNKFoot") {
-      footLength = length;
-      break;
-    }
-    offset = body + length;
-  }
-
-  if (!headBody || headBody.length !== 40 || !database) {
+  const head = container.chunks.find((chunk) => chunk.name === "CHNKHead");
+  if (!head || head.size !== 40 || !container.database) {
     throw new ValidationError("the bundled .clip template is incomplete");
   }
-  return { headerLength, headBody, database, footLength };
+  return {
+    headerLength: container.headerSize,
+    headBody: head.payload,
+    database: container.database,
+    footLength: container.footSize ?? 0,
+  };
 }
 
+/**
+ * Build the container CSP reads.
+ *
+ * The layout is the one CSP writes: a 24-byte header, the `CHNKHead` chunk,
+ * one `CHNKExta` chunk per external blob, the `CHNKSQLi` database and the
+ * `CHNKFoot` terminator. The head chunk records where the database starts,
+ * and the header records the size of the whole file.
+ */
 function buildContainer(headBody, database, externals) {
   let position = 24 + 16 + headBody.length;
   const withOffsets = externals.map(([id, payload]) => {
@@ -414,6 +254,11 @@ function buildContainer(headBody, database, externals) {
 
   const head = Buffer.from(headBody);
   head.writeBigUInt64BE(BigInt(binarySectionSize), 8);
+  // Every document CSP writes has its own id, so a new one is handed out
+  // instead of the one the template came with.
+  const documentId = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(documentId);
+  Buffer.from(documentId).copy(head, 24);
 
   const parts = [Buffer.alloc(0)];
   parts.push(Buffer.from("CSFCHUNK", "ascii"), u64(0), u64(24));
@@ -749,6 +594,45 @@ function setPreview(database, project) {
   }
 }
 
+/**
+ * Write the frame rate and the frame range of the project into the timeline.
+ *
+ * The template carries the timeline of the document it was made from, so the
+ * numbers are replaced with the ones the project actually has. A document
+ * without a timeline (the bundled template is a static one) is left alone.
+ */
+function setTimeline(database, project) {
+  const hasTimeline = readAll(
+    database,
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'TimeLine'",
+  );
+  if (hasTimeline.length === 0) return;
+  const timeline = readOne(database, "SELECT MainId FROM TimeLine LIMIT 1");
+  if (!timeline) return;
+  let end = project.startFrame - 1;
+  for (const layer of project.layers ?? []) {
+    for (const drawing of layer.drawings ?? []) {
+      end = Math.max(end, drawing.at + drawing.hold - 1);
+    }
+  }
+  if (project.camera && Array.isArray(project.camera.keys)) {
+    for (const key of project.camera.keys) {
+      end = Math.max(end, key.frame);
+    }
+  }
+  database
+    .prepare(
+      "UPDATE TimeLine SET FrameRate = ?, StartFrame = ?, EndFrame = ?, CurrentFrame = ? WHERE MainId = ?",
+    )
+    .run(
+      Math.max(1, Math.round(project.fps ?? 12)),
+      project.startFrame ?? 1,
+      Math.max(project.startFrame ?? 1, end),
+      project.currentFrame ?? project.startFrame ?? 1,
+      timeline.MainId,
+    );
+}
+
 function linkLayers(database, ordered) {
   if (ordered.length === 0) return;
   for (let index = 0; index < ordered.length; index += 1) {
@@ -906,6 +790,8 @@ export async function createClipBuffer(project, { name = "TVMini export" } = {})
         "UPDATE Project SET ProjectName = ?, DefaultPageWidth = ?, DefaultPageHeight = ?, DefaultPageResolution = 72",
       )
       .run(String(name).slice(0, 200), project.width, project.height);
+
+    setTimeline(database, project);
 
     setPreview(database, project);
 

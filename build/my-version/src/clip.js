@@ -1,10 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Buffer } from "../public/core/bytes.js";
-import { readClipPreviewFromBytes, readClipDocumentFromBytes } from "../public/core/clip.js";
+import {
+  readClipPreviewFromBytes,
+  readClipDocumentFromBytes,
+  readClipLayersFromBytes,
+} from "../public/core/clip.js";
 import { ValidationError } from "../public/core/model.js";
 
-export { findClipDatabase, readClipPreviewFromBytes, readClipDocumentFromBytes } from "../public/core/clip.js";
+export {
+  findClipDatabase,
+  readClipPreviewFromBytes,
+  readClipDocumentFromBytes,
+  readClipLayersFromBytes,
+} from "../public/core/clip.js";
 
 /**
  * Read the canvas preview from a `.clip` file on disk.
@@ -43,4 +52,22 @@ export async function readClipDocument(filePath) {
     readClipDocumentFromBytes(data),
   ]);
   return { path: clean, name: path.basename(clean), ...document, preview };
+}
+
+/**
+ * Read the pixels of every raster layer in a `.clip` file.
+ *
+ * The tiles are decoded into straight RGBA buffers, one per layer.
+ */
+export async function readClipLayers(filePath) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  const clean = path.normalize(filePath.trim());
+  if (path.extname(clean).toLowerCase() !== ".clip") {
+    throw new ValidationError("choose a .clip file");
+  }
+  const data = Buffer.from(await fs.readFile(clean));
+  const layers = await readClipLayersFromBytes(data);
+  return { path: clean, name: path.basename(clean), layers };
 }

@@ -1,13 +1,32 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { findClipDatabase, readClipPreview, readClipDocument } from "../src/clip.js";
+import {
+  findClipDatabase,
+  readClipPreview,
+  readClipDocument,
+  readClipLayers,
+} from "../src/clip.js";
 import { createProject, normalizeProject, ValidationError } from "../src/model.js";
-import { decodePng, encodePng, renderProject } from "../src/png.js";
+import { decodePng, encodePng, renderLayerRgba, renderProject } from "../src/png.js";
 import { openProject, saveProject } from "../src/store.js";
-import { solid, writeClipFixture } from "./clip-fixture.js";
+import { createClipBuffer } from "../src/clip-write.js";
+import {
+  buildOffscreenAttribute,
+  buildRasterPayload,
+  solid,
+  writeClipFixture,
+} from "./clip-fixture.js";
+import {
+  parseClipContainer,
+  readClipDocumentFromBytes,
+  readClipLayersFromBytes,
+} from "../public/core/clip.js";
+
+/** The blank Clip Studio document the writer starts from. */
+const TEMPLATE = new URL("../public/assets/clip-template.clip", import.meta.url);
 
 async function withTempDir(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tvmini-clip-"));
@@ -174,6 +193,148 @@ test("readClipDocument reads the layer metadata and leaves the folder rows out",
   });
 });
 
+test("the container of a real Clip Studio document is read exactly", async () => {
+  const bytes = Buffer.from(await fs.readFile(TEMPLATE));
+  const container = parseClipContainer(bytes);
+
+  assert.equal(container.chunks[0].name, "CHNKHead");
+  assert.equal(container.chunks.at(-1).name, "CHNKFoot");
+  assert.equal(container.chunks.at(-2).name, "CHNKSQLi");
+  assert.ok(container.chunks.some((chunk) => chunk.name === "CHNKExta"));
+
+  // The header records the size of the file and of the header itself.
+  assert.equal(container.fileSize, container.size);
+  assert.equal(container.headerSize, 24);
+
+  // The head chunk records where the database starts, and that is the
+  // offset of the CHNKSQLi chunk header.
+  assert.equal(container.head.version, 256);
+  assert.equal(container.head.databaseOffset, container.databaseOffset);
+  assert.match(container.head.documentId, /^[0-9a-f]{32}$/);
+
+  // Every chunk name is eight printable characters and the sizes add up.
+  assert.equal(container.bytesConsumed, container.size);
+});
+
+test("the real document reports its tables, layers and external blobs", async () => {
+  const bytes = Buffer.from(await fs.readFile(TEMPLATE));
+  const document = await readClipDocumentFromBytes(bytes);
+
+  assert.equal(document.format, "clip-studio-native-container");
+  assert.equal(document.readOnly, true);
+  assert.ok(document.tables.includes("CanvasPreview"));
+  assert.ok(document.tables.includes("Offscreen"));
+  assert.ok(document.tables.includes("ExternalChunk"));
+  assert.ok(document.tableDetails.Offscreen.rows > 0);
+  assert.ok(document.layerColumns.includes("LayerOpacity"));
+
+  // The external blobs are found at the offsets the database gives.
+  assert.ok(document.externalChunks.length > 0);
+  for (const blob of document.externalChunks) {
+    assert.equal(blob.present, true);
+    assert.ok(blob.size > 0);
+  }
+
+  // The layers are classified, and the paper layer is not a paint layer.
+  assert.ok(document.layerTree.length > 0);
+  assert.ok(document.layerTree.some((layer) => layer.kind === "paper"));
+  assert.ok(document.layers.every((layer) => layer.kind !== "paper"));
+});
+
+test("the pixels of a raster that lives outside the database are decoded", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "raster.clip");
+    const size = 64;
+    const pixels = Buffer.alloc(size * size * 4);
+    for (let index = 0; index < size * size; index += 1) {
+      pixels[index * 4] = 200;
+      pixels[index * 4 + 1] = 40;
+      pixels[index * 4 + 2] = 10;
+      pixels[index * 4 + 3] = 255;
+    }
+    const { payload, sizes } = buildRasterPayload({ width: size, height: size, pixels });
+    const id = "extrnlid0123456789ABCDEF0123456789ABCDEF";
+    const attribute = buildOffscreenAttribute({ width: size, height: size, blockSizes: sizes });
+
+    await writeClipFixture(target, {
+      width: size,
+      height: size,
+      png: encodePng(size, size, solid(size, size, [0, 0, 0])),
+      layers: [{ id: 1, name: "Ink", type: 1, mipmap: 1 }],
+      raster: { id, layerId: 1, attribute, payload },
+    });
+
+    // The container is a real one: the blob sits in a CHNKExta chunk and the
+    // database points at it by file offset.
+    const container = parseClipContainer(Buffer.from(await fs.readFile(target)));
+    const blob = container.chunks.find((chunk) => chunk.name === "CHNKExta");
+    assert.ok(blob, "the fixture should hold an external chunk");
+    assert.equal(blob.payload.subarray(8, 48).toString("ascii"), id);
+
+    const layers = await readClipLayersFromBytes(Buffer.from(await fs.readFile(target)));
+    assert.equal(layers.length, 1);
+    const layer = layers[0];
+    assert.equal(layer.name, "Ink");
+    assert.equal(layer.width, size);
+    assert.equal(layer.height, size);
+    assert.equal(layer.tilesWithPixels, 1);
+
+    // The colour comes back the way it went in.
+    assert.equal(layer.pixels[0], 200);
+    assert.equal(layer.pixels[1], 40);
+    assert.equal(layer.pixels[2], 10);
+    assert.equal(layer.pixels[3], 255);
+    // The last pixel of the canvas is the last pixel of the tile.
+    assert.equal(layer.pixels.at(-1), 255);
+    assert.equal(layer.pixels.at(-4), 200);
+  });
+});
+
+test("a written .clip reads back with the same pixels", async () => {
+  const project = createProject(320, 240, "#ffffff");
+  project.layers[0].drawings = [{
+    at: 1,
+    hold: 1,
+    strokes: [{ color: "#ff0000", width: 10, points: [[40, 40], [280, 200]] }],
+  }];
+
+  const written = await createClipBuffer(project, { name: "round trip" });
+  const layers = await readClipLayersFromBytes(written.buffer);
+
+  assert.ok(layers.length > 0);
+  const layer = layers[0];
+  assert.equal(layer.width, 320);
+  assert.equal(layer.height, 240);
+  assert.equal(layer.pixels.length, 320 * 240 * 4);
+
+  // The stroke is red, so the red channel has to be the strong one. This
+  // catches a mistake in the blue, green, red order of a tile.
+  let red = 0;
+  let blue = 0;
+  for (let index = 0; index < layer.pixels.length; index += 4) {
+    if (layer.pixels[index + 3] === 0) continue;
+    if (layer.pixels[index] > 200) red += 1;
+    if (layer.pixels[index + 2] > 200) blue += 1;
+  }
+  assert.ok(red > 0, "the stroke should be red");
+  assert.equal(blue, 0, "the stroke should not be blue");
+
+  // The decoded pixels are the ones the renderer produced.
+  const expected = renderLayerRgba(project, project.layers[0]);
+  let matching = 0;
+  for (let index = 0; index < expected.length; index += 4) {
+    if (layer.pixels[index + 3] === 0) continue;
+    if (
+      Math.abs(layer.pixels[index] - expected[index]) < 8 &&
+      Math.abs(layer.pixels[index + 1] - expected[index + 1]) < 8 &&
+      Math.abs(layer.pixels[index + 2] - expected[index + 2]) < 8
+    ) {
+      matching += 1;
+    }
+  }
+  assert.ok(matching > 100, `only ${matching} pixels matched`);
+});
+
 test("readClipPreview rejects foreign files and damaged databases", async () => {
   await withTempDir(async (dir) => {
     const text = path.join(dir, "notes.clip");
@@ -214,3 +375,5 @@ test("an imported image survives save and open", async () => {
     assert.deepEqual(opened.project.image, project.image);
   });
 });
+
+

@@ -118,24 +118,38 @@ exported by the server are the same format.
 
 ## Native `.clip` import/export status
 
-- `src/clip.js` exposes `readClipPreview()` for the existing preview import and
-  `readClipDocument()` for read-only structural inspection of the embedded
-  SQLite database (table names, project metadata when available, and layer
-  names/visibility/lock/opacity when the schema exposes them).
-- `public/core/clip.js` exports `readClipDocumentFromBytes()` for the same
-  inspection in browser-compatible code.
+The format was read out of real Clip Studio Paint documents and confirmed
+against the shipped program; `docs/clip-format-study.md` has the whole method,
+field by field.
+
+- `src/clip.js` exposes `readClipPreview()` for the preview import,
+  `readClipDocument()` for a read-only report of the container, the tables, the
+  layers, the timeline and the external blobs, and `readClipLayers()` for the
+  pixels of every raster layer.
+- `public/core/clip.js` exports the same three as `readClipPreviewFromBytes()`,
+  `readClipDocumentFromBytes()` and `readClipLayersFromBytes()`, so the browser
+  build can read a `.clip` without a server.
+- `public/core/clip-blocks.js` holds the tile codec that the reader and the
+  writer share: the 256×256 tiles, the alpha that is folded into the first 64
+  rows and the blue, green, red order the channels are stored in.
 - `src/clip-write.js` and `public/core/clip-write.js` export a layered `.clip`
   document from this application's rasterized animation layers using the
-  bundled Clip Studio template.
+  bundled Clip Studio template. Every export gets a fresh document id, the
+  container is written the way CSP writes it, and the frame rate and the frame
+  range of the project are written into the timeline.
+
+**What the reader does:** it reads the container, every table, every layer row
+with its kind, the mipmap chain, the timeline, the tracks, and the raster
+pixels of the layers, which are decoded out of the `CHNKExta` blobs the
+database points at.
 
 **Compatibility limitation:** this is not a full native `.clip` editor. The
-reader does not decode Clip Studio's raster tile payloads into editable pixels,
-and does not interpret masks, vector layers, animation folders, or every
+reader does not decode masks, vector layers, the animation mixers or every
 version-specific field. The writer creates a new document from the template;
 it does not preserve all unknown data from an imported source file. Treat
-imports as preview/metadata inspection and exports as a newly generated layered
-raster document. Always keep the original `.clip` file and test generated files
-in Clip Studio Paint before relying on them.
+imports as preview, metadata and raster inspection, and exports as a newly
+generated layered raster document. Always keep the original `.clip` file and
+test generated files in Clip Studio Paint before relying on them.
 
 ## Test
 
@@ -154,6 +168,8 @@ node --test
 | Export PNG | renders the current frame and writes a PNG | `src/png.js`, `src/store.js` `exportPng` |
 | Export `.clip` | writes the current frame as a layered Clip Studio document | `src/clip-write.js`, `src/store.js` `exportClip` |
 | Import `.clip` | loads the preview stored in a Clip Studio file | `src/clip.js` |
+| Inspect `.clip` | the container, every table, the layers, the timeline and the external blobs | `src/clip.js` `readClipDocument` |
+| Read `.clip` pixels | the raster of every layer, decoded out of the `CHNKExta` blobs | `src/clip.js` `readClipLayers` |
 | Inspect `.clip` | read-only report of the tables, layers and limits inside a `.clip` | `src/clip.js` `readClipDocument` |
 | Recent | MRU list, max 50, de-duplicated, pruned | `src/recent.js` |
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
