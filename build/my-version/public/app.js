@@ -71,6 +71,7 @@ const cameraFitButton = document.getElementById("cameraFit");
 const cameraZoomButton = document.getElementById("cameraZoom");
 const cameraZoomInButton = document.getElementById("cameraZoomIn");
 const cameraZoomOutButton = document.getElementById("cameraZoomOut");
+const zoomLabel = document.getElementById("zoomLabel");
 const cameraXInput = document.getElementById("cameraX");
 const cameraYInput = document.getElementById("cameraY");
 const cameraWidthInput = document.getElementById("cameraWidth");
@@ -1301,6 +1302,7 @@ function syncCameraControls() {
   cameraYInput.value = String(Math.round(shown?.y ?? 0));
   cameraWidthInput.value = String(Math.round(shown?.width ?? project.width));
   cameraHeightInput.value = String(Math.round(shown?.height ?? project.height));
+  applyView();
   cameraRotationInput.value = String(Math.round(shown?.rotation ?? 0));
   cameraInterpSelect.value = key?.interp ?? "linear";
 
@@ -1352,11 +1354,88 @@ cameraZoomButton.addEventListener("click", () => {
 });
 
 cameraZoomInButton.addEventListener("click", () => {
-  if (zoomCamera(1 / (1 + ZOOM_STEP))) setStatus("Zoomed in");
+  const box = canvas.getBoundingClientRect();
+  zoomStage(1 + ZOOM_STEP, box.left + box.width / 2, box.top + box.height / 2);
+  setStatus("Zoomed in");
 });
 
 cameraZoomOutButton.addEventListener("click", () => {
-  if (zoomCamera(1 + ZOOM_STEP)) setStatus("Zoomed out");
+  const box = canvas.getBoundingClientRect();
+  zoomStage(1 / (1 + ZOOM_STEP), box.left + box.width / 2, box.top + box.height / 2);
+  setStatus("Zoomed out");
+});
+
+/**
+ * Show how much of the canvas the stage shows.
+ *
+ * Clip Studio Paint puts the zoom of the stage in the corner of the canvas,
+ * so the same goes here. Clicking it fits the whole canvas again.
+ */
+function showZoom() {
+  // The zoom of the stage, where 100% is the view as it fits.
+  const zoom = viewZoom * 100;
+  zoomLabel.textContent = `${zoom >= 10 ? zoom.toFixed(0) : zoom.toFixed(1)}%`;
+}
+
+/**
+ * The zoom of the stage.
+ *
+ * The stage is what the canvas looks like on the screen. Clip Studio Paint
+ * magnifies that, and the camera is a separate thing that decides what gets
+ * exported, so the two are kept apart here as well: the zoom is a transform
+ * on the canvas element and the camera is untouched by it.
+ */
+let viewZoom = 1;
+let viewPanX = 0;
+let viewPanY = 0;
+
+/** Put the zoom and the pan on the canvas element. */
+function applyView() {
+  canvas.style.transformOrigin = "0 0";
+  canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
+  showZoom();
+}
+
+/** Zoom the stage by a factor, keeping the point under the pointer in place. */
+function zoomStage(factor, clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const local = (clientX - rect.left) / viewZoom;
+  const next = Math.max(0.1, Math.min(16, viewZoom * factor));
+  if (next === viewZoom) return;
+  // The element has to move so that the same point is under the pointer.
+  viewPanX += clientX - local * next - rect.left;
+  viewZoom = next;
+  applyView();
+}
+
+/** Drag the stage with the middle mouse button. */
+function panStage(event) {
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const panX = viewPanX;
+  const panY = viewPanY;
+
+  const move = (moveEvent) => {
+    viewPanX = panX + (moveEvent.clientX - startX);
+    viewPanY = panY + (moveEvent.clientY - startY);
+    applyView();
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+}
+
+zoomLabel.addEventListener("click", () => {
+  viewZoom = 1;
+  viewPanX = 0;
+  viewPanY = 0;
+  applyView();
+  setStatus("The stage is back to full size");
 });
 
 for (const [input, field] of [
@@ -2291,12 +2370,16 @@ function zoomCamera(factor, px, py) {
  */
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
-  const [px, py] = canvasPoint(event);
-  const factor = event.deltaY < 0 ? 1 / (1 + ZOOM_STEP) : 1 + ZOOM_STEP;
-  if (zoomCamera(factor, px, py)) {
-    setStatus(event.deltaY < 0 ? "Zoomed in" : "Zoomed out");
-  }
+  const factor = event.deltaY < 0 ? 1 + ZOOM_STEP : 1 / (1 + ZOOM_STEP);
+  zoomStage(factor, event.clientX, event.clientY);
 }, { passive: false });
+
+// The middle mouse button drags the stage, the way Clip Studio Paint does it.
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 1) return;
+  event.preventDefault();
+  panStage(event);
+});
 
 function pressureFor(event) {
   if (!state.pressureEnabled) return null;
