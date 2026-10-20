@@ -399,6 +399,64 @@ TVMini reads the timeline, the tracks, the sizes and the property names, and
 reports them. It does not write animation: the bundled template is a static
 document with no `TimeLine` table at all, so an export carries no motion.
 
+### Writing an animation: what is known and what is missing
+
+An animation document needs three things: a `TimeLine` row, a chain of
+`Track` rows, and a mixer blob for every track. The schema of the first two
+is known exactly, because it was read out of real documents:
+
+```
+TimeLine(_PW_ID, MainId, BankId, NextTimeLine, NextScenario, FirstTrack,
+         TimeLineUuid, TimeLineName, SceneIndexForName, CutIndexForName,
+         CurrentFrame, FrameRate, StartFrame, EndFrame, GuidelineFrameRate,
+         LabelFirstIndex, SmallestStartFrame, BiggestEndFrame)
+
+Track(_PW_ID, MainId, BankId, ItemId, TrackNextIndex, TrackActionMixerSize,
+      TrackActionMixer, TrackActionMixer2Size, TrackActionMixer2,
+      TrackValueMap, TrackOpen, TrackContentOpen, TrackUuid,
+      LayerUuidWithTrack, TrackKind, TrackOptionFlag)
+```
+
+The tracks of one timeline form a list: `TimeLine.FirstTrack` names the
+first one and each `Track.TrackNextIndex` names the next. A track hangs on
+the layer whose uuid is in `LayerUuidWithTrack`.
+
+The mixer blob and the action document are described above. What is still
+missing is how the **keyframe list** is laid out inside the action document.
+The corpus narrows it down a long way:
+
+- The corpus holds 480 mixer blobs with **86 different string pools**. The
+  pool is the set of properties a track animates, so a pool is a kind of
+  track.
+- **The body of a track is the same length for every track with the same
+  pool**, whether the document has 20 frames or 150. The number of keyframes
+  is therefore a field and not a length.
+- Two documents with completely different frame ranges and completely
+  different artwork produce **byte identical bodies**, apart from **two
+  single precision floats** at fixed offsets (176 and 264 in the first
+  mixer, 284 and 420 in the second). Those two numbers are a document level
+  scale, about 3.54 to 3.72 in the files that were looked at.
+- Further into the body, from about offset 444, there is a table of 32-bit
+  numbers that are all **multiples of 256**: 512, 768, 3584, 12032, 12288,
+  12544, 12800, 13312, 13824 and so on. They are indices into a keyframe
+  table with a stride of 256, and they are the same in every document, which
+  means they describe the table and not its contents.
+- `TrackValueMap` is kept inside the database rather than outside it. Its
+  shape is a small property bag: a count, two numbers, the length of a key,
+  the key in UTF-16 big endian and the value. The one that was read out
+  holds `ImageCelName` with the value `1`.
+
+So the shape of the answer is known, and the one thing still missing is which
+of those numbers is the frame of a key and which is its value. The way to
+find it is to find two tracks that share a pool **and** have a different
+number of keys, and read the difference against the frame numbers of the
+two timelines.
+
+Until that is done, the writer keeps a document static. A malformed mixer is
+the one thing that could make Clip Studio Paint reject a file that otherwise
+opens, and a static file that opens is worth more than an animated file that
+does not.
+
 ## How CSP writes a file
 
 Putting it together, the method CSP uses is:
