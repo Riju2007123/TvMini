@@ -2779,8 +2779,7 @@ function applyImportedProject(data, extension) {
     );
   } else {
     setStatus(
-      `Imported the preview from ${data.name} (${data.project.width}×${data.project.height}). ` +
-        "Save as .tvmini to keep it — the .clip itself is never changed.",
+      `Imported ${data.name} (${data.project.width}x${data.project.height}), ${data.project.layers.length} layer(s) at ${data.project.fps} fps. Save as .tvmini to keep it, or export a .clip - the .clip itself is never changed.",
     );
   }
 }

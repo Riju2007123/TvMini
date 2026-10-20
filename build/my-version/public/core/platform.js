@@ -78,7 +78,7 @@ function createServerBackend(hooks) {
     },
 
     async chooseAndImportClip() {
-      const path = await hooks.pickPath({ mode: "open", title: "Import .clip preview" });
+      const path = await hooks.pickPath({ mode: "open", title: "Import .clip" });
       if (!path) return null;
       const data = await serverRequest("POST", "/api/import-clip", { path });
       return { name: data.name, path: data.path, project: data.project };
