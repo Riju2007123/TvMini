@@ -4,6 +4,7 @@ import { detectBackend } from "./core/platform.js";
 import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
 import { brushImageFromBytes } from "./core/brush.js";
+import { readSutBrush } from "./core/sut.js";
 import {
   cameraAt,
   cameraCorners,
@@ -1388,10 +1389,26 @@ brushImageInput.addEventListener("change", async () => {
   brushImageInput.value = "";
   if (!file) return;
 
-  const picture = brushImageFromBytes(new Uint8Array(await file.arrayBuffer()));
-  if (!picture) {
-    setStatus("That file holds no picture the brush can use", true);
-    return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let picture = null;
+  let name = file.name;
+
+  // A Clip Studio Paint brush is a database with the picture of the tip in
+  // it, so it is read as one; anything else is taken as a picture.
+  if (/\.sut$/i.test(file.name)) {
+    const brush = await readSutBrush(bytes);
+    if (!brush) {
+      setStatus("That brush holds no picture the brush can use", true);
+      return;
+    }
+    picture = brush.texture;
+    name = brush.name || file.name;
+  } else {
+    picture = brushImageFromBytes(bytes);
+    if (!picture) {
+      setStatus("That file holds no picture the brush can use", true);
+      return;
+    }
   }
 
   const layer = currentLayer();
@@ -1405,8 +1422,8 @@ brushImageInput.addEventListener("change", async () => {
   recordHistory(before);
   markDirty();
   afterChange();
-  brushImageName.textContent = file.name;
-  setStatus(`The brush is now ${file.name}`);
+  brushImageName.textContent = name;
+  setStatus(`The brush is now ${name}`);
 });
 
 /* ------------------------------------------------------- the brush library */

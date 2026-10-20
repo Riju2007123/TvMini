@@ -47,11 +47,18 @@ function findPngEnd(bytes, from) {
  */
 export function brushPngFromBytes(input) {
   const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
-  const start = findPngStart(bytes, 0);
-  if (start < 0) return null;
-  const end = findPngEnd(bytes, start);
-  if (end < 0) return null;
-  return bytes.subarray(start, end);
+  // A file can hold more than one picture, and the signature can turn up
+  // inside compressed data, so every one of them is tried and the first
+  // that is a whole picture is taken.
+  let index = findPngStart(bytes, 0);
+  while (index !== -1) {
+    if (bytes.toString("ascii", index + 12, index + 16) === "IHDR") {
+      const end = findPngEnd(bytes, index);
+      if (end > 0) return bytes.subarray(index, end);
+    }
+    index = findPngStart(bytes, index + 1);
+  }
+  return null;
 }
 
 /**
