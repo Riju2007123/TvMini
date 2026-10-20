@@ -69,6 +69,8 @@ const cameraAddButton = document.getElementById("cameraAdd");
 const cameraRemoveButton = document.getElementById("cameraRemove");
 const cameraFitButton = document.getElementById("cameraFit");
 const cameraZoomButton = document.getElementById("cameraZoom");
+const cameraZoomInButton = document.getElementById("cameraZoomIn");
+const cameraZoomOutButton = document.getElementById("cameraZoomOut");
 const cameraXInput = document.getElementById("cameraX");
 const cameraYInput = document.getElementById("cameraY");
 const cameraWidthInput = document.getElementById("cameraWidth");
@@ -1349,6 +1351,14 @@ cameraZoomButton.addEventListener("click", () => {
   setStatus("Camera zoomed to the centre");
 });
 
+cameraZoomInButton.addEventListener("click", () => {
+  if (zoomCamera(1 / (1 + ZOOM_STEP))) setStatus("Zoomed in");
+});
+
+cameraZoomOutButton.addEventListener("click", () => {
+  if (zoomCamera(1 + ZOOM_STEP)) setStatus("Zoomed out");
+});
+
 for (const [input, field] of [
   [cameraXInput, "x"],
   [cameraYInput, "y"],
@@ -2241,40 +2251,51 @@ const ZOOM_STEP = 0.15;
 const ZOOM_MIN = 16;
 
 /**
- * Zoom with the middle mouse button.
+ * Zoom the camera window by a factor.
  *
  * The stage shows what the camera takes, so zooming means making the camera
- * window smaller or bigger. The point under the pointer stays where it is,
- * which is what makes the zoom feel right.
+ * window smaller or bigger. A point in the canvas stays where it is, which
+ * is what makes the zoom feel right; without a point the centre is kept.
  */
-canvas.addEventListener("wheel", (event) => {
-  if (event.button !== 1) return;
-  event.preventDefault();
-
+function zoomCamera(factor, px, py) {
   const project = state.project;
   if (!currentCameraKey()) {
     addCameraKey();
-    return;
+    return false;
   }
   const key = currentCameraKey();
-  if (!key) return;
+  if (!key) return false;
 
-  const [px, py] = canvasPoint(event);
-  const factor = event.deltaY < 0 ? 1 / (1 + ZOOM_STEP) : 1 + ZOOM_STEP;
   const width = Math.max(ZOOM_MIN, Math.min(project.width, Math.round(key.width * factor)));
   const height = Math.max(ZOOM_MIN, Math.min(project.height, Math.round(key.height * factor)));
-  if (width === key.width && height === key.height) return;
+  if (width === key.width && height === key.height) return false;
 
-  // Keep the point under the pointer in the same place.
-  const shareX = (px - key.x) / key.width;
-  const shareY = (py - key.y) / key.height;
+  const shareX = px === undefined ? 0.5 : (px - key.x) / key.width;
+  const shareY = py === undefined ? 0.5 : (py - key.y) / key.height;
   updateCameraKey({
-    x: Math.round(px - shareX * width),
-    y: Math.round(py - shareY * height),
+    x: Math.round(px === undefined ? (project.width - width) / 2 : px - shareX * width),
+    y: Math.round(py === undefined ? (project.height - height) / 2 : py - shareY * height),
     width,
     height,
   });
-  setStatus(event.deltaY < 0 ? "Zoomed in" : "Zoomed out");
+  return true;
+}
+
+/**
+ * Zoom with the wheel over the canvas.
+ *
+ * Every wheel over the stage zooms: a plain wheel, the middle button held
+ * down and scrolled, and the control key that a trackpad sends for a pinch.
+ * The button of a wheel event is not used to tell them apart, because a
+ * browser reports every wheel as the primary button.
+ */
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const [px, py] = canvasPoint(event);
+  const factor = event.deltaY < 0 ? 1 / (1 + ZOOM_STEP) : 1 + ZOOM_STEP;
+  if (zoomCamera(factor, px, py)) {
+    setStatus(event.deltaY < 0 ? "Zoomed in" : "Zoomed out");
+  }
 }, { passive: false });
 
 function pressureFor(event) {
