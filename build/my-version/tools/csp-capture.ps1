@@ -32,6 +32,7 @@ public class Csp {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   public static IntPtr found = IntPtr.Zero;
   public static uint foundPid = 0;
+  public static long foundArea = 0;
   public static string want = "";
   public static bool Cb(IntPtr h, IntPtr l) {
     if (!IsWindowVisible(h)) return true;
@@ -40,13 +41,18 @@ public class Csp {
     var sb = new StringBuilder(len + 2);
     GetWindowText(h, sb, sb.Capacity);
     if (sb.ToString().IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0) {
-      uint pid; GetWindowThreadProcessId(h, out pid);
-      found = h; foundPid = pid;
-      return false;
+      // The application opens a small window while it starts up and a big
+      // one afterwards, so the biggest match is the one to look at.
+      RECT r; GetWindowRect(h, out r);
+      long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+      if (area > foundArea) {
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        found = h; foundPid = pid; foundArea = area;
+      }
     }
     return true;
   }
-  public static IntPtr Find(string w) { found = IntPtr.Zero; want = w; EnumWindows(Cb, IntPtr.Zero); return found; }
+  public static IntPtr Find(string w) { found = IntPtr.Zero; foundArea = 0; want = w; EnumWindows(Cb, IntPtr.Zero); return found; }
   public static string Title(IntPtr h) {
     int len = GetWindowTextLength(h);
     var sb = new StringBuilder(len + 2);
