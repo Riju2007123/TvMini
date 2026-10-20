@@ -769,3 +769,62 @@ canvas.picking { cursor: grab; }
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* HSV colour wheel panel (opened from the tool column) */
+.wheel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel, #11151c);
+}
+
+.wheel-panel[hidden] { display: none; }
+
+#wheelCanvas {
+  width: 214px;
+  height: 214px;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.wheel-row {
+  display: flex;
+  gap: 6px;
+}
+
+.wheel-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  font-family: monospace;
+}
+
+/* Flip preview overlay (hold S) */
+.flip-preview {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(10, 12, 16, 0.88);
+  z-index: 60;
+}
+
+.flip-preview[hidden] { display: none; }
+
+.flip-preview canvas {
+  max-width: 82vw;
+  max-height: 78vh;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.flip-label {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}

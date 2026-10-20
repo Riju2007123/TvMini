@@ -55,6 +55,16 @@
           <span>Colour</span>
           <input id="color" type="color" value="#1f2937" />
         </label>
+        <div class="field">
+          <button id="wheelButton" type="button" title="Hue ring + saturation/value picker">HSV wheel…</button>
+        </div>
+        <div id="wheelPanel" class="wheel-panel" hidden>
+          <canvas id="wheelCanvas" width="214" height="214"></canvas>
+          <div class="wheel-row">
+            <input id="wheelHex" type="text" maxlength="7" spellcheck="false" value="#1f2937" />
+            <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
+          </div>
+        </div>
         <label class="field">
           <span>Width <output id="widthValue">6</output></span>
           <input id="width" type="range" min="1" max="60" value="6" />
@@ -126,6 +136,10 @@
         <section class="timeline-panel" aria-label="Timeline">
           <div class="timeline-toolbar">
             <button id="playButton" title="Play or pause (Space)">▶ Play</button>
+            <label class="field checkbox inline" title="Faint previous/next frames of the current layer">
+              <input id="onion" type="checkbox" />
+              <span>Onion skin</span>
+            </label>
             <label class="field checkbox inline">
               <input id="loop" type="checkbox" checked />
               <span>Loop</span>
@@ -156,6 +170,11 @@
         </section>
       </section>
     </main>
+
+    <div id="flipOverlay" class="flip-preview" hidden>
+      <canvas id="flipCanvas" width="960" height="600"></canvas>
+      <div id="flipLabel" class="flip-label">Frame 1</div>
+    </div>
 
     <footer class="statusbar">
       <span id="status">Ready</span>

@@ -8,6 +8,7 @@ import {
   exposureInfo,
   holdDrawing,
   insertDrawing,
+  layerBounds,
   resolveDrawing,
   setExposure,
   shiftStartFrame,
@@ -115,6 +116,7 @@ const state = {
   pressureGain: 1,
   touchDraw: true,
   showStart: true,
+  onionSkin: false,
 };
 
 const history = new History({ limit: 100 });
@@ -377,34 +379,34 @@ function strokeRadius(stroke, point) {
   return Math.max(0.5, radius);
 }
 
-function drawStrokesToPaint(strokes) {
-  paintCtx.globalCompositeOperation = "source-over";
-  paintCtx.lineCap = "round";
-  paintCtx.lineJoin = "round";
+function drawStrokesInto(ctx, strokes) {
+  ctx.globalCompositeOperation = "source-over";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 
   for (const stroke of strokes) {
-    paintCtx.globalCompositeOperation = stroke.eraser ? "destination-out" : "source-over";
-    paintCtx.strokeStyle = stroke.color;
-    paintCtx.fillStyle = stroke.color;
+    ctx.globalCompositeOperation = stroke.eraser ? "destination-out" : "source-over";
+    ctx.strokeStyle = stroke.color;
+    ctx.fillStyle = stroke.color;
 
     const radii = stroke.points.map((point) => strokeRadius(stroke, point));
 
     if (stroke.points.length === 1) {
-      paintCtx.beginPath();
-      paintCtx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
-      paintCtx.fill();
+      ctx.beginPath();
+      ctx.arc(stroke.points[0][0], stroke.points[0][1], radii[0], 0, Math.PI * 2);
+      ctx.fill();
       continue;
     }
 
     const tapered = stroke.points.some((point) => point.length === 3);
     if (!tapered) {
-      paintCtx.lineWidth = stroke.width;
-      paintCtx.beginPath();
-      paintCtx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+      ctx.lineWidth = stroke.width;
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
       for (let i = 1; i < stroke.points.length; i += 1) {
-        paintCtx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+        ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
       }
-      paintCtx.stroke();
+      ctx.stroke();
       continue;
     }
 
@@ -412,15 +414,30 @@ function drawStrokesToPaint(strokes) {
     for (let i = 1; i < stroke.points.length; i += 1) {
       const from = stroke.points[i - 1];
       const to = stroke.points[i];
-      paintCtx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
-      paintCtx.beginPath();
-      paintCtx.moveTo(from[0], from[1]);
-      paintCtx.lineTo(to[0], to[1]);
-      paintCtx.stroke();
+      ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+      ctx.beginPath();
+      ctx.moveTo(from[0], from[1]);
+      ctx.lineTo(to[0], to[1]);
+      ctx.stroke();
     }
   }
 
-  paintCtx.globalCompositeOperation = "source-over";
+  ctx.globalCompositeOperation = "source-over";
+}
+
+function drawStrokesToPaint(strokes) {
+  drawStrokesInto(paintCtx, strokes);
+}
+
+/** Paint one drawing (raster base + strokes) into paintCanvas and return it. */
+function drawDrawingToPaint(project, drawing, alpha = 1) {
+  paintCtx.clearRect(0, 0, project.width, project.height);
+  paintCtx.globalAlpha = alpha;
+  const base = drawingImageElement(drawing);
+  if (base) paintCtx.drawImage(base, 0, 0, project.width, project.height);
+  drawStrokesInto(paintCtx, drawing.strokes);
+  paintCtx.globalAlpha = 1;
+  return paintCanvas;
 }
 
 function renderCanvas(frame = state.project.currentFrame) {
@@ -445,12 +462,31 @@ function renderCanvas(frame = state.project.currentFrame) {
     if (!layer.visible || layer.opacity <= 0) continue;
 
     const resolved = resolveDrawing(layer, frame);
+
+    // Onion skin: faint neighbours of this layer's frame under the real one
+    // (per-layer, like a genga stack).
+    if (state.onionSkin) {
+      for (const [offset, ghostAlpha] of [
+        [-2, 0.1],
+        [-1, 0.3],
+        [1, 0.3],
+        [2, 0.1],
+      ]) {
+        const ghostFrame = frame + offset;
+        if (ghostFrame < 1) continue;
+        const ghost = resolveDrawing(layer, ghostFrame);
+        if (!ghost) continue;
+        if (ghost.drawing === resolved?.drawing) continue;
+        drawDrawingToPaint(project, ghost.drawing, ghostAlpha);
+        ctx.globalAlpha = ghostAlpha * layer.opacity;
+        ctx.drawImage(paintCanvas, 0, 0);
+        ctx.globalAlpha = 1;
+      }
+    }
+
     if (!resolved) continue;
 
-    paintCtx.clearRect(0, 0, width, height);
-    const base = drawingImageElement(resolved.drawing);
-    if (base) paintCtx.drawImage(base, 0, 0, width, height);
-    drawStrokesToPaint(resolved.drawing.strokes);
+    drawDrawingToPaint(project, resolved.drawing);
 
     ctx.globalAlpha = layer.opacity;
     ctx.drawImage(paintCanvas, 0, 0);
@@ -981,6 +1017,7 @@ function playbackEnd() {
 
 function startPlayback() {
   if (state.playing) return;
+  stopFlipPreview();
   const project = state.project;
   if (contentEnd(project) < project.startFrame) {
     setStatus("There are no drawings to play", true);
@@ -1797,7 +1834,257 @@ nameInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") confirmButton.click();
 });
 
-/* ---------------------------------------------------------------- keyboard */
+/* ------------------------------------------------- colour wheel (HSV) */
+
+const wheelButton = document.getElementById("wheelButton");
+const wheelPanel = document.getElementById("wheelPanel");
+const wheelCanvas = document.getElementById("wheelCanvas");
+const wheelHex = document.getElementById("wheelHex");
+const wheelTransparent = document.getElementById("wheelTransparent");
+const onionInput = document.getElementById("onion");
+
+/* Matches the reference layout: hue ring around an inscribed SV square. */
+const WHEEL_SIZE = 214;
+
+const wheel = { hue: 222, saturation: 0.8, value: 0.6 };
+
+function hsvToRgb(h, s, v) {
+  const sector = ((h % 360) + 360) % 360 / 60;
+  const c = v * s;
+  const x = c * (1 - Math.abs((sector % 2) - 1));
+  const m = v - c;
+  const [r, g, b] = [
+    [c, x, 0],
+    [x, c, 0],
+    [0, c, x],
+    [0, x, c],
+    [x, 0, c],
+    [c, 0, x],
+  ][Math.floor(sector) % 6];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+function rgbToHsv(r, g, b) {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  let h = 0;
+  if (delta > 0) {
+    if (max === red) h = 60 * (((green - blue) / delta) % 6);
+    else if (max === green) h = 60 * ((blue - red) / delta + 2);
+    else h = 60 * ((red - green) / delta + 4);
+  }
+  return [((h % 360) + 360) % 360, max === 0 ? 0 : delta / max, max];
+}
+
+function renderWheel() {
+  const ctx = wheelCanvas.getContext("2d");
+  const centre = WHEEL_SIZE / 2;
+  const ringOuter = centre - 0;
+  const ringInner = centre - 24;
+  const ringMiddle = (ringOuter + ringInner) / 2;
+  const svHalf = Math.floor(ringInner * Math.SQRT1_2) - 1;
+  const side = svHalf * 2;
+  const squareX = centre - svHalf;
+  const squareY = centre - svHalf;
+
+  ctx.clearRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
+
+  // Hue ring: one thin arc per degree.
+  for (let angle = 0; angle < 360; angle += 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = `hsl(${angle}, 100%, 50%)`;
+    ctx.lineWidth = ringOuter - ringInner;
+    ctx.arc(centre, centre, ringMiddle, (angle - 0.9) * (Math.PI / 180), (angle + 0.9) * (Math.PI / 180));
+    ctx.stroke();
+  }
+
+  // Saturation (x) / value (y) square in the middle.
+  ctx.fillStyle = `hsl(${wheel.hue}, 100%, 50%)`;
+  ctx.fillRect(squareX, squareY, side, side);
+  let gradient = ctx.createLinearGradient(squareX, 0, squareX + side, 0);
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(squareX, squareY, side, side);
+  gradient = ctx.createLinearGradient(0, squareY, 0, squareY + side);
+  gradient.addColorStop(0, "rgba(0,0,0,0)");
+  gradient.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(squareX, squareY, side, side);
+
+  // Markers: ring dot at the hue, crosshair in the square.
+  const hueAngle = wheel.hue * (Math.PI / 180);
+  ctx.beginPath();
+  ctx.arc(centre + ringMiddle * Math.cos(hueAngle), centre + ringMiddle * Math.sin(hueAngle), 4, 0, Math.PI * 2);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  const markerX = squareX + wheel.saturation * side;
+  const markerY = squareY + (1 - wheel.value) * side;
+  ctx.beginPath();
+  ctx.arc(markerX, markerY, 4, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(markerX, markerY, 5.5, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.stroke();
+}
+
+function wheelApply() {
+  const [red, green, blue] = hsvToRgb(wheel.hue, wheel.saturation, wheel.value);
+  const hex = rgbToHex(red, green, blue);
+  colorInput.value = hex;
+  wheelHex.value = hex;
+  colorInput.dispatchEvent(new Event("input", { bubbles: true }));
+  renderWheel();
+}
+
+function wheelFromEvent(event) {
+  const rect = wheelCanvas.getBoundingClientRect();
+  const scale = WHEEL_SIZE / rect.width;
+  const x = (event.clientX - rect.left) * scale;
+  const y = (event.clientY - rect.top) * scale;
+  const dx = x - WHEEL_SIZE / 2;
+  const dy = y - WHEEL_SIZE / 2;
+  const radius = Math.hypot(dx, dy);
+  const ringInner = WHEEL_SIZE / 2 - 24;
+  const svHalf = Math.floor(ringInner * Math.SQRT1_2) - 1;
+
+  if (radius >= ringInner - 2 && radius <= WHEEL_SIZE / 2 + 2) {
+    wheel.hue = ((Math.atan2(dy, dx) * 180) / Math.PI + 450) % 360;
+  } else if (Math.abs(dx) <= svHalf + 2 && Math.abs(dy) <= svHalf + 2) {
+    wheel.saturation = Math.min(1, Math.max(0, dx / (svHalf * 2) + 0.5));
+    wheel.value = Math.min(1, Math.max(0, 1 - (dy / (svHalf * 2) + 0.5)));
+  }
+  wheelApply();
+}
+
+function wheelSyncFromColor() {
+  const match = /^#?([0-9a-f]{6})$/i.exec(colorInput.value.trim());
+  if (!match) return;
+  const hex = match[1];
+  const rgb = [
+    parseInt(hex.slice(0, 2), 16),
+    parseInt(hex.slice(2, 4), 16),
+    parseInt(hex.slice(4, 6), 16),
+  ];
+  [wheel.hue, wheel.saturation, wheel.value] = rgbToHsv(...rgb);
+}
+
+wheelButton.addEventListener("click", () => {
+  wheelPanel.hidden = !wheelPanel.hidden;
+  if (!wheelPanel.hidden) {
+    wheelSyncFromColor();
+    wheelApply();
+  }
+});
+
+wheelCanvas.addEventListener("pointerdown", (event) => {
+  try {
+    wheelCanvas.setPointerCapture(event.pointerId);
+  } catch {
+    // Synthetic events (or stale pointers) have no capturable pointer id.
+  }
+  wheelFromEvent(event);
+});
+
+wheelCanvas.addEventListener("pointermove", (event) => {
+  if (event.buttons & 1) wheelFromEvent(event);
+});
+
+wheelHex.addEventListener("change", () => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(wheelHex.value.trim());
+  if (!match) return; // keep the last valid colour
+  colorInput.value = `#${match[1]}`;
+  wheelSyncFromColor();
+  wheelApply();
+});
+
+wheelTransparent.addEventListener("click", () => {
+  wheelPanel.hidden = true;
+  selectTool("eraser");
+  setStatus("Transparent: switched to the eraser (E)");
+});
+
+onionInput.addEventListener("change", () => {
+  state.onionSkin = onionInput.checked;
+  renderCanvas();
+  setStatus(state.onionSkin ? "Onion skin on (this layer)" : "Onion skin off");
+});
+
+/* ------------------------------------------------- flip preview (hold S) */
+
+let flipTimer = null;
+let flipFrame = null;
+
+function flipLayer() {
+  return state.project.layers[state.project.currentLayer];
+}
+
+function flipPaint(frameNumber) {
+  const project = state.project;
+  const layer = flipLayer();
+  const canvas = document.getElementById("flipCanvas");
+  canvas.width = project.width;
+  canvas.height = project.height;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, project.width, project.height);
+  context.fillStyle = project.background;
+  context.fillRect(0, 0, project.width, project.height);
+  const resolved = resolveDrawing(layer, frameNumber);
+  if (resolved) {
+    const base = drawingImageElement(resolved.drawing);
+    if (base) context.drawImage(base, 0, 0, project.width, project.height);
+    drawStrokesInto(context, resolved.drawing.strokes);
+  }
+  const labelCell = document.getElementById("flipLabel");
+  labelCell.textContent = resolved
+    ? `Frame ${frameNumber} — drawing at ${resolved.drawing.at} (hold ${resolved.drawing.hold})`
+    : `Frame ${frameNumber} — empty`;
+  return context.canvas;
+}
+
+function startFlipPreview() {
+  if (flipTimer || state.playing) return;
+  const layer = flipLayer();
+  if (!layer || layer.drawings.length === 0) {
+    setStatus("Nothing exposed on this layer yet — flip preview plays its frames");
+    return;
+  }
+  const overlay = document.getElementById("flipOverlay");
+  overlay.hidden = false;
+  flipFrame = state.project.currentFrame;
+  const project = state.project;
+  const step = () => {
+    const bounds = layerBounds(layer);
+    const end = bounds ? bounds.last : project.startFrame;
+    if (flipFrame > end) flipFrame = project.startFrame;
+    flipPaint(flipFrame);
+    flipFrame += 1;
+  };
+  step();
+  flipTimer = setInterval(step, 160);
+}
+
+function stopFlipPreview() {
+  if (!flipTimer) return;
+  clearInterval(flipTimer);
+  flipTimer = null;
+  document.getElementById("flipOverlay").hidden = true;
+  renderCanvas();
+}
+
+document.addEventListener("keyup", (event) => {
+  if (event.key?.toLowerCase() === "s") stopFlipPreview();
+});
+
+/* ------------------------------------------------- keyboard */
 
 const KEYS = [
   {
@@ -1814,6 +2101,7 @@ const KEYS = [
     group: "Timeline",
     rows: [
       ["Play / pause", "Space"],
+      ["Flip preview of the current layer (hold)", "S"],
       ["Previous / next frame", "← / →"],
       ["Select layer above / below", "↑ / ↓"],
       ["Extend the exposure one frame", "5"],
@@ -2022,6 +2310,12 @@ document.addEventListener("keydown", (event) => {
     if (key === "i") {
       event.preventDefault();
       selectTool(state.tool === "pick" ? "brush" : "pick");
+      return;
+    }
+    // Hold S for a flipbook preview of the current layer (paper-toggle style).
+    if (key === "s") {
+      event.preventDefault();
+      startFlipPreview();
       return;
     }
     if (event.key === "[") {

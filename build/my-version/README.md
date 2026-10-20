@@ -11,6 +11,13 @@ model. It shares **no code, data or file formats** with TVPaint.
   exported as layered CSP documents for the current frame.
 - One canvas, up to 100 animation layers, current-frame PNG and `.clip` export.
 - A start screen with recent projects, a guide book and `F1` shortcut list.
+- HSV colour wheel (hue ring + saturation/value square + hex field, plus a
+  "Transparent" chip that switches to the eraser) next to the native colour
+  input, and `.tvpp` (TVPaint Animation) import/export — see
+  `docs/moart-study.md` for how the formats were mapped.
+- Onion skin: faint previous/next frames of the current layer under the
+  drawing, toggled in the timeline toolbar; hold `S` for a 160 ms flipbook
+  preview of the current layer's frames.
 
 ## Keyboard shortcuts
 
@@ -20,6 +27,7 @@ model. It shares **no code, data or file formats** with TVPaint.
 | Tools | Brush size | `[` / `]` |
 | Tools | Clear the current drawing | `Backspace` |
 | Timeline | Play / pause | `Space` |
+| Timeline | Flip preview of the current layer (hold) | `S` |
 | Timeline | Frame step | `←` / `→` |
 | Timeline | Layer select | `↑` / `↓` |
 | Timeline | Exposure longer / shorter | `5` / `Shift+5` |
