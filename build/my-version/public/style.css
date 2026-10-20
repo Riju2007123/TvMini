@@ -260,6 +260,143 @@ body.hide-inspector.hide-stage .workspace {
   white-space: nowrap;
 }
 
+.doc-tab-close {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.doc-tab:hover .doc-tab-close,
+.doc-tab.active .doc-tab-close {
+  opacity: 1;
+}
+
+.doc-tab-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.doc-tab-add {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  padding: 0;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.doc-tab-add:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* quick bar over the canvas --------------------------------------------- */
+
+.quick-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-btn);
+  background: rgba(20, 24, 30, 0.82);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+.quick-bar[hidden] {
+  display: none;
+}
+
+.quick-colour {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--seam-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.quick-swatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  background: #1f2937;
+}
+
+.quick-width {
+  width: 86px;
+  accent-color: var(--accent);
+}
+
+.quick-value {
+  min-width: 18px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.quick-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--seam);
+}
+
+.quick-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.quick-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.quick-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.quick-bar.collapsed {
+  gap: 0;
+  padding: 2px;
+}
+
+.quick-bar.collapsed > *:not(.quick-btn) {
+  display: none;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -645,6 +782,7 @@ body.hide-inspector.hide-stage .workspace {
 }
 
 .canvas-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;

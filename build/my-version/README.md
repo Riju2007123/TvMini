@@ -34,6 +34,9 @@ model. It shares **no code, data or file formats** with TVPaint.
 - Sound track: import an audio file, see its waveform under the frames it
   plays on, and hear it with the playback. The sound travels inside the
   project file, so a project stays self-contained.
+- Document tabs: several projects open at once, each with its own undo
+  history, path and dirty mark. A quick bar floats over the canvas with the
+  colour, the brush width and undo / redo.
 
 ## Keyboard shortcuts
 
@@ -53,6 +56,7 @@ model. It shares **no code, data or file formats** with TVPaint.
 | Timeline | Insert a blank drawing | `6` |
 | Timeline | Duplicate / delete the drawing | `Ctrl+D` / `Delete` |
 | Project | New / Open / Save / Save As | `Ctrl+N/O/S/Shift+S` |
+| Project | Next document | `Ctrl+Tab` |
 | Project | Export PNG / layered `.clip` | `Ctrl+E` / `Ctrl+Shift+E` |
 | Project | Undo / redo | `Ctrl+Z` / `Ctrl+Y`, `Ctrl+Shift+Z`, `Ctrl+A` |
 | Project | This list in the app | `F1` |
@@ -132,6 +136,8 @@ node --test
 | Pen pressure | width follows `PointerEvent.pressure` | `public/app.js`, `src/png.js` |
 | Eraser | clears its own layer, revealing lower layers/image | `public/app.js`, `src/png.js` |
 | Shape tools | line, rectangle, ellipse and bucket fill, stored as strokes | `public/core/paint.js`, `public/core/png.js` |
+| Document tabs | several open projects, each with its own undo history | `public/app.js` |
+| Quick bar | colour, brush width and undo/redo over the canvas | `public/app.js` |
 | Camera track | keyframes that frame the shot; the export is cropped to it | `public/timeline.js`, `public/core/png.js` |
 | Sound track | imported audio with a waveform, played with the animation | `public/audio.js`, `public/app.js` |
 | Stroke opacity / blend | per-stroke transparency and multiply/screen mixing | `public/core/paint.js`, `public/core/png.js` |
@@ -380,6 +386,25 @@ File → **Import a sound…** adds an audio file to the timeline:
   without a user gesture; pressing play again fixes that.
 - The sound is **not** written into the PNG, `.clip` or `.tvpp` exports —
   those formats have no room for it in TVMini.
+
+## Open documents
+
+The top bar holds a tab strip, one tab per open project:
+
+- **+** (or `Ctrl+N`) opens a new empty document in its own tab.
+- **File → Open…** opens a file in a tab. An untouched empty document is
+  reused, so opening a file does not leave a blank tab behind.
+- Clicking a tab switches to it; the ✕ on the tab closes it. The last
+  document is never closed — it is emptied instead, so the app always has
+  something to draw on.
+- Every document keeps **its own undo history**, its own path and its own
+  dirty mark. The dot on a tab is bright when the document has unsaved
+  changes.
+- `Ctrl+Tab` walks through the tabs, `Ctrl+Shift+Tab` walks back.
+
+The quick bar floats over the canvas with the colour, the brush width and
+undo / redo. It follows the tools panel in both directions, and the × on its
+right folds it away to a small handle.
 
 ## Undo / redo
 

@@ -440,6 +440,10 @@ text; it never fails silently.
   (0–10), stroke opacity (1–100 %) and blend mode, undo / redo.
 - Timeline: a camera row (keyframes that frame the shot, `C` adds a key), the
   layer rows, and a sound row with the waveform.
+- Top bar: a document tab strip (one tab per open project, each with its own
+  undo history), open, save and export. `Ctrl+Tab` walks through the tabs.
+- Stage: a quick bar over the canvas with the colour, the brush width and
+  undo / redo; it can be folded away.
 - Current layer: name, opacity, before-first behaviour, after-last behaviour,
   clear current drawing.
 - Canvas: drag to draw; stroke colour and width controls.

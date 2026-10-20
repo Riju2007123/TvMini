@@ -72,6 +72,13 @@ const cameraYInput = document.getElementById("cameraY");
 const cameraWidthInput = document.getElementById("cameraWidth");
 const cameraHeightInput = document.getElementById("cameraHeight");
 const cameraHint = document.getElementById("cameraHint");
+const quickBar = document.getElementById("quickBar");
+const quickSwatch = document.getElementById("quickSwatch");
+const quickWidth = document.getElementById("quickWidth");
+const quickWidthValue = document.getElementById("quickWidthValue");
+const quickUndo = document.getElementById("quickUndo");
+const quickRedo = document.getElementById("quickRedo");
+const quickHide = document.getElementById("quickHide");
 const pressureGainInput = document.getElementById("pressureGain");
 const pressureGainValue = document.getElementById("pressureGainValue");
 const touchDrawInput = document.getElementById("touchDraw");
@@ -128,6 +135,9 @@ const state = {
   suggestedName: null,
   clipSourcePath: null,
   dirty: false,
+  // The open documents. The active one is mirrored in the fields above.
+  documents: [],
+  activeIndex: 0,
   recent: [],
   drawing: null,
   strokeBefore: null,
@@ -155,7 +165,9 @@ const state = {
   onion: { enabled: false, before: 2, after: 1 },
 };
 
-const history = new History({ limit: 100 });
+// The undo stack of the document that is being edited. Every open document
+// keeps its own stack, so switching tabs does not lose the history.
+let history = new History({ limit: 100 });
 
 /* ------------------------------------------------------------------ model */
 
@@ -257,7 +269,38 @@ function clampSelection() {
 function updateHistoryButtons() {
   undoButton.disabled = !history.canUndo;
   redoButton.disabled = !history.canRedo;
+  if (quickUndo) quickUndo.disabled = !history.canUndo;
+  if (quickRedo) quickRedo.disabled = !history.canRedo;
 }
+
+/* --------------------------------------------------------- quick bar over the canvas */
+
+/** Keep the quick bar in step with the tools panel. */
+function syncQuickBar() {
+  if (!quickBar) return;
+  quickSwatch.style.background = colorInput.value;
+  quickWidth.value = widthInput.value;
+  quickWidthValue.textContent = widthInput.value;
+}
+
+quickSwatch?.addEventListener("click", () => {
+  colorInput.click();
+});
+
+quickWidth?.addEventListener("input", () => {
+  widthInput.value = quickWidth.value;
+  widthValue.textContent = quickWidth.value;
+  syncQuickBar();
+});
+
+quickUndo?.addEventListener("click", () => undo());
+quickRedo?.addEventListener("click", () => redo());
+
+quickHide?.addEventListener("click", () => {
+  const collapsed = quickBar.classList.toggle("collapsed");
+  quickHide.textContent = collapsed ? "▣" : "×";
+  quickHide.title = collapsed ? "Show this bar" : "Hide this bar";
+});
 
 function recordHistory(before) {
   if (!before) return;
@@ -268,6 +311,7 @@ function recordHistory(before) {
 function markDirty() {
   state.dirty = true;
   refreshTitle();
+  renderDocumentTabs();
 }
 
 function undo() {
@@ -350,6 +394,210 @@ function element(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+/* ------------------------------------------------------------- documents */
+
+/** The record of the document that is being edited. */
+function activeDocument() {
+  return state.documents[state.activeIndex] ?? null;
+}
+
+/** Copy the live fields into the active document record. */
+function captureDocument() {
+  const open = activeDocument();
+  if (!open) return;
+  open.project = state.project;
+  open.currentPath = state.currentPath;
+  open.suggestedName = state.suggestedName;
+  open.clipSourcePath = state.clipSourcePath;
+  open.tvppSourcePath = state.tvppSourcePath;
+  open.dirty = state.dirty;
+  open.history = history;
+}
+
+/** True when a document has never been saved and holds no work. */
+function isPristine(open) {
+  if (!open) return true;
+  if (open.currentPath || open.dirty) return false;
+  for (const layer of open.project.layers) {
+    if (layer.drawings.length > 0) return false;
+  }
+  return true;
+}
+
+/** Put a document's fields into the live ones. */
+function loadDocument(open) {
+  state.project = open.project;
+  state.currentPath = open.currentPath;
+  state.suggestedName = open.suggestedName;
+  state.clipSourcePath = open.clipSourcePath;
+  state.tvppSourcePath = open.tvppSourcePath;
+  state.dirty = open.dirty;
+  history = open.history;
+}
+
+/** The name shown on a tab. */
+function documentName(open) {
+  if (open.currentPath) return baseName(open.currentPath);
+  if (open.suggestedName) return open.suggestedName.replace(/\.tvmini$/i, "");
+  return "Untitled";
+}
+
+/** Show another document. */
+function activateDocument(index) {
+  if (index === state.activeIndex) return;
+  if (index < 0 || index >= state.documents.length) return;
+  stopPlayback();
+  captureDocument();
+  state.activeIndex = index;
+  loadDocument(state.documents[index]);
+
+  resizeCanvas();
+  refreshTitle();
+  updateHistoryButtons();
+  updateFrameLabel();
+  renderDocumentTabs();
+  loadSoundTrack();
+  setStatus(`Switched to ${documentName(state.documents[index])}`);
+}
+
+/**
+ * Put a project on the screen.
+ *
+ * An untouched empty document is reused, so opening a file does not leave a
+ * blank tab behind; anything else opens in a new tab.
+ */
+function showDocument(project, options = {}) {
+  const current = activeDocument();
+  const fresh = {
+    project,
+    currentPath: options.currentPath ?? null,
+    suggestedName: options.suggestedName ?? null,
+    clipSourcePath: options.clipSourcePath ?? null,
+    tvppSourcePath: options.tvppSourcePath ?? null,
+    dirty: false,
+    history: new History({ limit: 100 }),
+  };
+
+  if (current && isPristine(current) && state.documents.length === 1) {
+    state.documents[0] = fresh;
+    state.activeIndex = 0;
+  } else {
+    state.documents.push(fresh);
+    state.activeIndex = state.documents.length - 1;
+  }
+  loadDocument(state.documents[state.activeIndex]);
+
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  renderDocumentTabs();
+  loadSoundTrack();
+}
+
+/** Start a new empty document in its own tab. */
+function newDocument() {
+  const fresh = {
+    project: blankProject(960, 600),
+    currentPath: null,
+    suggestedName: null,
+    clipSourcePath: null,
+    tvppSourcePath: null,
+    dirty: false,
+    history: new History({ limit: 100 }),
+  };
+  captureDocument();
+  state.documents.push(fresh);
+  state.activeIndex = state.documents.length - 1;
+  loadDocument(fresh);
+
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  renderDocumentTabs();
+  setStatus("New document");
+}
+
+/** Close a document. The last one is never closed, it is emptied instead. */
+function closeDocument(index) {
+  if (index < 0 || index >= state.documents.length) return;
+  captureDocument();
+
+  const open = state.documents[index];
+  if (open.dirty && !confirm(`"${documentName(open)}" has unsaved changes. Close it anyway?`)) {
+    return;
+  }
+
+  if (state.documents.length === 1) {
+    // Keep one document open: empty the current one instead.
+    state.documents[0] = {
+      project: blankProject(960, 600),
+      currentPath: null,
+      suggestedName: null,
+      clipSourcePath: null,
+      tvppSourcePath: null,
+      dirty: false,
+      history: new History({ limit: 100 }),
+    };
+    state.activeIndex = 0;
+  } else {
+    state.documents.splice(index, 1);
+    state.activeIndex = Math.min(index, state.documents.length - 1);
+  }
+  loadDocument(state.documents[state.activeIndex]);
+
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  renderDocumentTabs();
+  loadSoundTrack();
+  setStatus("Document closed");
+}
+
+/** Draw the tab strip in the top bar. */
+function renderDocumentTabs() {
+  const bar = document.getElementById("docTabBar");
+  if (!bar) return;
+  // The live fields belong to the active document, so put them into its
+  // record before the names and the dirty dots are read.
+  captureDocument();
+  bar.replaceChildren();
+
+  state.documents.forEach((open, index) => {
+    const tab = element("div", "doc-tab");
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(index === state.activeIndex));
+    if (index === state.activeIndex) tab.classList.add("active");
+
+    const dot = element("span", "doc-tab-dot");
+    dot.setAttribute("aria-hidden", "true");
+    if (!open.dirty) dot.style.opacity = "0.25";
+    tab.append(dot);
+
+    tab.append(element("span", "doc-tab-name", documentName(open)));
+
+    const close = element("button", "doc-tab-close", "✕");
+    close.title = "Close this document";
+    close.setAttribute("aria-label", `Close ${documentName(open)}`);
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeDocument(index);
+    });
+    tab.append(close);
+
+    tab.addEventListener("click", () => activateDocument(index));
+    bar.append(tab);
+  });
+
+  const add = element("button", "doc-tab-add", "+");
+  add.title = "New document (Ctrl+N)";
+  add.setAttribute("aria-label", "New document");
+  add.addEventListener("click", () => newDocument());
+  bar.append(add);
 }
 
 function updateFrameLabel() {
@@ -1743,6 +1991,11 @@ canvas.addEventListener("pointercancel", endStroke);
 
 widthInput.addEventListener("input", () => {
   widthValue.textContent = widthInput.value;
+  syncQuickBar();
+});
+
+colorInput.addEventListener("input", () => {
+  syncQuickBar();
 });
 
 pressureInput.addEventListener("change", () => {
@@ -2139,17 +2392,7 @@ function confirmDiscard() {
 function newProject() {
   if (!confirmDiscard()) return;
   stopPlayback();
-  state.project = blankProject(960, 600);
-  state.currentPath = null;
-  state.suggestedName = null;
-  state.clipSourcePath = null;
-  state.tvppSourcePath = null;
-  state.dirty = false;
-  history.reset();
-  updateHistoryButtons();
-  resizeCanvas();
-  refreshTitle();
-  setStatus("New project");
+  newDocument();
 }
 
 /**
@@ -2181,34 +2424,20 @@ async function openPath(filePath) {
   const data = await backend.open(filePath);
   if (!data) return;
   stopPlayback();
-  state.project = data.project;
-  state.currentPath = data.name;
-  state.suggestedName = null;
-  state.clipSourcePath = null;
-  state.dirty = false;
+  showDocument(data.project, { currentPath: data.name });
   if (data.recent) state.recent = data.recent;
-  history.reset();
-  updateHistoryButtons();
-  resizeCanvas();
-  refreshTitle();
   renderRecent();
-  loadSoundTrack();
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
 /** Put an imported .clip/.tvpp onto the canvas (shared by every import path). */
 function applyImportedProject(data, extension) {
   stopPlayback();
-  state.project = data.project;
-  state.currentPath = null;
-  state.suggestedName = `${data.name.replace(new RegExp(`\\.${extension}$`, "i"), "")}.tvmini`;
-  if (extension === "clip") state.clipSourcePath = data.path || null;
-  if (extension === "tvpp") state.tvppSourcePath = data.path || null;
-  state.dirty = false;
-  history.reset();
-  updateHistoryButtons();
-  resizeCanvas();
-  refreshTitle();
+  showDocument(data.project, {
+    suggestedName: `${data.name.replace(new RegExp(`\\.${extension}$`, "i"), "")}.tvmini`,
+    clipSourcePath: extension === "clip" ? data.path || null : null,
+    tvppSourcePath: extension === "tvpp" ? data.path || null : null,
+  });
   const warnings = Array.isArray(data.warnings) && data.warnings.length
     ? ` (${data.warnings.join("; ")})`
     : "";
@@ -2333,18 +2562,9 @@ async function chooseAndOpen() {
   const data = await backend.chooseAndOpen();
   if (!data) return;
   stopPlayback();
-  state.project = data.project;
-  state.currentPath = data.name;
-  state.suggestedName = null;
-  state.clipSourcePath = null;
-  state.dirty = false;
+  showDocument(data.project, { currentPath: data.name });
   if (data.recent) state.recent = data.recent;
-  history.reset();
-  updateHistoryButtons();
-  resizeCanvas();
-  refreshTitle();
   renderRecent();
-  loadSoundTrack();
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
@@ -2357,7 +2577,9 @@ async function save() {
   state.currentPath = data.name;
   state.dirty = false;
   if (data.recent) state.recent = data.recent;
+  captureDocument();
   refreshTitle();
+  renderDocumentTabs();
   renderRecent();
   setStatus(`Saved ${baseName(data.name)} (${data.bytes} bytes)`);
 }
@@ -2374,7 +2596,9 @@ async function saveAs() {
   state.currentPath = data.name;
   state.dirty = false;
   if (data.recent) state.recent = data.recent;
+  captureDocument();
   refreshTitle();
+  renderDocumentTabs();
   renderRecent();
   setStatus(`Saved ${baseName(data.name)} (${data.bytes} bytes)`);
 }
@@ -2831,6 +3055,7 @@ const KEYS = [
     group: "Project",
     rows: [
       ["New", "Ctrl+N"],
+      ["Next document", "Ctrl+Tab"],
       ["Open", "Ctrl+O"],
       ["Save", "Ctrl+S"],
       ["Save As", "Ctrl+Shift+S"],
@@ -3136,6 +3361,14 @@ document.addEventListener("keydown", (event) => {
   } else if (key === "n") {
     event.preventDefault();
     newProject();
+  } else if (event.key === "Tab" || event.key === "PageDown") {
+    // Ctrl+Tab walks through the open documents.
+    event.preventDefault();
+    const count = state.documents.length;
+    if (count > 1) {
+      const step = event.shiftKey ? count - 1 : 1;
+      activateDocument((state.activeIndex + step) % count);
+    }
   }
 });
 
@@ -3150,8 +3383,23 @@ async function boot() {
     document.body.classList.add("browser-mode");
   }
 
+  // The first document is an empty one; the tab strip grows from here.
+  state.documents = [
+    {
+      project: state.project,
+      currentPath: null,
+      suggestedName: null,
+      clipSourcePath: null,
+      tvppSourcePath: null,
+      dirty: false,
+      history,
+    },
+  ];
+  state.activeIndex = 0;
+
   loadSettings();
   syncSettingsUI();
+  syncQuickBar();
 
   try {
     state.recent = await backend.listRecent();
@@ -3163,6 +3411,7 @@ async function boot() {
   resizeCanvas();
   refreshTitle();
   updateHistoryButtons();
+  renderDocumentTabs();
   setStatus(
     backend.mode === "server"
       ? "Ready — draw on the canvas, then use the timeline to add layers and drawings"

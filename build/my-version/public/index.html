@@ -67,12 +67,7 @@
 
       <div class="topbar-spacer"></div>
 
-      <div class="doc-tab-bar" role="tablist" aria-label="Projects">
-        <div class="doc-tab active" role="tab" aria-selected="true" aria-label="Current project">
-          <span class="doc-tab-dot" aria-hidden="true"></span>
-          <span id="docTabName" class="doc-tab-name">Untitled</span>
-        </div>
-      </div>
+      <div class="doc-tab-bar" id="docTabBar" role="tablist" aria-label="Open documents"></div>
 
       <div class="topbar-actions">
         <button class="bar-action" type="button" data-shell-action="open" title="Open a project (Ctrl+O)" aria-label="Open">
@@ -191,6 +186,27 @@
           <span id="frameLabel" class="frame-label">Frame 1</span>
         </div>
         <div class="pane-body canvas-wrap">
+          <div class="quick-bar" id="quickBar">
+            <button class="quick-colour" id="quickColour" type="button" title="The colour new strokes use">
+              <span class="quick-swatch" id="quickSwatch"></span>
+            </button>
+            <input
+              id="quickWidth"
+              class="quick-width"
+              type="range"
+              min="1"
+              max="60"
+              value="6"
+              title="Brush width"
+              aria-label="Brush width"
+            />
+            <span class="quick-value" id="quickWidthValue">6</span>
+            <span class="quick-sep" aria-hidden="true"></span>
+            <button class="quick-btn" id="quickUndo" type="button" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+            <button class="quick-btn" id="quickRedo" type="button" title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
+            <span class="quick-sep" aria-hidden="true"></span>
+            <button class="quick-btn" id="quickHide" type="button" title="Hide this bar" aria-label="Hide the quick bar">×</button>
+          </div>
           <canvas id="canvas" width="960" height="600"></canvas>
         </div>
       </section>
