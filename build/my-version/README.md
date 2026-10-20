@@ -10,6 +10,29 @@ model. It shares **no code, data or file formats** with TVPaint.
 - Clip Studio `.clip` files can be imported read-only (preview image only) and
   exported as layered CSP documents for the current frame.
 - One canvas, up to 100 animation layers, current-frame PNG and `.clip` export.
+- A start screen with recent projects, a guide book and `F1` shortcut list.
+
+## Keyboard shortcuts
+
+| Group | Action | Keys |
+|---|---|---|
+| Tools | Brush / Eraser / Pick colour | `B` / `E` / `I` |
+| Tools | Brush size | `[` / `]` |
+| Tools | Clear the current drawing | `Backspace` |
+| Timeline | Play / pause | `Space` |
+| Timeline | Frame step | `←` / `→` |
+| Timeline | Layer select | `↑` / `↓` |
+| Timeline | Exposure longer / shorter | `5` / `Shift+5` |
+| Timeline | Insert a blank drawing | `6` |
+| Timeline | Duplicate / delete the drawing | `Ctrl+D` / `Delete` |
+| Project | New / Open / Save / Save As | `Ctrl+N/O/S/Shift+S` |
+| Project | Export PNG / layered `.clip` | `Ctrl+E` / `Ctrl+Shift+E` |
+| Project | Undo / redo | `Ctrl+Z` / `Ctrl+Y`, `Ctrl+Shift+Z`, `Ctrl+A` |
+| Project | This list in the app | `F1` |
+
+`F1` (or the Help menu) always shows the current list, and `Esc` closes any
+dialog. Preferences — pressure gain, touch drawing, the start screen — are
+remembered in `localStorage` (`tvmini.settings.v1`).
 
 ## Run
 

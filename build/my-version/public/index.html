@@ -17,8 +17,8 @@
           <hr />
           <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
           <button role="menuitem" data-action="saveAs">Save As…<span class="key">Ctrl+Shift+S</span></button>
-          <button role="menuitem" data-action="export">Export current frame PNG…</button>
-          <button role="menuitem" data-action="exportClip">Export layered .clip (current frame)…</button>
+          <button role="menuitem" data-action="export">Export current frame PNG…<span class="key">Ctrl+E</span></button>
+          <button role="menuitem" data-action="exportClip">Export layered .clip (current frame)…<span class="key">Ctrl+Shift+E</span></button>
           <hr />
           <div class="submenu">
             <button role="menuitem" aria-haspopup="true" aria-expanded="false">Recent ▸</button>
@@ -26,6 +26,13 @@
               <button role="menuitem" disabled>No recent projects</button>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="menu">
+        <button id="helpButton" class="menu-title" aria-haspopup="true" aria-expanded="false">Help</button>
+        <div id="helpMenu" class="menu-popup" role="menu" hidden>
+          <button role="menuitem" data-help="guide">Guide book</button>
+          <button role="menuitem" data-help="keys">Keyboard shortcuts<span class="key">F1</span></button>
         </div>
       </div>
       <div class="brand">TVMini</div>
@@ -36,10 +43,11 @@
         <div class="tool-row">
           <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)">Brush</button>
           <button id="eraserButton" aria-pressed="false" title="Eraser (E)">Eraser</button>
+          <button id="pickButton" aria-pressed="false" title="Pick a colour from the canvas (I)">Pick</button>
         </div>
         <div class="history-row">
           <button id="undoButton" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
-          <button id="redoButton" disabled title="Redo (Ctrl+A, Ctrl+Y)">Redo ↷</button>
+          <button id="redoButton" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z / Ctrl+A)">Redo ↷</button>
         </div>
         <label class="field">
           <span>Colour</span>
@@ -52,6 +60,14 @@
         <label class="field checkbox">
           <input id="pressure" type="checkbox" checked />
           <span>Pen pressure</span>
+        </label>
+        <label class="field">
+          <span>Pressure gain <output id="pressureGainValue">100%</output></span>
+          <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
+        </label>
+        <label class="field checkbox">
+          <input id="touchDraw" type="checkbox" checked />
+          <span>Draw with touch</span>
         </label>
         <div class="meter">Pressure: <output id="pressureValue">—</output></div>
 
@@ -87,8 +103,11 @@
           Draw on the canvas. The timeline below shows one row per animation
           layer and one column per frame. A filled dot is a drawing's first
           frame; smaller dots are held frames.<br />
-          <code>Space</code> play/pause, <code>←</code>/<code>→</code> change
-          frame, <code>E</code>/<code>B</code> switch tools.<br />
+          <code>Space</code> play/pause, <code>←</code>/<code>→</code> frame,
+          <code>↑</code>/<code>↓</code> layer, <code>B</code>/<code>E</code>/<code>I</code>
+          tools, <code>[</code>/<code>]</code> brush size, <code>5</code>/<code>Shift+5</code>
+          longer/shorter exposure, <code>6</code> insert drawing,
+          <code>F1</code> all shortcuts.<br />
           Opening a Clip Studio <code>.clip</code> file imports its saved
           canvas preview; the original file is never changed. Exporting a
           layered <code>.clip</code> writes the current frame as separate
@@ -140,6 +159,84 @@
       <span id="status">Ready</span>
       <span id="pathLabel" class="path"></span>
     </footer>
+
+    <div id="startOverlay" class="overlay" hidden>
+      <div class="overlay-card">
+        <div class="overlay-brand">TVMini</div>
+        <p class="overlay-tag">A clean-room drawing and animation timeline.<br />
+          It runs in the browser, or on your own files with the Node server.</p>
+        <div class="overlay-actions">
+          <button id="startDraw" class="primary">Start drawing</button>
+          <button id="startOpen">Open a project…</button>
+          <button id="startImport">Import a .clip preview…</button>
+        </div>
+        <div class="overlay-title">Recent projects</div>
+        <ul id="startRecent" class="start-recent"></ul>
+        <div class="overlay-actions">
+          <button id="startGuide">Guide book</button>
+          <button id="startKeys">Keyboard shortcuts</button>
+        </div>
+        <label class="field checkbox">
+          <input id="showStart" type="checkbox" checked />
+          <span>Show this at startup</span>
+        </label>
+      </div>
+    </div>
+
+    <div id="guideDialog" class="overlay" hidden>
+      <div class="overlay-card wide">
+        <div class="overlay-title-row">
+          <div class="overlay-title">Guide book</div>
+          <button class="overlay-close" type="button" data-close aria-label="Close">&times;</button>
+        </div>
+        <div class="guide-body">
+          <h3>Drawing</h3>
+          <p>Draw with <strong>Brush</strong> (B). <strong>Eraser</strong> (E) removes
+            paint and reveals lower layers or the canvas. <strong>Pick</strong> (I)
+            samples a colour from the canvas. <code>[</code> and <code>]</code> change
+            the brush size.</p>
+          <p><strong>Pen pressure</strong> follows the stylus. The <strong>pressure
+            gain</strong> slider makes strokes respond harder or softer.
+            <strong>Draw with touch</strong> decides whether a finger draws; a
+            stylus always draws.</p>
+          <p><strong>Undo / redo</strong> is Ctrl+Z, Ctrl+Y (or Ctrl+Shift+Z), and
+            covers strokes, layers, timeline edits and pixels cleared with
+            Backspace.</p>
+          <h3>Timeline</h3>
+          <p>Each layer row shows one column per frame. A filled dot is a
+            drawing's first frame; lighter dots are held frames. <code>6</code>
+            inserts a blank drawing, <code>5</code> lengthens the current
+            exposure, <code>Shift+5</code> shortens it, Delete removes the
+            drawing, Ctrl+D duplicates it. <code>Space</code> plays,
+            <code>←</code>/<code>→</code> step frames, <code>↑</code>/<code>↓</code>
+            change layer.</p>
+          <h3>Layers</h3>
+          <p>Layers composite top to bottom in the list. Move them with the
+            ↑/↓ buttons, rename with a double-click on the timeline name, and
+            lock or hide with the eye and lock icons.</p>
+          <h3>Saving and files</h3>
+          <p><strong>With the Node server</strong> (<code>node server.js</code>) files
+            are saved on disk as <code>.tvmini</code> and the app remembers real
+            paths. <strong>On a static host</strong> (such as GitHub Pages) saving
+            uses the browser's own download or File System Access API, and
+            recent projects are kept in this browser.</p>
+          <p><strong>Importing a .clip</strong> reads the saved canvas preview of a
+            Clip Studio file — the original is never changed. <strong>Exporting a
+            .clip</strong> writes the current frame as separate raster layers
+            inside a fresh Clip Studio document.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="keysDialog" class="overlay" hidden>
+      <div class="overlay-card wide">
+        <div class="overlay-title-row">
+          <div class="overlay-title">Keyboard shortcuts</div>
+          <button class="overlay-close" type="button" data-close aria-label="Close">&times;</button>
+        </div>
+        <div id="keysBody" class="keys-body"></div>
+      </div>
+    </div>
 
     <div id="modal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">

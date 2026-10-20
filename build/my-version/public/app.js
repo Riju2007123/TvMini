@@ -43,6 +43,10 @@ const undoButton = document.getElementById("undoButton");
 const redoButton = document.getElementById("redoButton");
 const brushButton = document.getElementById("brushButton");
 const eraserButton = document.getElementById("eraserButton");
+const pickButton = document.getElementById("pickButton");
+const pressureGainInput = document.getElementById("pressureGain");
+const pressureGainValue = document.getElementById("pressureGainValue");
+const touchDrawInput = document.getElementById("touchDraw");
 
 const layerNameInput = document.getElementById("layerName");
 const opacityInput = document.getElementById("opacity");
@@ -76,6 +80,20 @@ const goButton = document.getElementById("goButton");
 const cancelButton = document.getElementById("cancelButton");
 const confirmButton = document.getElementById("confirmButton");
 
+const helpButton = document.getElementById("helpButton");
+const helpMenu = document.getElementById("helpMenu");
+const startOverlay = document.getElementById("startOverlay");
+const startRecent = document.getElementById("startRecent");
+const startDrawButton = document.getElementById("startDraw");
+const startOpenButton = document.getElementById("startOpen");
+const startImportButton = document.getElementById("startImport");
+const startGuideButton = document.getElementById("startGuide");
+const startKeysButton = document.getElementById("startKeys");
+const showStartInput = document.getElementById("showStart");
+const guideDialog = document.getElementById("guideDialog");
+const keysDialog = document.getElementById("keysDialog");
+const keysBody = document.getElementById("keysBody");
+
 const state = {
   project: blankProject(960, 600),
   currentPath: null,
@@ -92,6 +110,10 @@ const state = {
   playing: false,
   playTimer: null,
   opacityBefore: null,
+  // Remembered preferences (pressure gain, touch drawing, start screen).
+  pressureGain: 1,
+  touchDraw: true,
+  showStart: true,
 };
 
 const history = new History({ limit: 100 });
@@ -1012,7 +1034,8 @@ function pressureFor(event) {
   const value = Number(event.pressure);
   if (!Number.isFinite(value)) return null;
   // A pen touching the tablet can briefly report 0; keep a visible hairline.
-  return Math.min(1, Math.max(0.05, value));
+  // The remembered gain scales the recorded pressure; 100% is neutral.
+  return Math.min(1, Math.max(0.05, value * state.pressureGain));
 }
 
 function drawPoint(event) {
@@ -1052,6 +1075,14 @@ function ensureDrawing(layer, frame) {
 canvas.addEventListener("pointerdown", (event) => {
   if (state.playing) return;
   if (event.button !== 0) return;
+  if (state.tool === "pick") {
+    pickColourAt(event);
+    return;
+  }
+  if (event.pointerType === "touch" && !state.touchDraw) {
+    setStatus("Touch drawing is off — turn it on in the tool panel");
+    return;
+  }
 
   const layer = layerForDrawing();
   if (!layer) return;
@@ -1127,22 +1158,148 @@ pressureInput.addEventListener("change", () => {
 function selectTool(tool) {
   state.tool = tool;
   const eraser = tool === "eraser";
+  const pick = tool === "pick";
 
-  brushButton.classList.toggle("active", !eraser);
+  brushButton.classList.toggle("active", !eraser && !pick);
   eraserButton.classList.toggle("active", eraser);
-  brushButton.setAttribute("aria-pressed", String(!eraser));
+  pickButton.classList.toggle("active", pick);
+  brushButton.setAttribute("aria-pressed", String(!eraser && !pick));
   eraserButton.setAttribute("aria-pressed", String(eraser));
+  pickButton.setAttribute("aria-pressed", String(pick));
   colorInput.disabled = eraser;
+  canvas.classList.toggle("picking", pick);
 
   setStatus(
-    eraser
-      ? "Eraser — removes paint and reveals lower layers or the canvas"
-      : "Brush — paint with the selected colour",
+    pick
+      ? "Pick — click the canvas to sample a colour"
+      : eraser
+        ? "Eraser — removes paint and reveals lower layers or the canvas"
+        : "Brush — paint with the selected colour",
   );
 }
 
 brushButton.addEventListener("click", () => selectTool("brush"));
 eraserButton.addEventListener("click", () => selectTool("eraser"));
+pickButton.addEventListener("click", () => selectTool("pick"));
+
+function selectedWidth() {
+  return Number(widthInput.value);
+}
+
+function changeWidth(delta) {
+  const next = Math.max(1, Math.min(60, selectedWidth() + delta));
+  if (next === selectedWidth()) return;
+  widthInput.value = String(next);
+  widthValue.textContent = String(next);
+  setStatus(`Brush width ${next}`);
+}
+
+function rgbToHex(red, green, blue) {
+  const hex = (value) => value.toString(16).padStart(2, "0");
+  return `#${hex(red)}${hex(green)}${hex(blue)}`;
+}
+
+/** Sample the composited canvas colour under the cursor, then draw again. */
+function pickColourAt(event) {
+  const [x, y] = canvasPoint(event);
+  const px = Math.min(canvas.width - 1, Math.max(0, Math.round(x)));
+  const py = Math.min(canvas.height - 1, Math.max(0, Math.round(y)));
+  const [red, green, blue] = ctx.getImageData(px, py, 1, 1).data;
+  colorInput.value = rgbToHex(red, green, blue);
+  selectTool("brush");
+  setStatus(`Picked colour ${colorInput.value}`);
+}
+
+/**
+ * Shorten the current drawing's exposure by one frame — the counterpart to
+ * the Hold +1 button.
+ */
+function shrinkExposure() {
+  const layer = currentLayer();
+  const info = exposureInfo(layer, state.project.currentFrame);
+  if (info.kind !== "head" && info.kind !== "hold") {
+    setStatus("There is no drawing at this frame", true);
+    return;
+  }
+  if (info.count <= 1) {
+    setStatus("The exposure is already at its shortest");
+    return;
+  }
+  if (layer.locked) {
+    setStatus("This layer is locked — unlock it first", true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  setExposure(layer, state.project.currentFrame, info.count - 1);
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Exposure shortened to ${info.count - 1} frame${info.count - 1 === 1 ? "" : "s"}`);
+}
+
+/* ------------------------------------------------------------- settings */
+
+const SETTINGS_KEY = "tvmini.settings.v1";
+
+function loadSettings() {
+  try {
+    const data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null") || {};
+    if (Number.isFinite(data.pressureGain)) {
+      state.pressureGain = Math.min(3, Math.max(0.25, data.pressureGain));
+    }
+    state.touchDraw = data.touchDraw !== false;
+    state.showStart = data.showStart !== false;
+  } catch {
+    // A blocked or broken store only loses the remembered preferences.
+  }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        pressureGain: state.pressureGain,
+        touchDraw: state.touchDraw,
+        showStart: state.showStart,
+      }),
+    );
+  } catch {
+    // The same as above: persisting a preference is best-effort.
+  }
+}
+
+function syncSettingsUI() {
+  const percent = Math.round(state.pressureGain * 100);
+  pressureGainInput.value = String(percent);
+  pressureGainValue.textContent = `${percent}%`;
+  touchDrawInput.checked = state.touchDraw;
+  showStartInput.checked = state.showStart;
+}
+
+pressureGainInput.addEventListener("input", () => {
+  state.pressureGain = Number(pressureGainInput.value) / 100;
+  pressureGainValue.textContent = `${pressureGainInput.value}%`;
+  setStatus(`Pressure gain ${pressureGainInput.value}%`);
+});
+pressureGainInput.addEventListener("change", saveSettings);
+
+touchDrawInput.addEventListener("change", () => {
+  state.touchDraw = touchDrawInput.checked;
+  saveSettings();
+  setStatus(
+    state.touchDraw
+      ? "Touch drawing on — a finger draws as well as a stylus"
+      : "Touch drawing off — only the stylus and mouse draw",
+  );
+});
+
+showStartInput.addEventListener("change", () => {
+  state.showStart = showStartInput.checked;
+  saveSettings();
+});
 
 clearButton.addEventListener("click", clearDrawing);
 undoButton.addEventListener("click", undo);
@@ -1206,17 +1363,33 @@ function closeMenus() {
   fileMenu.hidden = true;
   fileButton.setAttribute("aria-expanded", "false");
   recentMenu.hidden = true;
+  helpMenu.hidden = true;
+  helpButton.setAttribute("aria-expanded", "false");
 }
 
 fileButton.addEventListener("click", (event) => {
   event.stopPropagation();
   const open = fileMenu.hidden;
+  helpMenu.hidden = true;
+  helpButton.setAttribute("aria-expanded", "false");
   fileMenu.hidden = !open;
   fileButton.setAttribute("aria-expanded", String(open));
 });
 
+helpButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = helpMenu.hidden;
+  fileMenu.hidden = true;
+  fileButton.setAttribute("aria-expanded", "false");
+  helpMenu.hidden = !open;
+  helpButton.setAttribute("aria-expanded", String(open));
+});
+
 document.addEventListener("click", (event) => {
   if (!fileMenu.hidden && !fileMenu.contains(event.target) && event.target !== fileButton) {
+    closeMenus();
+  }
+  if (!helpMenu.hidden && !helpMenu.contains(event.target) && event.target !== helpButton) {
     closeMenus();
   }
 });
@@ -1226,6 +1399,14 @@ fileMenu.addEventListener("click", (event) => {
   if (!button) return;
   closeMenus();
   handleAction(button.dataset.action);
+});
+
+helpMenu.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-help]");
+  if (!button) return;
+  closeMenus();
+  if (button.dataset.help === "guide") showGuide();
+  else showKeys();
 });
 
 recentMenu.parentElement.addEventListener("click", (event) => {
@@ -1262,10 +1443,12 @@ function renderRecent() {
     button.append(name, filePath);
     button.addEventListener("click", () => {
       closeMenus();
-      openPath(entry.path);
+      openPath(entry.path ?? entry.name);
     });
     recentMenu.append(button);
   }
+
+  renderStartRecent();
 }
 async function refreshRecent() {
   try {
@@ -1333,14 +1516,13 @@ async function openPath(filePath) {
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
-async function importClip(filePath) {
-  const data = await backend.importClip(filePath);
-  if (!data) return;
+/** Put an imported .clip preview on the canvas (shared by every import path). */
+function applyImportedClip(data) {
   stopPlayback();
   state.project = data.project;
   state.currentPath = null;
   state.suggestedName = `${data.name.replace(/\.clip$/i, "")}.tvmini`;
-  state.clipSourcePath = data.path || filePath;
+  state.clipSourcePath = data.path || null;
   state.dirty = false;
   history.reset();
   updateHistoryButtons();
@@ -1352,10 +1534,17 @@ async function importClip(filePath) {
   );
 }
 
+async function importClip(filePath) {
+  const data = await backend.importClip(filePath);
+  if (!data) return;
+  applyImportedClip(data);
+}
+
 async function chooseAndImportClip() {
   if (!confirmDiscard()) return;
-  const filePath = await backend.chooseAndImportClip();
-  if (!filePath) return;
+  const data = await backend.chooseAndImportClip();
+  if (!data) return;
+  applyImportedClip(data);
 }
 
 async function chooseAndOpen() {
@@ -1547,12 +1736,180 @@ nameInput.addEventListener("keydown", (event) => {
 
 /* ---------------------------------------------------------------- keyboard */
 
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !modal.hidden) {
-    finishPicker(null);
+const KEYS = [
+  {
+    group: "Tools",
+    rows: [
+      ["Brush", "B"],
+      ["Pick a colour from the canvas", "I"],
+      ["Eraser", "E"],
+      ["Smaller / larger brush", "[ / ]"],
+      ["Clear the current drawing", "Backspace"],
+    ],
+  },
+  {
+    group: "Timeline",
+    rows: [
+      ["Play / pause", "Space"],
+      ["Previous / next frame", "← / →"],
+      ["Select layer above / below", "↑ / ↓"],
+      ["Extend the exposure one frame", "5"],
+      ["Shorten the exposure one frame", "Shift+5"],
+      ["Insert a blank drawing", "6"],
+      ["Duplicate the drawing", "Ctrl+D"],
+      ["Delete the drawing", "Delete"],
+    ],
+  },
+  {
+    group: "Project",
+    rows: [
+      ["New", "Ctrl+N"],
+      ["Open", "Ctrl+O"],
+      ["Save", "Ctrl+S"],
+      ["Save As", "Ctrl+Shift+S"],
+      ["Export current frame PNG", "Ctrl+E"],
+      ["Export layered .clip", "Ctrl+Shift+E"],
+      ["Undo", "Ctrl+Z"],
+      ["Redo", "Ctrl+Y / Ctrl+Shift+Z / Ctrl+A"],
+      ["Keyboard shortcuts", "F1"],
+      ["Close dialogs", "Esc"],
+    ],
+  },
+];
+
+function buildKeysBody() {
+  keysBody.replaceChildren();
+  for (const group of KEYS) {
+    const card = element("div", "keys-group");
+    card.append(element("h3", null, group.group));
+    for (const [label, keys] of group.rows) {
+      const row = element("div", "keys-row");
+      row.append(element("span", null, label), element("span", "keys-key", keys));
+      card.append(row);
+    }
+    keysBody.append(card);
+  }
+}
+
+function showGuide() {
+  guideDialog.hidden = false;
+}
+
+function showKeys() {
+  buildKeysBody();
+  keysDialog.hidden = false;
+}
+
+function showStart() {
+  if (state.showStart === false) return;
+  syncSettingsUI();
+  renderStartRecent();
+  startOverlay.hidden = false;
+}
+
+function closeAllOverlays() {
+  startOverlay.hidden = true;
+  keysDialog.hidden = true;
+  guideDialog.hidden = true;
+}
+
+function anyOverlayOpen() {
+  return !startOverlay.hidden || !keysDialog.hidden || !guideDialog.hidden;
+}
+
+startDrawButton.addEventListener("click", () => {
+  startOverlay.hidden = true;
+  setStatus("Draw on the canvas — F1 lists every shortcut");
+});
+
+startOpenButton.addEventListener("click", async () => {
+  startOverlay.hidden = true;
+  await chooseAndOpen();
+});
+
+startImportButton.addEventListener("click", async () => {
+  startOverlay.hidden = true;
+  await chooseAndImportClip();
+});
+
+startGuideButton.addEventListener("click", showGuide);
+startKeysButton.addEventListener("click", showKeys);
+
+guideDialog.addEventListener("click", (event) => {
+  if (event.target === guideDialog) guideDialog.hidden = true;
+});
+
+keysDialog.addEventListener("click", (event) => {
+  if (event.target === keysDialog) keysDialog.hidden = true;
+});
+
+startOverlay.addEventListener("click", (event) => {
+  if (event.target === startOverlay) startOverlay.hidden = true;
+});
+
+for (const button of document.querySelectorAll(".overlay [data-close]")) {
+  button.addEventListener("click", (event) => {
+    event.target.closest(".overlay").hidden = true;
+  });
+}
+
+function renderStartRecent() {
+  startRecent.replaceChildren();
+
+  if (state.recent.length === 0) {
+    startRecent.append(element("li", "empty", "Nothing yet — save a project to see it here"));
     return;
   }
-  if (!modal.hidden) return;
+
+  for (const entry of state.recent) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+
+    const name = document.createElement("span");
+    name.className = "start-name";
+    name.textContent = entry.name;
+
+    const filePath = document.createElement("span");
+    filePath.className = "start-path";
+    filePath.textContent = entry.path || "in this browser";
+
+    button.append(name, filePath);
+    button.addEventListener("click", () => {
+      closeAllOverlays();
+      openPath(entry.path ?? entry.name);
+    });
+    item.append(button);
+    startRecent.append(item);
+  }
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (!modal.hidden) {
+      finishPicker(null);
+      return;
+    }
+    if (anyOverlayOpen()) {
+      closeAllOverlays();
+      event.preventDefault();
+      return;
+    }
+    if (!fileMenu.hidden || !helpMenu.hidden || !recentMenu.hidden) {
+      closeMenus();
+      return;
+    }
+  }
+
+  if (!modal.hidden || anyOverlayOpen()) return;
+
+  // F1 and "?" open the shortcut list even while a control has focus, so a
+  // user stuck in an input can still find the way out.
+  if (event.key === "F1" || (!event.ctrlKey && !event.metaKey && event.key === "?")) {
+    event.preventDefault();
+    showKeys();
+    return;
+  }
 
   const modifier = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
@@ -1562,7 +1919,8 @@ document.addEventListener("keydown", (event) => {
     event.target instanceof HTMLSelectElement ||
     event.target instanceof HTMLButtonElement;
 
-  if (!typing && !modifier && modal.hidden) {
+  // Never hijack keys while a stroke is being drawn.
+  if (!typing && !modifier && !event.altKey && !state.drawing) {
     if (event.key === " ") {
       event.preventDefault();
       togglePlayback();
@@ -1578,14 +1936,66 @@ document.addEventListener("keydown", (event) => {
       stepFrame(1);
       return;
     }
-    if (key === "e") {
+    if (event.key === "ArrowUp") {
       event.preventDefault();
-      selectTool("eraser");
+      selectLayer(Math.max(0, state.project.currentLayer - 1));
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectLayer(Math.min(state.project.layers.length - 1, state.project.currentLayer + 1));
       return;
     }
     if (key === "b") {
       event.preventDefault();
       selectTool("brush");
+      return;
+    }
+    if (key === "e") {
+      event.preventDefault();
+      selectTool("eraser");
+      return;
+    }
+    if (key === "i") {
+      event.preventDefault();
+      selectTool(state.tool === "pick" ? "brush" : "pick");
+      return;
+    }
+    if (event.key === "[") {
+      event.preventDefault();
+      changeWidth(-1);
+      return;
+    }
+    if (event.key === "]") {
+      event.preventDefault();
+      changeWidth(1);
+      return;
+    }
+    // Numeric-row 5 extends the exposure (Flash's F5 slot); Shift+5 shortens.
+    // Shifted layouts report "%" for Shift+5, so it is mapped on its own.
+    if (key === "%" || (key === "5" && event.shiftKey)) {
+      event.preventDefault();
+      shrinkExposure();
+      return;
+    }
+    if (key === "5") {
+      event.preventDefault();
+      holdFrame();
+      return;
+    }
+    if (key === "6") {
+      event.preventDefault();
+      addDrawing();
+      return;
+    }
+    if (key === "backspace") {
+      event.preventDefault();
+      clearDrawing();
+      return;
+    }
+    if (key === "delete") {
+      event.preventDefault();
+      deleteFrame();
       return;
     }
   }
@@ -1601,6 +2011,15 @@ document.addEventListener("keydown", (event) => {
   } else if (!typing && (key === "a" || key === "y")) {
     event.preventDefault();
     redo();
+  } else if (key === "d") {
+    event.preventDefault();
+    duplicateFrame();
+  } else if (key === "e" && event.shiftKey) {
+    event.preventDefault();
+    exportClip();
+  } else if (key === "e") {
+    event.preventDefault();
+    exportPng();
   } else if (key === "s" && event.shiftKey) {
     event.preventDefault();
     saveAs();
@@ -1627,6 +2046,9 @@ async function boot() {
     document.body.classList.add("browser-mode");
   }
 
+  loadSettings();
+  syncSettingsUI();
+
   try {
     state.recent = await backend.listRecent();
     renderRecent();
@@ -1642,6 +2064,7 @@ async function boot() {
       ? "Ready — draw on the canvas, then use the timeline to add layers and drawings"
       : "Ready — running in the browser. Files are saved to this device.",
   );
+  showStart();
 }
 
 boot();

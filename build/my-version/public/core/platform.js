@@ -78,6 +78,11 @@ function createServerBackend(hooks) {
       return { name: data.name, path: data.path, project: data.project };
     },
 
+    async importClip(path) {
+      const data = await serverRequest("POST", "/api/import-clip", { path });
+      return { name: data.name, path: data.path, project: data.project };
+    },
+
     async saveProject(project, currentName, options = {}) {
       const target = currentName || (await hooks.pickPath({
         mode: "save",
@@ -210,6 +215,12 @@ function createBrowserBackend(hooks) {
         ],
       });
       return { name: picked.name, path: picked.name, project };
+    },
+
+    async importClip(name) {
+      // A browser cannot re-read a .clip by path, so a recent .clip entry is
+      // opened from the stored copy instead.
+      return this.open(name);
     },
 
     async saveProject(project, currentName) {
