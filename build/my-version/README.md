@@ -38,6 +38,12 @@ model. It shares **no code, data or file formats** with TVPaint.
 - **Clip mask**: a layer can be cut by the picture of the layer below it.
 - **Keyframe navigation**: the timeline has the first frame, the frame before
   the next key, the frame after the last key and the last frame.
+- **The timeline of Clip Studio Paint**: a ruler with the frame numbers and
+  the keys of the animation above them, a tinted column for the frame that is
+  shown, a line for the first frame, a **⊞** button on every row that adds a
+  layer next to it, a settings menu for the timeline, and a number in the
+  corner that reads *frame / first frame / last frame*. The names of the cells
+  and the keys can be hidden.
 - A start screen with recent projects, a guide book and `F1` shortcut list.
 - HSV colour wheel (hue ring + saturation/value square + hex field, plus a
   "Transparent" chip that switches to the eraser) next to the native colour

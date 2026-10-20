@@ -1353,12 +1353,19 @@ canvas.picking {
   display: grid;
   grid-column: 2;
   grid-template-columns: repeat(var(--frames), minmax(20px, 1fr));
-  background-image: repeating-linear-gradient(
-    to right,
-    var(--seam) 0 1px,
-    transparent 1px 100%
-  );
-  background-size: calc(100% / var(--frames)) 100%;
+}
+
+.tl-grid-line {
+  grid-row: 1;
+  box-shadow: inset -1px 0 0 var(--seam);
+}
+
+.tl-grid-head {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--well);
+  box-shadow: 1px 0 0 var(--seam-strong);
 }
 
 .tl-row {

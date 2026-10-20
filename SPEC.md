@@ -194,6 +194,29 @@ compatibility with either program.
 - `Home` / `End` go to the first and the last frame, `PageUp` / `PageDown` go
   to the key before and the key after the current frame.
 
+### FR-22 The look of the timeline
+- The timeline is drawn the way Clip Studio Paint draws it.
+- The head of the timeline is a ruler with two lines: the keys of the
+  animation above the frame numbers, and the frame numbers themselves.
+  The numbers are thinned out when there are many frames, so they do not run
+  into one another, and the number of the frame that is shown is always
+  written and is red.
+- A key marker shows the frame of the key, and clicking it goes to that
+  frame.
+- The column of the frame that is shown is tinted over every row, and the
+  column of the first frame is marked with a line.
+- The names of the layers stay in place when the timeline is scrolled
+  sideways.
+- The head of a row shows a fold arrow for a folder, the eye, the kind of the
+  layer, the name, the lock and a **⊞** button that adds a layer next to it:
+  inside the folder when the row is a folder, above the row otherwise.
+- The corner of the timeline reads *frame / first frame / last frame*, and
+  the settings of the timeline — the frame rate, the first frame, the loop
+  and the onion skin — sit behind the button that opens the menu.
+- The names of the cells and the keys of the timeline can be hidden.
+- Under the rows there is an empty area with the columns of the frames in
+  it.
+
 ### FR-11 Eraser
 - The tools panel offers **Brush** and **Eraser**; `B` and `E` switch tools
   when focus is not in a text field.

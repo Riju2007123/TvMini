@@ -52,5 +52,12 @@ about licence enforcement is reported as documentation only.
   - Project format is now version 3 (folders, clip mask, cell names);
     version 1 and 2 files are migrated on load.
   - 176/176 tests pass.
+- **Step 9 — TIMELINE LOOK:** done.
+  - The timeline is drawn the way Clip Studio Paint draws it: a ruler with the
+    keys of the animation above the frame numbers, a tinted column for the
+    frame that is shown, a line for the first frame, a **⊞** button on every
+    row that adds a layer next to it, a settings menu for the timeline, and
+    *frame / first frame / last frame* in the corner.
+  - The names of the cells and the keys can be hidden.
 
 **next step: all steps complete — see REPORT.md / SPEC.md**

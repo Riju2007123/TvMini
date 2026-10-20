@@ -139,6 +139,18 @@ const previousKeyButton = document.getElementById("previousKeyButton");
 const nextKeyButton = document.getElementById("nextKeyButton");
 const lastFrameButton = document.getElementById("lastFrameButton");
 const clipLayerInput = document.getElementById("clipLayer");
+const frameReadout = document.getElementById("frameReadout");
+const cellNamesButton = document.getElementById("cellNamesButton");
+const keyMarkersButton = document.getElementById("keyMarkersButton");
+const timelineMenuButton = document.getElementById("timelineMenuButton");
+const timelineMenu = document.getElementById("timelineMenu");
+const menuFps = document.getElementById("menuFps");
+const menuStartFrame = document.getElementById("menuStartFrame");
+const menuLoop = document.getElementById("menuLoop");
+const menuOnion = document.getElementById("menuOnion");
+const menuAddFolder = document.getElementById("menuAddFolder");
+const menuFirstFrame = document.getElementById("menuFirstFrame");
+const menuLastFrame = document.getElementById("menuLastFrame");
 const layerUpButton = document.getElementById("layerUpButton");
 const layerDownButton = document.getElementById("layerDownButton");
 const addFrameButton = document.getElementById("addFrameButton");
@@ -203,6 +215,10 @@ const state = {
   playTimer: null,
   // The folders that are closed in the timeline.
   collapsed: new Set(),
+  // Write the name of every cell in the timeline, and mark the keys above
+  // the frame numbers.
+  showCellNames: true,
+  showKeyMarkers: true,
   opacityBefore: null,
   tvppSourcePath: null,
   // Remembered preferences (pressure gain, touch drawing, start screen).
@@ -663,6 +679,7 @@ function updateFrameLabel() {
   const end = Math.max(project.startFrame, contentEnd(project));
   const outside = project.currentFrame > end ? " (outside content)" : "";
   frameLabel.textContent = `Frame ${project.currentFrame} / ${end}${outside}`;
+  updateFrameReadout();
 }
 
 function resizeCanvas() {
@@ -1891,6 +1908,8 @@ function renderCameraRow(columns, start) {
     const cell = element("button", `tl-cell camera${key ? " key" : ""}`);
     cell.dataset.frame = String(frame);
     cell.type = "button";
+    cell.style.gridColumn = `${i + 1} / span 1`;
+      cell.style.gridRow = "1";
     cell.textContent = key ? "◆" : "";
     cell.title = key
       ? `Camera key — ${Math.round(key.width)}×${Math.round(key.height)} at ${Math.round(key.x)}, ${Math.round(key.y)}`
@@ -1899,6 +1918,7 @@ function renderCameraRow(columns, start) {
     cells.append(cell);
   }
 
+  appendPlayhead(cells, project, columns, start);
   row.append(head, cells);
   return row;
 }
@@ -1961,6 +1981,54 @@ function toggleFolder(name) {
   }
   renderTimeline();
   renderLayerPanel();
+}
+
+/**
+ * Draw the column of the playhead over a row.
+ *
+ * The column the current frame is in is tinted, the way Clip Studio Paint
+ * draws it, and the column of the first frame is marked with a line.
+ */
+function appendPlayhead(cells, project, columns, start) {
+  const current = project.currentFrame - start + 1;
+  if (current >= 1 && current <= columns) {
+    const playhead = element("div", "tl-playhead");
+    playhead.style.gridColumn = `${current} / span 1`;
+    cells.append(playhead);
+  }
+  if (start !== project.startFrame) return;
+  const line = element("div", "tl-start-line");
+  line.style.gridColumn = "1 / span 1";
+  cells.append(line);
+}
+
+/**
+ * Add a layer next to another one.
+ *
+ * A folder takes the new layer inside it, and an ordinary layer gets the
+ * new one above it, the way the button on every row of the Clip Studio
+ * Paint layer palette works.
+ */
+function addLayerBeside(index) {
+  const project = state.project;
+  if (project.layers.length >= MAX_LAYERS) {
+    setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const layer = project.layers[index];
+  const inside = isGroup(layer);
+  const parent = inside ? index : (layer.parent ?? -1);
+  const at = inside ? index + 1 : index;
+  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  insertLayer(project, at, created, parent);
+  project.currentLayer = at;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Added ${currentLayer().name}`);
 }
 
 function renderTimeline() {
@@ -2116,6 +2184,7 @@ function renderTimeline() {
       // Every cell is placed by hand, so the column of the playhead can sit
       // over the row.
       cell.style.gridColumn = `${i + 1} / span 1`;
+      cell.style.gridRow = "1";
       if (frame === project.currentFrame) cell.classList.add("current");
       if (i === 0) cell.classList.add("first");
 
@@ -2132,7 +2201,7 @@ function renderTimeline() {
         owner = entry.layer;
         cell.classList.remove(info.kind);
         cell.classList.add(entry.name ? "head" : "hold");
-        cell.textContent = entry.name || "·";
+        cell.textContent = (state.showCellNames && entry.name) || "●";
         cell.title = entry.name
           ? `Cell "${entry.name}" on frame ${frame} — ${entry.count} frame${entry.count === 1 ? "" : "s"}`
           : `Held frame — ${entry.remaining} of ${entry.count} remaining`;
@@ -2143,7 +2212,7 @@ function renderTimeline() {
 
       if (info.kind === "head") {
         const drawing = info.drawing;
-        const label = drawing?.name;
+        const label = state.showCellNames ? drawing?.name : null;
         cell.textContent = label || "●";
         cell.title = label
           ? `Cell "${label}" — ${info.count} frame${info.count === 1 ? "" : "s"}`
@@ -2181,9 +2250,12 @@ function renderTimeline() {
     for (let i = 0; i < columns; i += 1) {
       const cell = element("button", "tl-cell image");
       cell.disabled = true;
+      cell.style.gridColumn = `${i + 1} / span 1`;
+      cell.style.gridRow = "1";
       cell.title = "Read-only .clip preview (behind every layer)";
       cells.append(cell);
     }
+    appendPlayhead(cells, project, columns, start);
     row.append(head, cells);
     timelineEl.append(row);
   }
@@ -2191,7 +2263,22 @@ function renderTimeline() {
   const audioRow = renderAudioRow(columns, start);
   if (audioRow) timelineEl.append(audioRow);
 
+  // The empty area under the rows, with the columns of the frames in it.
+  const grid = element("div", "tl-grid-bg");
+  grid.append(element("div", "tl-grid-head"));
+  const lines = element("div", "tl-grid-lines");
+  lines.style.setProperty("--frames", String(columns));
+  for (let i = 0; i < columns; i += 1) {
+    const line = element("div", "tl-grid-line");
+    line.style.gridColumn = `${i + 1} / span 1`;
+    line.style.gridRow = "1";
+    lines.append(line);
+  }
+  grid.append(lines);
+  timelineEl.append(grid);
+
   updatePlayhead();
+  updateFrameReadout();
 }
 
 /* ------------------------------------------------------- the layers panel */
@@ -2450,6 +2537,7 @@ function renderAudioRow(columns, start) {
   if (picture) cell.style.backgroundImage = `url(${picture})`;
 
   cells.append(cell);
+  appendPlayhead(cells, project, columns, start);
   row.append(head, cells);
   return row;
 }
@@ -2490,6 +2578,19 @@ function updatePlayhead() {
   for (const cell of timelineEl.querySelectorAll(".tl-cell[data-frame]")) {
     cell.classList.toggle("current", Number(cell.dataset.frame) === project.currentFrame);
   }
+}
+
+/**
+ * The numbers in the corner of the timeline: the frame that is shown, the
+ * first frame and the last one, the way Clip Studio Paint writes them.
+ */
+function updateFrameReadout() {
+  const project = state.project;
+  if (!frameReadout) return;
+  const last = Math.max(project.startFrame, contentEnd(project));
+  frameReadout.textContent = `${project.currentFrame} / ${project.startFrame} / ${last}`;
+  frameReadout.title =
+    `Frame ${project.currentFrame} of ${project.startFrame} to ${last} at ${project.fps} fps`;
 }
 
 function syncLayerControls() {
@@ -3902,6 +4003,58 @@ layerKindSelect.addEventListener("change", () => {
   renderLayerPanel();
 });
 clipLayerInput.addEventListener("change", toggleClip);
+cellNamesButton.addEventListener("click", () => {
+  state.showCellNames = !state.showCellNames;
+  cellNamesButton.classList.toggle("on", state.showCellNames);
+  renderTimeline();
+  setStatus(state.showCellNames ? "The names of the cells are shown" : "The names of the cells are hidden");
+});
+keyMarkersButton.addEventListener("click", () => {
+  state.showKeyMarkers = !state.showKeyMarkers;
+  keyMarkersButton.classList.toggle("on", state.showKeyMarkers);
+  renderTimeline();
+  setStatus(state.showKeyMarkers ? "The keys are marked above the frames" : "The keys are hidden");
+});
+timelineMenuButton.addEventListener("click", () => {
+  const open = timelineMenu.hidden;
+  closeMenus();
+  if (open) {
+    menuFps.value = String(state.project.fps);
+    menuStartFrame.value = String(state.project.startFrame);
+    menuLoop.checked = state.project.loop;
+    menuOnion.checked = state.onion.enabled;
+    timelineMenu.hidden = false;
+    timelineMenuButton.setAttribute("aria-expanded", "true");
+  }
+});
+menuFps.addEventListener("change", () => {
+  fpsInput.value = menuFps.value;
+  changeFps();
+});
+menuStartFrame.addEventListener("change", () => {
+  startFrameInput.value = menuStartFrame.value;
+  changeStartFrame();
+});
+menuLoop.addEventListener("change", () => {
+  loopInput.checked = menuLoop.checked;
+  toggleLoop();
+});
+menuOnion.addEventListener("change", () => {
+  setOnion({ enabled: menuOnion.checked });
+  setStatus(state.onion.enabled ? "Onion skin on" : "Onion skin off");
+});
+menuAddFolder.addEventListener("click", () => {
+  closeMenus();
+  addGroup();
+});
+menuFirstFrame.addEventListener("click", () => {
+  closeMenus();
+  gotoFirstFrame();
+});
+menuLastFrame.addEventListener("click", () => {
+  closeMenus();
+  gotoLastFrame();
+});
 addFrameButton.addEventListener("click", addDrawing);
 duplicateFrameButton.addEventListener("click", duplicateFrame);
 holdButton.addEventListener("click", holdFrame);
@@ -3925,6 +4078,10 @@ function closeMenus() {
   recentMenu.hidden = true;
   helpMenu.hidden = true;
   helpButton.setAttribute("aria-expanded", "false");
+  if (timelineMenu) {
+    timelineMenu.hidden = true;
+    timelineMenuButton.setAttribute("aria-expanded", "false");
+  }
 }
 
 fileButton.addEventListener("click", (event) => {
