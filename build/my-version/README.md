@@ -592,6 +592,17 @@ reported `tvmini-test (640 × 480 px, 72dpi, 100%)`, the layer panel showed
 `Blue`, `Layer 1` and `Paper`, and both strokes rendered with the expected
 order and opacity. There was no corruption warning.
 
+**Second validation, on the current build.** After the native reader and the
+writer were rebuilt, the writer's output was compared byte for byte with the
+build that had been validated above. Only 42 bytes of 263,915 differ, in two
+places: the 16-byte document id, which is now a fresh random value the way
+Clip Studio Paint writes one, and the layer UUIDs, which were already random
+before. The container, the database, the tiles and the `ExternalChunk`
+offsets are identical. A 640 × 480 export with a `Blue` layer at 50 % and a
+`Red` layer at 100 % was then opened by hand in the Clip Studio Paint EX
+installed on the development machine, and the document opened without a
+corruption warning.
+
 ## Layout
 
 ```
