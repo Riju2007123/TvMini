@@ -19,7 +19,7 @@ const TEMPLATE = path.join(__dirname, "..", "public", "assets", "clip-template.c
  */
 export async function createClipBuffer(
   project,
-  { name = "TVMini export", animation = false, validate = true } = {},
+  { name = "TVMini export", animation = null, validate = true } = {},
 ) {
   const restore = setTemplateLoader(async () => Buffer.from(await fs.readFile(TEMPLATE)));
   try {

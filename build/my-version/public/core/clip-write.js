@@ -1,9 +1,26 @@
 ﻿import { Buffer } from "./bytes.js";
 import { openDatabase } from "./sqlite.js";
 import { ValidationError } from "./model.js";
-import { decodePng, encodePng, renderLayerRgba, renderProject } from "./png.js";
+import { decodePng, encodePng, renderDrawingRgba, renderLayerRgba, renderProject } from "./png.js";
 import { parseClipContainer } from "./clip.js";
 import { validateClipBytes } from "./clip-validate.js";
+import {
+  parseActionDocument,
+  readActionBlob,
+  readAnimationCurves,
+  readCelCurve,
+} from "./clip-animation.js";
+import {
+  celCurveFields,
+  encodeMixerPayload,
+  mixerColumnSize,
+  newMixerId,
+  replaceCurve,
+  setTrackEnd,
+  setTrackRange,
+  spliceCelPlan,
+  withStrings,
+} from "./clip-mixer.js";
 import {
   ALPHA_TILE,
   BLOCK_BEGIN,
@@ -729,6 +746,238 @@ function linkTree(database, tree, floor, rootId) {
   walk(top);
 }
 
+/**
+ * The folders of a project that are animation folders, and their cells.
+ *
+ * The importer marks a cell `preBehavior: "none"`, because a cell only shows
+ * on its own frame; an ordinary layer holds. That is the rule used here: a
+ * folder whose direct children are cells is an animation folder. A cell that
+ * is itself a folder is not looked into again, so its drawing layers are not
+ * mistaken for cells of the folder above it.
+ */
+function animationFolders(tree) {
+  const folders = [];
+  const seen = new Set();
+
+  // The frame a cell sits on: its own drawing's, or the earliest of the
+  // drawings inside it, because a cell that is a folder holds its picture in
+  // layers of its own.
+  const frameOf = (index, depth = 0) => {
+    const layer = tree.nodes[index].layer;
+    if (layer.drawings?.length) return layer.drawings[0].at;
+    if (depth >= 8) return null;
+    const frames = tree.nodes[index].children
+      .map((child) => frameOf(child, depth + 1))
+      .filter((frame) => frame !== null);
+    return frames.length ? Math.min(...frames) : null;
+  };
+
+  for (let index = 0; index < tree.nodes.length; index += 1) {
+    if (seen.has(index)) continue;
+    const node = tree.nodes[index];
+    if (node.layer.type !== "group" || node.children.length === 0) continue;
+    const children = node.children.map((child) => tree.nodes[child].layer);
+    if (!children.some((child) => child.preBehavior === "none")) continue;
+
+    const cells = [];
+    for (const child of node.children) {
+      const layer = tree.nodes[child].layer;
+      const at = frameOf(child);
+      if (at === null) continue;
+      cells.push({ name: layer.name || String(cells.length + 1), at });
+      seen.add(child);
+    }
+    if (cells.length === 0) continue;
+    cells.sort((one, two) => one.at - two.at);
+    folders.push({ node, cells });
+  }
+  return folders;
+}
+
+/** The types of the fields of a curve, so a rewrite keeps the document's own. */
+function curveFieldTypes(curve) {
+  const types = {};
+  for (const [name, field] of curve.fields) types[name] = field.type;
+  return types;
+}
+
+/**
+ * The parts of a real document a written animation is copied from.
+ *
+ * A new track needs Clip Studio Paint's own `TimeClip` and `Param` tree, and
+ * inventing that tree is the one thing that could make Paint reject a file
+ * that otherwise opens. The `.clip` the project was imported from already
+ * holds a cell track, so that track is used as the skeleton: its table
+ * definitions are reused as they are, and its documents are copied with only
+ * the cell curve replaced.
+ */
+function animationSkeleton(source, container) {
+  const tables = {};
+  for (const name of ["TimeLine", "Track"]) {
+    const row = readOne(
+      source,
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      name,
+    );
+    if (!row?.sql) return null;
+    tables[name] = row.sql;
+  }
+
+  const timeline = readOne(source, "SELECT * FROM TimeLine ORDER BY _PW_ID LIMIT 1");
+  const track = readOne(
+    source,
+    "SELECT * FROM Track WHERE TrackKind = 2000 ORDER BY _PW_ID LIMIT 1",
+  );
+  if (!timeline || !track) return null;
+
+  const blobOf = (value) => {
+    const id = Buffer.from(value).toString("ascii");
+    const chunk = container.chunks.find(
+      (entry) => entry.name === "CHNKExta" && entry.payload.toString("ascii", 8, 48) === id,
+    );
+    return chunk ? readActionBlob(chunk.payload) : null;
+  };
+
+  const second = blobOf(track.TrackActionMixer2);
+  const first = blobOf(track.TrackActionMixer);
+  if (!second || !first) return null;
+  const curve = readAnimationCurves(second).find((entry) => entry.kind === "ImageCelName");
+  if (!curve) return null;
+
+  return { tables, timeline, track, first, second, types: curveFieldTypes(curve) };
+}
+
+/** The 16 bytes a layer uuid string stands for. */
+function uuidBytes(value) {
+  const hex = String(value).replace(/-/g, "");
+  const bytes = new Uint8Array(16);
+  for (let index = 0; index < 16; index += 1) {
+    bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+/** Insert a row built from a row that was read, with some fields replaced. */
+function insertRow(database, table, source, overrides) {
+  const row = { ...source, ...overrides };
+  const keys = Object.keys(row).filter((key) => key !== "_PW_ID");
+  database
+    .prepare(
+      `INSERT INTO "${table}" (${keys.map((key) => `"${key}"`).join(", ")}) ` +
+      `VALUES (${keys.map(() => "?").join(", ")})`,
+    )
+    .run(...keys.map((key) => row[key]));
+}
+
+/**
+ * Write the timeline of a project into a `.clip` under construction.
+ *
+ * The mixer of a track is the action document described in `clip-mixer.js`.
+ * Here only the cell curve is replaced: the names of the cells become the
+ * `Tag` string values, their frames become the `Frame` times in 60 Hz ticks,
+ * and the end of the track follows the end of the project.
+ *
+ * `skeleton` comes from the document the project was imported from, so every
+ * part of the tree the writer does not understand is copied rather than made
+ * up. Returns the number of tracks that were written.
+ */
+function writeAnimation(database, tree, project, skeleton, pixels) {
+  if (!columnsOf(database, "Layer").includes("AnimationFolder")) {
+    database.exec("ALTER TABLE Layer ADD COLUMN AnimationFolder INTEGER DEFAULT NULL");
+  }
+  for (const sql of [skeleton.tables.TimeLine, skeleton.tables.Track]) {
+    const name = /CREATE TABLE\s+"?(\w+)/i.exec(sql)?.[1];
+    if (name && columnsOf(database, name).length === 0) database.exec(sql);
+  }
+
+  const folders = animationFolders(tree);
+  if (process.env.TVMINI_DEBUG) {
+    console.log(
+      "folders:",
+      JSON.stringify(folders.map((folder) => [folder.node.layer.name, folder.cells.map((cell) => `${cell.name}@${cell.at}`)])),
+    );
+  }
+  if (folders.length === 0) return 0;
+
+  const fps = Math.max(1, Number(project.fps) || 12);
+  const startFrame = Number(project.startFrame) || 1;
+  const tickOf = (frame) => ((frame - startFrame) * 60) / fps;
+  let end = startFrame - 1;
+  for (const layer of project.layers ?? []) {
+    for (const drawing of layer.drawings ?? []) {
+      end = Math.max(end, drawing.at + drawing.hold - 1);
+    }
+  }
+  const endTick = tickOf(Math.max(startFrame, end));
+
+  // The tracks form a list, so their ids are handed out before the rows are
+  // written: each one has to name the next.
+  const trackIds = folders.map(() => nextId(database, "Track"));
+  for (let index = 0; index < folders.length; index += 1) {
+    const folder = folders[index];
+    const layerId = folder.node.layerId;
+    database
+      .prepare("UPDATE Layer SET AnimationFolder = 1 WHERE MainId = ?")
+      .run(layerId);
+    const uuid = readOne(database, "SELECT LayerUuid FROM Layer WHERE MainId = ?", layerId);
+
+    const tags = folder.cells.map((cell) => cell.name);
+    const keys = folder.cells.map((cell, order) => ({
+      time: tickOf(cell.at),
+      value: order,
+      tag: cell.name,
+    }));
+    const pool = withStrings(skeleton.second.pool, tags);
+    const curve = replaceCurve(skeleton.second, {
+      kind: "ImageCelName",
+      fields: celCurveFields(keys, pool, skeleton.types),
+      pool,
+    });
+    const document = setTrackEnd(parseActionDocument(curve), endTick);
+
+    const secondId = newMixerId();
+    const firstId = newMixerId();
+    pixels.set(secondId, Buffer.from(encodeMixerPayload(document, secondId)).subarray(56));
+    pixels.set(firstId, Buffer.from(encodeMixerPayload(skeleton.first.raw, firstId)).subarray(56));
+
+    insertRow(database, "Track", skeleton.track, {
+      MainId: trackIds[index],
+      TrackNextIndex: trackIds[index + 1] ?? 0,
+      TrackActionMixerSize: mixerColumnSize(skeleton.first.raw),
+      TrackActionMixer: Buffer.from(firstId, "ascii"),
+      TrackActionMixer2Size: mixerColumnSize(document),
+      TrackActionMixer2: Buffer.from(secondId, "ascii"),
+      TrackUuid: uuidBytes(cryptoId()),
+      LayerUuidWithTrack: uuidBytes(uuid.LayerUuid),
+      TrackOpen: 0,
+      TrackContentOpen: 0,
+      TrackKind: 2000,
+      TrackOptionFlag: 768,
+    });
+  }
+
+  insertRow(database, "TimeLine", skeleton.timeline, {
+    MainId: nextId(database, "TimeLine"),
+    FirstTrack: trackIds[0],
+    TimeLineUuid: uuidBytes(cryptoId()),
+    TimeLineName: skeleton.timeline.TimeLineName ?? "Timeline 1",
+    FrameRate: fps,
+    StartFrame: 0,
+    EndFrame: Math.max(0, end - startFrame),
+    BiggestEndFrame: Math.max(0, end - startFrame),
+    CurrentFrame: Math.max(0, (Number(project.currentFrame) || startFrame) - startFrame),
+  });
+  database
+    .prepare("UPDATE AnimationCutBank SET Enable = 1, FirstTimeLine = 1 WHERE MainId = 2")
+    .run();
+  return folders.length;
+}
+
+/** A fresh 16 byte uuid, as the dashed text Clip Studio writes. */
+function cryptoId() {
+  return globalThis.crypto.randomUUID();
+}
+
 function updateExternalChunks(database, headBody, pixels) {
   let position = 24 + 16 + headBody.length;
   const entries = [];
@@ -791,16 +1040,37 @@ async function loadTemplate() {
  * that opens is worth more than an animated file that does not, so the
  * writer refuses to guess.
  */
-export async function createClipBuffer(project, { name = "TVMini export", animation = false, validate = true } = {}) {
-  if (animation) {
+export async function createClipBuffer(project, { name = "TVMini export", animation = null, validate = true } = {}) {
+  if (animation === true) {
     throw new ValidationError(
-      "writing the animation of a .clip is not ready yet; the keyframes of a Clip Studio track cannot be written safely",
+      "writing the animation of a .clip is not ready yet; the track it is copied from has to be given as `animation`",
     );
   }
   const template = parseContainer(await loadTemplate());
   let database;
+  let source;
+  let skeleton = null;
 
   try {
+    if (animation) {
+      let container;
+      try {
+        container = parseClipContainer(Buffer.isBuffer(animation) ? animation : Buffer.from(animation));
+      } catch {
+        throw new ValidationError("the .clip given as the animation skeleton is not a Clip Studio file");
+      }
+      if (!container.database) {
+        throw new ValidationError("the .clip given as the animation skeleton has no database");
+      }
+      source = await openDatabase(container.database);
+      skeleton = animationSkeleton(source, container);
+      if (!skeleton) {
+        throw new ValidationError(
+          "the .clip given as the animation skeleton has no cell track to copy",
+        );
+      }
+    }
+
     database = await openDatabase(template.database);
     database.exec("PRAGMA journal_mode = DELETE");
     database.exec("PRAGMA synchronous = FULL");
@@ -944,6 +1214,8 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
 
     setTimeline(database, project);
 
+    if (skeleton) writeAnimation(database, tree, project, skeleton, pixels);
+
     setPreview(database, project);
 
     const external = updateExternalChunks(database, template.headBody, pixels);
@@ -977,5 +1249,6 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     };
   } finally {
     if (database) await database.close();
+    if (source) await source.close();
   }
 }

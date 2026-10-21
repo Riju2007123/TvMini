@@ -688,10 +688,11 @@ first one and each `Track.TrackNextIndex` names the next. A track hangs on
 the layer whose uuid is in `LayerUuidWithTrack`.
 
 The mixer blob and the action document are described above, and so is the
-`FCurve` record. What is still missing for a **writer** is a document to put a
-curve into: a new track needs the whole `TimeClip`/`Param` tree, and CSP
-validates a document well enough that guessing that tree is not worth the
-risk.
+`FCurve` record. A **writer** needs a document to put a curve into: a new
+track needs the whole `TimeClip`/`Param` tree, and CSP validates a document
+well enough that guessing that tree is not worth the risk. The way around it
+is to borrow one: the `.clip` a project was imported from already holds a
+track with a cell curve, so that track is the skeleton.
 
 What *is* settled is the document itself. `public/core/clip-mixer.js` reads
 every mixer of `Animation3.clip` and `Animation2.clip`, rebuilds it from its
@@ -712,6 +713,11 @@ string pool, the word after it, the body and the checksum are all understood:
 - `TrackActionMixerSize` (and its `2` sister) is the length of the *unpacked*
   document, not of the compressed blob.
 
+One subtlety cost a day: the string pool of a document is written from the
+pool the record was built with, so a curve whose cell names are **not yet in
+the pool** needs the longer pool handed to the writer as well. Without it the
+tag values point past the end of the pool and the curve reads back empty.
+
 The record grammar was also walked end to end by `tools/binc2.mjs`, which
 re-encodes all fourteen documents byte for byte. Its rules (struct, typed
 leaf, array leaf, string leaf, counted item) are recorded in "Inside the
@@ -722,17 +728,36 @@ The three words before a field are `[Int32[]]`, `[total - 8]` and
 words, the name, the type, the count and the trailing `[0][0]`. A `Double[]`
 of nine values says 96 and 100, and a `Double` of one value says 28 and 32.
 
-`createClipBuffer` still refuses `animation: true`, but for a narrower reason
-than before: it is not the keyframes that are unknown, it is the skeleton a
-new track has to be built in. A malformed mixer is the one thing that could
-make Clip Studio Paint reject a file that otherwise opens, and a static file
-that opens is worth more than an animated file that does not.
+### Writing a whole animation
+
+`createClipBuffer(project, { animation })` takes the `.clip` the project came
+from and writes the timeline into a new file:
+
+- the `TimeLine` and `Track` tables are created with the definitions of the
+  skeleton, and the rows of the skeleton are copied;
+- every animation folder of the project becomes one track: its layer gets
+  `AnimationFolder = 1`, and its cells become the keys of the `ImageCelName`
+  curve. A cell's frame becomes a time in 60 Hz ticks
+  (`(frame - startFrame) * 60 / fps`) and its name becomes the `Tag`;
+- the end of a track is the end of the project, and the timeline says the same;
+- the mixer blobs become external chunks of their own, and the
+  `ExternalChunk` offsets are written again.
+
+An animation folder is recognised the way the importer marks one: a folder
+whose direct children are cells. A cell is a layer with `preBehavior:
+"none"`, because a cell only shows on its own frame.
+
+`createClipBuffer` still refuses `animation: true` on its own: without a
+skeleton there is nothing to copy the track tree from, and a malformed mixer
+is the one thing that could make Clip Studio Paint reject a file that
+otherwise opens.
 
 `TrackValueMap` is kept inside the database rather than outside it. Its shape
 is a small property bag: `u32 8`, a `u32` entry count, then per entry
 `u32 size`, a UTF-16 big endian key, a UTF-16 big endian text, `u32 kind` and
 the value. The one that was read out of track 12 is 54 bytes and holds
-`ImageCelName` -> `"9"` with value `8`.
+`ImageCelName` -> `"9"` with value `8`. The writer copies it as it is: CSP
+reads the cells from the curve and not from this map.
 
 ## The paper
 

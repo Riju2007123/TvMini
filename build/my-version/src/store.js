@@ -82,8 +82,12 @@ export async function exportPng(filePath, project) {
  *
  * The writer uses a blank CSP document as a structural template, then rebuilds
  * the canvas, layer rows, offscreen block tables, and external image chunks.
- * TVMini timelines are not encoded as CSP animation tracks; each TVMini layer
- * becomes one raster layer containing its current-frame drawing.
+ *
+ * When the project came from a `.clip`, that file is also handed over as the
+ * animation skeleton: its tracks are copied and their cell curves are rebuilt
+ * from the project's animation folders, so the exported timeline matches what
+ * the editor shows. A file whose tracks cannot be read is exported statically
+ * rather than not at all.
  */
 export async function exportClip(filePath, project, sourcePath = null) {
   if (typeof filePath !== "string" || filePath.trim() === "") {
@@ -98,8 +102,25 @@ export async function exportClip(filePath, project, sourcePath = null) {
   ) {
     throw new ValidationError("refusing to overwrite the imported .clip file");
   }
+  let animation = null;
+  if (typeof sourcePath === "string" && sourcePath.trim() !== "") {
+    try {
+      animation = await fsp.readFile(sourcePath);
+    } catch {
+      animation = null;
+    }
+  }
   const name = path.basename(target, path.extname(target));
-  const { buffer, width, height, layers } = await createClipBuffer(clean, { name });
+  let written;
+  try {
+    written = await createClipBuffer(clean, { name, animation });
+  } catch (error) {
+    // The animation skeleton is a convenience: a `.clip` that cannot be read
+    // back (or that holds no track) still exports, only without the timeline.
+    if (!animation || !(error instanceof ValidationError)) throw error;
+    written = await createClipBuffer(clean, { name });
+  }
+  const { buffer, width, height, layers } = written;
   await writeAtomic(target, buffer);
   return { path: target, bytes: buffer.length, width, height, layers };
 }

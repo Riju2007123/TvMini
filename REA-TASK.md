@@ -295,4 +295,39 @@ Two more facts from the same pass:
 
 **next step: 7 - export animation by using the imported .clip as the skeleton**
 
+## Step 7 - export the animation, using the imported .clip as the skeleton (done)
+
+`createClipBuffer(project, { animation })` now takes the `.clip` the project
+came from and writes the timeline into a new file. The `TimeLine` and `Track`
+tables are created with the definitions of the skeleton and its rows are
+copied; every animation folder of the project becomes one track whose
+`ImageCelName` curve holds the cells of that folder, and the end of the track
+follows the end of the project.
+
+`store.js` hands the imported file over as the skeleton, and falls back to a
+static export when it cannot be read.
+
+**Checked in Clip Studio Paint.** `tools/clip-export-animation.mjs` imports
+`Animation3.clip` and writes it out again. CSP opened the result and its
+Timeline showed:
+
+```
+Folder 2 : 7 cel        3 4 5      (cells 1 1a 2 2a 3 4 5)
+Folder 1 : 5 cel        3 4 5      (cells 1a 2 3 4 5)
+Animation folder : 9 cel 5 6 7 8 9  (cells 1 2 3 4 5 6 7 8 9)
+```
+
+which is the same as the file it came from, at the same frames, with the
+current frame 9 of 124 - the same numbers the source timeline carries. The
+independent `clipparse` validator reports the written file consistent
+("参照整合性 OK"), and our own reader reads it back as 46 layers, 36 cell
+layers and frames 1..125, exactly as the source.
+
+One bug worth remembering: the string pool of a document is written from the
+pool the record was built with, so a curve whose cell names are not in the
+pool yet needs the longer pool handed to the writer too. Without it the tag
+values point past the end of the pool and the curve reads back empty.
+
+**next step: 8 - write the animation of a project that did not come from a .clip**
+
 

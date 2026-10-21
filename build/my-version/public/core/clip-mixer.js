@@ -73,6 +73,12 @@ export function writer() {
       for (const byte of word) bytes.push(byte);
       return this;
     },
+    f32(value) {
+      const word = Buffer.alloc(4);
+      word.writeFloatLE(Number(value), 0);
+      for (const byte of word) bytes.push(byte);
+      return this;
+    },
     raw(values) {
       for (const byte of values) bytes.push(byte & 0xff);
       return this;
@@ -143,8 +149,13 @@ export function rebuildDocument(document) {
  *
  * The two size words are `count * elementWidth + 24` and four more. They were
  * measured on real files: a `Double[]` of nine values says 96 and 100.
+ *
+ * `meta` is false for the version 0100 flavour, whose fields carry no size
+ * words: the record is the curve head and fields alone, and the three words
+ * before each field are left out. Measured the same way on the 0100 mixers:
+ * the fields line up directly behind the field count.
  */
-export function buildCurveRecord({ pool, kind, axis = null, fields }) {
+export function buildCurveRecord({ pool, kind, axis = null, fields, meta = true }) {
   const indexOf = (name) => {
     const index = pool.indexOf(name);
     if (index < 0) throw new Error(`the mixer has no string ${JSON.stringify(name)}`);
@@ -163,10 +174,11 @@ export function buildCurveRecord({ pool, kind, axis = null, fields }) {
     const width = ELEMENT_WIDTH[field.type];
     if (!width) throw new Error(`a curve field cannot hold ${field.type}`);
     const count = field.values.length;
-    out.u32(indexOf("Int32[]")).u32(count * width + 24).u32(count * width + 28);
+    if (meta) out.u32(indexOf("Int32[]")).u32(count * width + 24).u32(count * width + 28);
     out.u32(indexOf(field.name)).u32(indexOf(field.type)).u32(count);
     for (const value of field.values) {
       if (field.type === "Double[]") out.f64(value);
+      else if (field.type === "Single[]") out.f32(value);
       else if (field.type === "Byte[]") out.raw([value]);
       else out.u32(value);
     }
@@ -176,21 +188,37 @@ export function buildCurveRecord({ pool, kind, axis = null, fields }) {
 }
 
 /** Turn the keys of a cell track into the six fields its curve carries. */
-export function celCurveFields(keys, pool) {
+export function celCurveFields(keys, pool, types = {}) {
   const indexOf = (name) => {
     const index = pool.indexOf(name);
     if (index < 0) throw new Error(`the mixer has no string ${JSON.stringify(name)}`);
     return index;
   };
+  // The rebuilt fields keep the array types the document carries: a version
+  // 0100 document stores its times as `Single[]` where a 0110 document uses
+  // `Double[]`. A curve that is being spliced passes its own field types in.
+  const typeOf = (name, fallback) => (types[name] ?? fallback);
   const constant = indexOf("Constant");
   return [
-    { name: "Frame", type: "Double[]", values: keys.map((key) => key.time) },
-    { name: "Value", type: "Double[]", values: keys.map((key) => key.value) },
-    { name: "LeftSlope", type: "Double[]", values: keys.map(() => 0) },
-    { name: "RightSlope", type: "Double[]", values: keys.map(() => 0) },
-    { name: "Interp", type: "String[]", values: keys.map(() => constant) },
-    { name: "Tag", type: "String[]", values: keys.map((key) => indexOf(key.tag)) },
+    { name: "Frame", type: typeOf("Frame", "Double[]"), values: keys.map((key) => key.time) },
+    { name: "Value", type: typeOf("Value", "Double[]"), values: keys.map((key) => key.value) },
+    { name: "LeftSlope", type: typeOf("LeftSlope", "Double[]"), values: keys.map(() => 0) },
+    { name: "RightSlope", type: typeOf("RightSlope", "Double[]"), values: keys.map(() => 0) },
+    { name: "Interp", type: typeOf("Interp", "String[]"), values: keys.map(() => constant) },
+    { name: "Tag", type: typeOf("Tag", "String[]"), values: keys.map((key) => indexOf(key.tag)) },
   ];
+}
+
+/**
+ * How far into the second a frame sits, in ticks.
+ *
+ * Clip Studio keeps key times in document ticks at 60 Hz, so a frame of a
+ * 24 fps document starts 2.5 ticks after the one before. `frame` is 1
+ * based: the first frame of a document is tick 0.
+ */
+export function tickOfFrame(frame, frameRate) {
+  const fps = Number(frameRate) > 0 ? Number(frameRate) : 30;
+  return ((frame - 1) * 60) / fps;
 }
 
 /**
@@ -208,6 +236,196 @@ export function withStrings(pool, names) {
 }
 
 /**
+ * Locate the curve record a document holds, whichever flavour it carries.
+ *
+ * The reader's own scan understands only the version 0110 flavour, whose
+ * array fields carry the `Int32[]` size words. The version 0100 flavour
+ * writes the same record without them, so its curves are walked here the
+ * same byte by byte way, minus the three size words.
+ *
+ * Returns `{ start, end, fieldStart, fields, props, meta }`, where `start`
+ * is the `FCurve` word, `end` is the first byte behind the record, and
+ * `fields` maps a field name to `{ type, width, values }` with the values
+ * as they sit in the record (pool indices for string fields). `meta` says
+ * which flavour the record was found in.
+ */
+export function locateCurve(document, kind, axis = null) {
+  const { body, pool } = document;
+  const curveId = pool.indexOf("FCurve");
+  const int32ArrayId = pool.indexOf("Int32[]");
+  if (curveId < 0) return null;
+
+  // The flavours to try, in the order the document's version suggests. A
+  // 0100 document carries its curves without the size words; a 0110 one
+  // carries them with. Both are scanned so a document written either way
+  // is found.
+  const attempts = [
+    document.version === "0100" ? false : true,
+    document.version === "0100" ? true : false,
+  ];
+
+  for (const meta of attempts) {
+    if (meta && int32ArrayId < 0) continue;
+    for (let start = 0; start + 12 <= body.length; start += 1) {
+      if (body.readUInt32LE(start) !== curveId || body.readUInt32LE(start + 4) !== 0) continue;
+
+      const propertyCount = body.readUInt32LE(start + 8);
+      if (propertyCount < 1 || propertyCount > 8) continue;
+
+      let at = start + 12;
+      const props = new Map();
+      let bad = false;
+      for (let index = 0; index < propertyCount; index += 1) {
+        const nameId = body.readUInt32LE(at);
+        const valueId = body.readUInt32LE(at + 4);
+        at += 8;
+        if (nameId >= pool.length || valueId >= pool.length) { bad = true; break; }
+        props.set(pool[nameId], pool[valueId]);
+      }
+      if (bad) continue;
+      if ((props.get("Type") ?? null) !== kind) continue;
+      if ((props.get("Axis") ?? null) !== axis) continue;
+
+      const fieldCount = body.readUInt32LE(at);
+      at += 4;
+      if (fieldCount < 1 || fieldCount > 32) continue;
+
+      const fieldStart = at;
+      const fields = new Map();
+      let broken = false;
+      for (let index = 0; index < fieldCount; index += 1) {
+        const head = meta ? 24 : 12;
+        if (at + head > body.length) { broken = true; break; }
+
+        let nameId;
+        let typeId;
+        let count;
+        let metaSize;
+        let metaEnd;
+        if (meta) {
+          const metaType = body.readUInt32LE(at);
+          metaSize = body.readUInt32LE(at + 4);
+          metaEnd = body.readUInt32LE(at + 8);
+          if (metaType !== int32ArrayId) { broken = true; break; }
+          nameId = body.readUInt32LE(at + 12);
+          typeId = body.readUInt32LE(at + 16);
+          count = body.readUInt32LE(at + 20);
+          // The size words, the name, the type and the count: 24 bytes
+          // before the values begin.
+          at += 24;
+        } else {
+          nameId = body.readUInt32LE(at);
+          typeId = body.readUInt32LE(at + 4);
+          count = body.readUInt32LE(at + 8);
+          at += 12;
+        }
+        if (nameId >= pool.length || typeId >= pool.length) { broken = true; break; }
+
+        const name = pool[nameId];
+        const type = pool[typeId];
+        const width = ELEMENT_WIDTH[type];
+        if (width === undefined) { broken = true; break; }
+
+        const span = count * width;
+        if (!Number.isSafeInteger(span) || span > body.length) { broken = true; break; }
+        if (at + span + 8 > body.length) { broken = true; break; }
+        if (meta) {
+          if (metaSize !== span + 24 || metaEnd !== metaSize + 4) { broken = true; break; }
+        }
+        if (body.readUInt32LE(at + span) !== 0 || body.readUInt32LE(at + span + 4) !== 0) {
+          broken = true;
+          break;
+        }
+
+        const values = [];
+        for (let value = 0; value < count; value += 1) {
+          const cursor = at + value * width;
+          if (type === "Single[]") values.push(body.readFloatLE(cursor));
+          else if (type === "Double[]") values.push(body.readDoubleLE(cursor));
+          else if (type === "Byte[]") values.push(body.readUInt8(cursor));
+          else values.push(body.readUInt32LE(cursor));
+        }
+        fields.set(name, { type, width, values });
+        at += span + 8;
+      }
+      if (broken) continue;
+
+      return { start, end: at, fieldStart, fields, props, meta };
+    }
+  }
+  return null;
+}
+
+/**
+ * Replace one curve record of a document, or add it when there is none,
+ * whichever flavour the document carries.
+ *
+ * This is `replaceCurve` for both mixers: a version 0110 document is
+ * spliced against the reader's own scan of its fields, and a version 0100
+ * document is walked without the size words and rebuilt without them. The
+ * bytes around the record, and the record's own head when only its values
+ * change, are where the rest of the document lives untouched.
+ */
+export function spliceCurve(document, { kind, axis = null, fields, pool = null }) {
+  const parts = documentParts(document);
+  const strings = pool ?? parts.pool;
+  const meta = (document.version ?? "0110") !== "0100";
+  const record = buildCurveRecord({ pool: strings, kind, axis, fields, meta });
+
+  const found = locateCurve(document, kind, axis);
+  let body;
+  if (found) {
+    body = Buffer.concat([
+      parts.body.subarray(0, found.start),
+      record,
+      parts.body.subarray(found.end),
+    ]);
+  } else {
+    const pad = (4 - (parts.body.length % 4)) % 4;
+    body = Buffer.concat([parts.body, Buffer.alloc(pad), record]);
+  }
+
+  return buildDocument({ ...parts, pool: strings, body });
+}
+
+/**
+ * Splice a cell plan into a track document.
+ *
+ * `plan` gives the cells the track shows, `{ frame, tag }` per cell, in the
+ * order they start. The frame is turned into a tick of the document's
+ * timebase, the cell names are added to the pool when they are not in it
+ * yet, and the curve is rebuilt with the array types the document carries.
+ * The value of a cell is its number among the cells of the plan.
+ *
+ * Both mixers of a track can be spliced this way: the version 0110 one and
+ * the version 0100 one, which keeps the same cells in the layout each of
+ * them uses.
+ */
+export function spliceCelPlan(document, plan) {
+  const keys = plan?.keys ?? [];
+  if (!keys.length) throw new Error("a cell plan needs at least one cell");
+  const frameRate = Number(plan.frameRate) > 0 ? Number(plan.frameRate) : 30;
+
+  const pool = withStrings(document.pool, keys.map((key) => key.tag));
+  const found = locateCurve(document, "ImageCelName");
+  const types = {};
+  if (found) {
+    for (const [name, field] of found.fields) types[name] = field.type;
+  }
+
+  const fields = celCurveFields(
+    keys.map((key, index) => ({
+      time: tickOfFrame(key.frame, frameRate),
+      value: index,
+      tag: key.tag,
+    })),
+    pool,
+    types,
+  );
+  return spliceCurve({ ...document, pool }, { kind: "ImageCelName", fields });
+}
+
+/**
  * Replace one curve record of a document, or add it when there is none.
  *
  * `body` is the part of the document after the pool, and the record is found
@@ -216,9 +434,10 @@ export function withStrings(pool, names) {
  * a four byte boundary; the reader scans the whole body, so it is found there
  * just the same.
  */
-export function replaceCurve(document, { kind, axis = null, fields }) {
+export function replaceCurve(document, { kind, axis = null, fields, pool = null }) {
   const parts = documentParts(document);
-  const record = buildCurveRecord({ pool: parts.pool, kind, axis, fields });
+  const strings = pool ?? parts.pool;
+  const record = buildCurveRecord({ pool: strings, kind, axis, fields });
 
   const matches = readAnimationCurves(document).filter(
     (curve) => curve.kind === kind && (curve.axis ?? null) === axis,
@@ -236,6 +455,41 @@ export function replaceCurve(document, { kind, axis = null, fields }) {
     body = Buffer.concat([parts.body, Buffer.alloc(pad), record]);
   }
 
+  return buildDocument({ ...parts, pool: strings, body });
+}
+
+/**
+ * Patch the `Start`, `End` and `Rate` doubles of the document to new times.
+ *
+ * A track carries these in its `TimeClip` and, where it moves, in its other
+ * clips, and the plain doubles are written as the name, the type and the
+ * value, so they are found by that pair. `range` may carry any of the three
+ * names; the ones it does not carry are left as they are.
+ */
+export function setTrackRange(document, range) {
+  const parts = documentParts(document);
+  const wanted = [
+    ["Start", "start"],
+    ["End", "end"],
+    ["Rate", "rate"],
+  ];
+  let body = parts.body;
+  let patched = 0;
+  for (const [name, key] of wanted) {
+    const value = range?.[key];
+    if (value === undefined || value === null) continue;
+    const nameId = parts.pool.indexOf(name);
+    const doubleId = parts.pool.indexOf("Double");
+    if (nameId < 0 || doubleId < 0) continue;
+    body = Buffer.from(body);
+    for (let at = 0; at + 16 <= body.length; at += 1) {
+      if (body.readUInt32LE(at) !== nameId) continue;
+      if (body.readUInt32LE(at + 4) !== doubleId) continue;
+      body.writeDoubleLE(Number(value), at + 8);
+      patched += 1;
+    }
+  }
+  if (patched === 0) return document;
   return buildDocument({ ...parts, body });
 }
 
@@ -247,21 +501,7 @@ export function replaceCurve(document, { kind, axis = null, fields }) {
  * their type and the value, so they are found by that pair.
  */
 export function setTrackEnd(document, ticks) {
-  const parts = documentParts(document);
-  const endId = parts.pool.indexOf("End");
-  const doubleId = parts.pool.indexOf("Double");
-  if (endId < 0 || doubleId < 0) return document;
-
-  const body = Buffer.from(parts.body);
-  let patched = 0;
-  for (let at = 0; at + 16 <= body.length; at += 1) {
-    if (body.readUInt32LE(at) !== endId) continue;
-    if (body.readUInt32LE(at + 4) !== doubleId) continue;
-    body.writeDoubleLE(Number(ticks), at + 8);
-    patched += 1;
-  }
-  if (patched === 0) return document;
-  return buildDocument({ ...parts, body });
+  return setTrackRange(document, { end: ticks });
 }
 
 /**
