@@ -38,6 +38,11 @@ function sendJson(res, status, payload) {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
+    // Every answer ends the connection. A connection that is kept open can
+    // be closed by the server while the browser still believes it is good,
+    // and the next request on it then fails without the server ever seeing
+    // it. The program is local, so a connection per request costs nothing.
+    connection: "close",
   });
   res.end(body);
 }
@@ -144,6 +149,12 @@ async function serveStatic(req, res, pathname) {
     "content-type": MIME[path.extname(target).toLowerCase()] || "application/octet-stream",
     "content-length": body.length,
     "cache-control": "no-store",
+    // The files of the program are small and the program is local, so every
+    // file is sent on a connection of its own. A connection that is kept
+    // open can be closed by the server while the browser still believes it
+    // is good, and the next request on it then fails without the server
+    // ever seeing it.
+    connection: "close",
   });
   res.end(body);
 }
@@ -160,6 +171,18 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     const route = `${req.method} ${url.pathname}`;
+    if (process.env.TVMINI_TRACE) {
+      const port = req.socket.remotePort;
+      try {
+        appendFileSync(
+          requestLogFile(),
+          `${new Date().toISOString()} request ${req.method} ${url.pathname} ` +
+            `socket=${port} length=${req.headers["content-length"] ?? 0}\n`,
+        );
+      } catch {
+        // A trace that cannot be written is not an error.
+      }
+    }
 
     // Every call is written down with what it answered, so a request that did
     // not do what it should can be seen afterwards.
@@ -346,6 +369,38 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       sendJson(res, status, { error: messageFor(error) });
     }
   });
+
+  // A connection that is left alone for a while is closed by Node after five
+  // seconds, and the browser then hands the next request to a socket that
+  // is gone: the request fails with "Failed to fetch" and the export never
+  // happens. The connection is therefore held open for as long as a web
+  // server usually holds it.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 70_000;
+
+  // A trace of the connections and of the requests as they arrive. It shows
+  // whether a request that the browser says it never made reached the
+  // server, and on which connection it came.
+  if (process.env.TVMINI_TRACE) {
+    const trace = (line) => {
+      console.log(line);
+      try {
+        appendFileSync(requestLogFile(), `${line}\n`);
+      } catch {
+        // A trace that cannot be written is not an error.
+      }
+    };
+    server.on("connection", (socket) => {
+      const port = socket.remotePort;
+      trace(`${new Date().toISOString()} socket open ${port}`);
+      socket.on("close", (hadError) => {
+        trace(
+          `${new Date().toISOString()} socket close ${port} hadError=${hadError} ` +
+            `destroyed=${socket.destroyed}`,
+        );
+      });
+    });
+  }
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
