@@ -17,7 +17,8 @@ import { Buffer } from "../public/core/bytes.js";
 import { openDatabase } from "../public/core/sqlite.js";
 import { parseClipContainer } from "../public/core/clip.js";
 import { readActionBlob } from "../public/core/clip-animation.js";
-import { spliceCelPlan } from "../public/core/clip-mixer.js";
+import { deflateSync } from "../public/core/zlib.js";
+import { locateCurve, spliceCurve } from "../public/core/clip-mixer.js";
 
 const source = process.argv[2];
 const target = process.argv[3];
@@ -40,8 +41,10 @@ for (const row of database.prepare("SELECT ExternalID, Offset FROM ExternalChunk
 }
 
 // The cells the document already has, and the frames they are given.
-const names = ["1", "1a", "2"];
-const frames = [1, 5, 9];
+// The names and the values of the cells stay as they are; only the times
+// move, so that the document is changed in one thing only.
+const names = ["1", "1a", "2", "2a", "3", "4"];
+const frames = [1, 21, 41, 61, 81, 101];
 const frameRate = 24;
 
 const replacements = new Map();
@@ -54,18 +57,30 @@ for (const column of ["TrackActionMixer", "TrackActionMixer2"]) {
   const document = readActionBlob(blob);
   if (!document) throw new Error(`the ${column} is not an action document`);
 
-  const spliced = spliceCelPlan(document, {
-    keys: names.map((name, index) => ({ frame: frames[index], tag: name })),
-    frameRate,
-  });
+  // The curve of the document, and the same fields with new times: the
+  // names, the values, the slopes and the way the cells are held stay as
+  // they are.
+  const found = locateCurve(document, "ImageCelName");
+  if (!found) throw new Error(`the ${column} holds no cell curve`);
+  const fields = [];
+  for (const [name, field] of found.fields) {
+    const values =
+      name === "Frame"
+        ? frames.map((frame) => ((frame - 1) * 60) / frameRate)
+        : [...field.values];
+    fields.push({ name, type: field.type, values });
+  }
+  const spliced = spliceCurve(document, { kind: "ImageCelName", fields });
 
   // The blob keeps its id, so the track still points at it.
   const head = Buffer.from(blob.subarray(0, 60));
-  const stream = (await import("../public/core/zlib.js")).deflateSync(spliced);
+  const stream = deflateSync(spliced);
   head.writeBigUInt64BE(BigInt(4 + stream.length), 48);
   head.writeUInt32LE(stream.length, 56);
   replacements.set(at, Buffer.concat([head, stream]));
-  console.log(`${column}: ${blob.length} -> ${60 + stream.length} bytes`);
+  console.log(
+    `${column}: ${blob.length} -> ${60 + stream.length} bytes, frames ${JSON.stringify(frames)}`,
+  );
 }
 
 // The document is written again with the same chunks in the same order, the

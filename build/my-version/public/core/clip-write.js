@@ -511,7 +511,7 @@ function cloneLayer(database, copyFrom, name, overrides) {
     MainId: layerId,
     CanvasId: canvas.MainId,
     LayerName: name,
-    LayerUuid: globalThis.crypto.randomUUID(),
+    LayerUuid: cryptoId(),
     LayerFirstChildIndex: 0,
     LayerNextIndex: 0,
     LayerRenderMipmap: mipmapId,
@@ -1317,9 +1317,27 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
   return rows.length;
 }
 
-/** A fresh 16 byte uuid, as the dashed text Clip Studio writes. */
+/**
+ * A fresh uuid, written the way Clip Studio Paint writes it.
+ *
+ * The 16 bytes of a uuid are grouped in ten, four, four, four and ten
+ * characters - `afa1c8536c-c74e-4eb7-ae68-e562d6e525` - and not in the
+ * eight, four, four, four and twelve the usual form uses. The bytes are
+ * the same, but the text is not, and a document that Clip Studio Paint
+ * wrote groups them its own way.
+ */
 function cryptoId() {
-  return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return [
+    hex.slice(0, 10),
+    hex.slice(10, 14),
+    hex.slice(14, 18),
+    hex.slice(18, 22),
+    hex.slice(22, 32),
+  ].join("-");
 }
 
 function updateExternalChunks(database, headBody, pixels) {
@@ -1517,7 +1535,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
           source.visible === false ? 0 : 1,
           source.locked ? 1 : 0,
           opacity,
-          globalThis.crypto.randomUUID(),
+          cryptoId(),
           target.layerId,
         );
       database
