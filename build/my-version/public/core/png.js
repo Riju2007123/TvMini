@@ -1,4 +1,4 @@
-import { cameraAt, resolveDrawing } from "../timeline.js";
+import { cameraAt, effectiveOpacity, layerIsVisible, resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
 import { blendStrokeOver, eraseStrokeFrom, floodFillRgba, sampleEllipse } from "./paint.js";
 import { deflateSync, inflateSync } from "./zlib.js";
@@ -593,7 +593,11 @@ export function renderProject(project, frame = project.currentFrame) {
 
   for (let index = project.layers.length - 1; index >= 0; index -= 1) {
     const layer = project.layers[index];
-    if (!layer.visible || layer.opacity <= 0) continue;
+    // A layer inside a folder that is hidden is hidden too, and the opacity
+    // of the folders above it counts, the way Clip Studio Paint paints it.
+    if (!layerIsVisible(project, index)) continue;
+    const opacity = effectiveOpacity(project, index);
+    if (opacity <= 0) continue;
 
     const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
@@ -603,7 +607,7 @@ export function renderProject(project, frame = project.currentFrame) {
     // is. That saves a copy of the whole canvas for every imported layer.
     const paint = directPicture(resolved.drawing, width, height) ??
       paintDrawing(width, height, resolved.drawing);
-    composite(data, width, height, { width, height, data: paint }, layer.opacity);
+    composite(data, width, height, { width, height, data: paint }, opacity);
   }
 
   // A camera track frames the shot: the exported image is what the camera
