@@ -129,6 +129,30 @@ console.log(
       " return o.width + 'x' + o.height + ', pointer-events: ' + s.pointerEvents; })()",
   )}`,
 );
+console.log(
+  `the pane scrolls: ${await devtools.run(
+    '(() => { const w = document.querySelector(".canvas-wrap");' +
+      ' return w.scrollWidth + " wide in " + w.clientWidth + ", " + w.scrollHeight + " high in " + w.clientHeight +' +
+      ' ", bars: " + (w.offsetWidth - w.clientWidth) + " by " + (w.offsetHeight - w.clientHeight); })()',
+  )}`,
+);
+
+// Does scrolling the pane move the canvas? The zoom makes the document larger
+// than the pane, so there is something to scroll in both directions.
+const scrolled = await devtools.run(
+  '(() => { const canvas = document.querySelector("#canvas");' +
+    " const r = canvas.getBoundingClientRect();" +
+    ' for (let i = 0; i < 4; i += 1) canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: -240,' +
+    " clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));" +
+    ' const w = document.querySelector(".canvas-wrap");' +
+    ' const before = canvas.getBoundingClientRect();' +
+    " w.scrollLeft = 300; w.scrollTop = 60;" +
+    ' const after = canvas.getBoundingClientRect();' +
+    ' return "the stage is " + Math.round(after.width) + " wide, left " + Math.round(before.left) +' +
+    ' " -> " + Math.round(after.left) + ", top " + Math.round(before.top) + " -> " + Math.round(after.top) +' +
+    ' " (scrollLeft " + w.scrollLeft + ", scrollTop " + w.scrollTop + ")"; })()',
+);
+console.log(`scrolling the pane: ${scrolled}`);
 
 const mouse = (type, x, y, button = "none", buttons = 0) =>
   devtools.send("Input.dispatchMouseEvent", {

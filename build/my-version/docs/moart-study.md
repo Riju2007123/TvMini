@@ -84,6 +84,10 @@ shipped earlier. Includes eraser touch-draw toggle.
   the screen has (at most two, and at most 4096 pixels on the longest side),
   and the context is scaled to the document. That is what MoArt does, and it
   is what keeps the picture sharp on a screen with many dots per pixel.
+- **The stage scrolls in both directions**, the way Clip Studio Paint does, so
+  a document that is larger than the pane can be moved around. The element of
+  the canvas is the size the document is shown at (the zoom is in the size, not
+  in a transform), so the buffer behind it is used one to one.
 - The measurement (`tools/draw-check.mjs`, a headless browser, 120 moves):
   the stroke path went from **601 ms to 27 ms**, about twenty times faster,
   because the document is no longer drawn for every move of the pointer.

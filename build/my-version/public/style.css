@@ -1346,6 +1346,10 @@ body.hide-inspector.hide-stage .workspace {
   /* The stage scrolls in both directions, the way Clip Studio Paint does, so
      a document that is larger than the pane can be moved around. */
   overflow: scroll;
+  /* The classic bars, always there: the thin ones of the standard property
+     are drawn over the content and take no room. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--surface-3) transparent;
   padding: 18px;
   /* The pasteboard of Flash is a flat grey, and the page sits on it. */
   background-color: var(--ground);
@@ -1378,8 +1382,11 @@ canvas.picking {
   position: relative;
   display: inline-block;
   line-height: 0;
-  max-width: 100%;
-  max-height: 100%;
+  max-width: none;
+  max-height: none;
+  /* Centred in the pane, and still reachable on both sides when the
+     document is larger than the pane. */
+  margin: auto;
 }
 
 .canvas-stack > canvas {
