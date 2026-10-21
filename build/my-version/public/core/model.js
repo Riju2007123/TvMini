@@ -11,7 +11,15 @@ export const MAX_FPS = 120;
 export const MAX_START_FRAME = 100000;
 export const MAX_HOLD = 10000;
 export const MIN_SIZE = 16;
-export const MAX_SIZE = 4096;
+export const MAX_SIZE = 8192;
+/**
+ * The largest canvas a project may hold, in pixels.
+ *
+ * A side of up to `MAX_SIZE` alone is not enough: an 8192 by 8192 canvas is
+ * 67 million pixels, and a layer of that costs 268 MB before any drawing.
+ * Clip Studio documents of 4152 by 3400 are common, and they fit here.
+ */
+export const MAX_PIXELS = 40_000_000;
 
 /** Camera keyframes on the timeline (a moving view over the canvas). */
 export const MAX_CAMERA_KEYS = 1000;
@@ -191,13 +199,33 @@ export function createGroup(name = "Group") {
   };
 }
 
+/**
+ * Check that a canvas of this size fits the limits, and return it.
+ *
+ * Both limits matter: a side may not pass `MAX_SIZE`, and the whole canvas
+ * may not pass `MAX_PIXELS`, so a very wide and a very tall canvas are
+ * refused even when each side is within range.
+ */
+function canvasInRange(width, height) {
+  const w = integerInRange(width, "width", MIN_SIZE, MAX_SIZE);
+  const h = integerInRange(height, "height", MIN_SIZE, MAX_SIZE);
+  const pixels = w * h;
+  if (pixels > MAX_PIXELS) {
+    throw new ValidationError(
+      `the canvas is ${w}×${h} = ${pixels} pixels; TVMini supports up to ${MAX_PIXELS} pixels`,
+    );
+  }
+  return { width: w, height: h };
+}
+
 /** Create a blank, already-valid project. */
 export function createProject(width = 960, height = 600, background = "#ffffff") {
+  const size = canvasInRange(width, height);
   return {
     format: FORMAT,
     version: VERSION,
-    width: integerInRange(width, "width", MIN_SIZE, MAX_SIZE),
-    height: integerInRange(height, "height", MIN_SIZE, MAX_SIZE),
+    width: size.width,
+    height: size.height,
     background: color(background, "background"),
     image: null,
     fps: 12,
@@ -541,8 +569,7 @@ export function normalizeProject(input) {
     throw new ValidationError(`unsupported project version ${JSON.stringify(input.version)}`);
   }
 
-  const width = integerInRange(input.width, "width", MIN_SIZE, MAX_SIZE);
-  const height = integerInRange(input.height, "height", MIN_SIZE, MAX_SIZE);
+  const { width, height } = canvasInRange(input.width, input.height);
   const background = color(input.background, "background");
   const image = normalizeImage(input.image, width, height);
 

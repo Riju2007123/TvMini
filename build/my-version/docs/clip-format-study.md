@@ -324,6 +324,28 @@ The fold only works because a tile is 256 pixels wide: the fold covers
 exactly 64 rows of 256 pixels. A tile of any other width spills over into the
 rows below, so the codec is only valid at the real tile size of 256.
 
+### A second tile layout, with no folded alpha
+
+Not every tile is packed that way. `Illustration.clip` holds tiles whose
+unpacked size is exactly `height × width × 4` — no extra 64 rows — and whose
+alpha is already in the fourth byte of every pixel. Read as a folded tile,
+`decodeRgbaBlock` ran off the end of the buffer at row 65 of a 256 by 128
+tile: `sourceStart 132096` against a buffer of `131072` bytes, which is
+`128 × 256 × 4`.
+
+The two layouts are told apart by length alone, and the test is exact:
+
+```
+folded   raw.length === (height + 64) * width * 4
+plain    raw.length ===  height         * width * 4
+```
+
+The plain layout only needs the blue and red bytes swapped; its alpha is used
+as it stands. With that branch in place, `Illustration.clip` imports, and the
+sample goes from 32 of 43 documents read to 41 of 43. The two that are left
+are not documents at all: one is a TVMini project saved with a `.clip`
+extension and one is an empty file.
+
 ## The animation
 
 `TimeLine` holds the frame rate and the frame range. `Track` holds the

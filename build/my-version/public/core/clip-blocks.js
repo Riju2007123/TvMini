@@ -183,16 +183,28 @@ export function encodeRgbaBlock(rgba, width, height) {
  */
 export function decodeRgbaBlock(raw, width, height) {
   const output = Buffer.alloc(width * height * 4);
-  for (let y = 0; y < height; y += 1) {
-    raw.copy(output, y * width * 4, (y + ALPHA_TILE) * width * 4, (y + ALPHA_TILE) * width * 4 + width * 4);
+  const stride = width * 4;
+
+  // A tile comes in one of two layouts. Most carry the alpha folded into the
+  // first `ALPHA_TILE` rows above the colour rows, so the buffer is
+  // `height + ALPHA_TILE` rows tall. Some are plain RGBA of the tile itself,
+  // with the alpha already in every pixel. The length says which is which.
+  const folded = raw.length >= (height + ALPHA_TILE) * stride;
+  const start = folded ? ALPHA_TILE * stride : 0;
+  const rows = Math.min(height, Math.max(0, Math.floor((raw.length - start) / stride)));
+
+  for (let y = 0; y < rows; y += 1) {
+    raw.copy(output, y * stride, start + y * stride, start + y * stride + stride);
   }
-  for (let index = 0; index < width * height; index += 1) {
+  for (let index = 0; index < rows * width; index += 1) {
     const target = index * 4;
     const red = output[target + 2];
     output[target + 2] = output[target];
     output[target] = red;
   }
-  for (let sourceY = 0; sourceY < height; sourceY += 1) {
+  if (!folded) return output;
+
+  for (let sourceY = 0; sourceY < rows; sourceY += 1) {
     // The writer folds the alpha of the source pixel (y*4+tile,
     // column*4+channel) into row `y` at the tile offset `tile`, so the row
     // is the high half of the source row and the tile the low half.
@@ -201,8 +213,9 @@ export function decodeRgbaBlock(raw, width, height) {
     for (let sourceX = 0; sourceX < width; sourceX += 1) {
       const column = sourceX >> 2;
       const channel = sourceX & 3;
-      output[(sourceY * width + sourceX) * 4 + 3] =
-        raw[(row * width + tile * ALPHA_TILE + column) * 4 + channel];
+      const at = (row * width + tile * ALPHA_TILE + column) * 4 + channel;
+      if (at >= raw.length) continue;
+      output[(sourceY * width + sourceX) * 4 + 3] = raw[at];
     }
   }
   return output;

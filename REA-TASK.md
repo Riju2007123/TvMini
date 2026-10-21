@@ -136,9 +136,32 @@ What is missing, and is this task:
   32 documents: 806 drawings, every one inside its timeline and in frame
   order.
 
-  **Still open:** the `FCurve` keyframe records, which a writer needs; and a
-  pre-existing crash in `clip-blocks.js:187` (`sourceStart` past the end of
-  the tile) that stops `Illustration.clip` from importing.
+  - **The tile layout.** Two layouts exist. Most tiles carry the alpha folded
+    into 64 rows above the colour rows, but `Illustration.clip` holds plain
+    tiles of exactly `height × width × 4` with the alpha already in place.
+    Reading those as folded ran past the buffer. CONFIRMED by measurement
+    (`132096` against `131072` bytes on a 256 × 128 tile) and now handled.
+    The sample went from 32 of 43 documents read to 41 of 43; the last two
+    are not Clip Studio documents at all.
 
-**next step: 5 — compare this model against Umoupen's own timeline**
+  - **Canvas size.** The reader refused a 4152 × 3400 canvas, which is a
+    canvas Clip Studio writes often: eight of the sample's documents. The
+    limit is now a side of 8192 with a total of 40 million pixels, so those
+    documents import and an 8192 × 8192 canvas is still refused. CONFIRMED.
+
+  - **What the sample does not use.** Across 36 documents and 1285 layers,
+    `LayerComposite` is 0 on every layer, `LayerClip` is 0 on every layer,
+    and `LayerLayerMaskMipmap` is 0 on every layer. So blend modes, clipping
+    and layer masks are not a fidelity gap for these files. CONFIRMED by
+    counting, not assumed.
+
+  **Still open:** the `FCurve` keyframe records, which a writer needs. The
+  body is not a pure array of 32-bit pool indices — trying every start offset
+  from the end of the pool leaves 108 of 302 words outside the pool — so it
+  mixes tokens with real numbers and the value widths are still unknown.
+  `createClipBuffer` therefore still refuses `animation: true`.
+
+**next step: 5 — the `binc` value widths, which is the last thing standing
+between the reader and a writer that keeps the animation**
+
 

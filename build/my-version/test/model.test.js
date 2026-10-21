@@ -56,7 +56,11 @@ test("createProject returns a valid empty project", () => {
 
 test("createProject rejects out-of-range sizes", () => {
   assert.throws(() => createProject(0, 100), ValidationError);
-  assert.throws(() => createProject(100, 5000), ValidationError);
+  assert.throws(() => createProject(100, 9000), ValidationError);
+  // Each side can be in range and the canvas still be too large.
+  assert.throws(() => createProject(8000, 8000), ValidationError);
+  // A canvas Clip Studio Paint writes often has to be accepted.
+  assert.equal(createProject(4152, 3400).width, 4152);
 });
 
 test("normalizeProject keeps known fields and copies points", () => {
