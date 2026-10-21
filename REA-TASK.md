@@ -268,5 +268,31 @@ ways out are (a) build one small animation template once in Clip Studio
 Paint and ship it like the blank template, or (b) use the imported `.clip`
 itself as the skeleton at export time.
 
-**next step: 7 - choose the skeleton source, then write the animation tables**
+### Checked in Clip Studio Paint
+
+`tools/clip-patch-curve.mjs` reverses the cells of track 13 of
+`Animation3.clip` in a copy and writes a new file. Clip Studio Paint opened
+it, and its Timeline showed the same rows the file says:
+
+```
+Animation folder : 9 cel    ... 6 7 8 9
+Folder 1 : 5 cel            ... 3 2 1a      <- was 1a 2 3 4 5
+Folder 2 : 7 cel            ... 3 4 5
+```
+
+Track 13 drives layer 17, "Folder 1", which is the row that changed. The
+independent `clipparse` validator also reports the copy consistent
+("参照整合性 OK"). So the document rebuild, the external chunk, the
+recomputed `ExternalChunk.Offset`s, `TrackActionMixer2Size` and the
+container are all right; CSP is the oracle for the whole chain.
+
+Two more facts from the same pass:
+
+- an animation folder is a `Layer` row with **`LayerFolder = 1` and
+  `AnimationFolder = 1`**;
+- `Layer.LayerUuid` is *TEXT* with dashes while `Track.LayerUuidWithTrack`
+  is a 16-byte blob, so matching the two means dropping the dashes.
+
+**next step: 7 - export animation by using the imported .clip as the skeleton**
+
 
