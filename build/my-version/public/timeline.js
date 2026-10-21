@@ -753,3 +753,86 @@ export function shiftStartFrame(project, newStart) {
   project.currentFrame += delta;
   return true;
 }
+
+/* ------------------------------------------------------------- new papers */
+
+/**
+ * The paper sizes, in millimetres.
+ *
+ * A paper of A4 is 297 by 210 millimetres, so at 150 dots an inch it is
+ * 1754 by 1240 pixels - the size Clip Studio Paint writes into a document.
+ * The longer side comes first, the way Clip Studio shows it.
+ */
+export const PAPER_MM = {
+  A3: [420, 297],
+  A4: [297, 210],
+  A5: [210, 148],
+  B4: [353, 250],
+  B5: [250, 176],
+  Letter: [279.4, 215.9],
+  Legal: [355.6, 215.9],
+  Tabloid: [431.8, 279.4],
+};
+
+/** The camera shapes a document can be given. */
+export const CAMERA_RATIOS = [
+  ["4:3", 4 / 3],
+  ["16:9", 16 / 9],
+  ["9:16", 9 / 16],
+  ["1:1", 1],
+  ["2.39:1", 2.39],
+  ["1.85:1", 1.85],
+  ["1.66:1", 1.66],
+];
+
+/**
+ * The size of a paper of a standard size, in pixels.
+ *
+ * The size is given in millimetres and the number of dots an inch turns it
+ * into pixels, the way Clip Studio Paint does it: A4 at 150 dots an inch is
+ * 1754 by 1240.
+ */
+export function paperPixels(name, dpi) {
+  const millimetres = PAPER_MM[name];
+  const dots = Math.max(1, Math.round(Number(dpi) || 0));
+  if (!millimetres) return null;
+  return millimetres.map((side) => Math.round((side / 25.4) * dots));
+}
+
+/**
+ * The camera of a new document, in the pixels of its paper.
+ *
+ * The frame is always centred horizontally, the way Clip Studio Paint holds
+ * it, and it never reaches outside the paper.
+ */
+export function cameraWindow(paper, camera) {
+  const width = Math.max(16, Math.min(paper.width, Math.round(camera.width)));
+  const height = Math.max(16, Math.min(paper.height, Math.round(camera.height)));
+  const x = Math.max(
+    0,
+    Math.min(paper.width - width, Math.round((paper.width - width) / 2)),
+  );
+  const y = Math.max(0, Math.min(paper.height - height, Math.round(camera.y)));
+  return { x, y, width, height };
+}
+
+/**
+ * The camera of a given shape, in the middle of the paper.
+ *
+ * The frame takes 85 percent of the width of the paper, and the height
+ * follows the shape. A camera that is "the same as the paper" is the paper.
+ */
+export function cameraOfRatio(paper, ratio) {
+  if (ratio === "paper") {
+    return { x: 0, y: 0, width: paper.width, height: paper.height };
+  }
+  const found = CAMERA_RATIOS.find(([name]) => name === ratio);
+  const shape = found ? found[1] : 16 / 9;
+  let width = Math.round(paper.width * 0.85);
+  let height = Math.max(16, Math.round(width / shape));
+  if (height > paper.height) {
+    height = paper.height;
+    width = Math.max(16, Math.round(height * shape));
+  }
+  return { x: Math.round((paper.width - width) / 2), y: Math.round((paper.height - height) / 2), width, height };
+}

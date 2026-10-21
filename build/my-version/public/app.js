@@ -10,7 +10,9 @@ import {
   cameraAt,
   cameraCorners,
   cameraKeyAt,
+  cameraOfRatio,
   cameraView,
+  cameraWindow,
   cellName,
   childrenOf,
   clipSourceOf,
@@ -33,6 +35,7 @@ import {
   moveBlock,
   nextKeyframe,
   packLayers,
+  paperPixels,
   previousKeyframe,
   removeLayers,
   resolveDrawing,
@@ -4209,10 +4212,351 @@ function confirmDiscard() {
   return confirm("This project has unsaved changes. Discard them?");
 }
 
-function newProject() {
+/* ------------------------------------------------------------ new project */
+
+/** What the new-project dialog is holding while it is open. */
+const newProjectState = {
+  ratio: "16:9",
+  paper: "A4",
+  dpi: 150,
+  width: 1754,
+  height: 1240,
+  cameraWidth: 1500,
+  cameraHeight: 844,
+  cameraX: 127,
+  cameraY: 262,
+  constrain: true,
+};
+
+/** The elements of the new-project dialog. */
+function newProjectFields() {
+  return {
+    name: document.getElementById("newName"),
+    paper: document.getElementById("newPaperSize"),
+    dpi: document.getElementById("newDpi"),
+    width: document.getElementById("newPaperWidth"),
+    height: document.getElementById("newPaperHeight"),
+    ratios: document.getElementById("newCameraRatios"),
+    constrain: document.getElementById("newConstrain"),
+    cameraWidth: document.getElementById("newCameraWidth"),
+    cameraHeight: document.getElementById("newCameraHeight"),
+    cameraX: document.getElementById("newCameraX"),
+    cameraY: document.getElementById("newCameraY"),
+    info: document.getElementById("newPreviewInfo"),
+    canvas: document.getElementById("newPreview"),
+  };
+}
+
+/** Put the numbers of the dialog into the fields. */
+function fillNewProject(fields) {
+  fields.name.value = "untitled";
+  fields.paper.value = newProjectState.paper;
+  fields.dpi.value = String(newProjectState.dpi);
+  fields.width.value = String(newProjectState.width);
+  fields.height.value = String(newProjectState.height);
+  fields.constrain.checked = newProjectState.constrain;
+  fields.cameraWidth.value = String(newProjectState.cameraWidth);
+  fields.cameraHeight.value = String(newProjectState.cameraHeight);
+  fields.cameraX.value = String(newProjectState.cameraX);
+  fields.cameraY.value = String(newProjectState.cameraY);
+  for (const chip of fields.ratios.querySelectorAll("[data-ratio]")) {
+    chip.classList.toggle("on", chip.dataset.ratio === newProjectState.ratio);
+  }
+}
+
+/** Take the numbers out of the fields. */
+function readNewProject(fields) {
+  const number = (input, fallback) => {
+    const value = Math.round(Number(input.value));
+    return Number.isFinite(value) ? value : fallback;
+  };
+  newProjectState.width = Math.max(16, Math.min(8192, number(fields.width, newProjectState.width)));
+  newProjectState.height = Math.max(16, Math.min(8192, number(fields.height, newProjectState.height)));
+  newProjectState.cameraWidth = Math.max(16, Math.min(8192, number(fields.cameraWidth, newProjectState.cameraWidth)));
+  newProjectState.cameraHeight = Math.max(16, Math.min(8192, number(fields.cameraHeight, newProjectState.cameraHeight)));
+  newProjectState.cameraX = Math.max(0, Math.min(8192, number(fields.cameraX, newProjectState.cameraX)));
+  newProjectState.cameraY = Math.max(0, Math.min(8192, number(fields.cameraY, newProjectState.cameraY)));
+  newProjectState.dpi = Math.max(30, Math.min(1200, number(fields.dpi, newProjectState.dpi)));
+  newProjectState.constrain = fields.constrain.checked;
+}
+
+/**
+ * The camera of the dialog, in the pixels of the paper.
+ *
+ * The frame is always centred horizontally, the way Clip Studio Paint holds
+ * it, and it is never larger than the paper.
+ */
+function newProjectCamera() {
+  return cameraWindow(
+    { width: newProjectState.width, height: newProjectState.height },
+    {
+      width: newProjectState.cameraWidth,
+      height: newProjectState.cameraHeight,
+      y: newProjectState.cameraY,
+    },
+  );
+}
+
+/** Draw the paper and the camera frame in the preview. */
+function drawNewProjectPreview(fields) {
+  const canvas = fields.canvas;
+  const context = canvas.getContext("2d");
+  const box = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  if (box.width && Math.abs(canvas.width - box.width * ratio) > 1) {
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+  }
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+
+  const padding = 12 * ratio;
+  const scale = Math.min(
+    (canvas.width - padding * 2) / newProjectState.width,
+    (canvas.height - padding * 2) / newProjectState.height,
+  );
+  const paperWidth = newProjectState.width * scale;
+  const paperHeight = newProjectState.height * scale;
+  const left = (canvas.width - paperWidth) / 2;
+  const top = (canvas.height - paperHeight) / 2;
+
+  // The paper.
+  context.fillStyle = "#ffffff";
+  context.fillRect(left, top, paperWidth, paperHeight);
+  context.strokeStyle = "rgba(0,0,0,0.35)";
+  context.lineWidth = ratio;
+  context.strokeRect(left, top, paperWidth, paperHeight);
+
+  // The camera frame.
+  const camera = newProjectCamera();
+  const frame = {
+    x: left + camera.x * scale,
+    y: top + camera.y * scale,
+    width: camera.width * scale,
+    height: camera.height * scale,
+  };
+  context.fillStyle = "rgba(255,60,60,0.10)";
+  context.fillRect(frame.x, frame.y, frame.width, frame.height);
+  context.strokeStyle = "#ff3b30";
+  context.lineWidth = ratio;
+  context.strokeRect(frame.x, frame.y, frame.width, frame.height);
+
+  // The handle at the bottom right, which resizes the frame.
+  const size = 6 * ratio;
+  context.fillStyle = "#ff3b30";
+  context.beginPath();
+  context.arc(frame.x + frame.width, frame.y + frame.height, size * 0.8, 0, Math.PI * 2);
+  context.fill();
+
+  fields.info.textContent =
+    `Paper ${newProjectState.width} × ${newProjectState.height} · ${newProjectState.paper} at ${newProjectState.dpi} dpi · ` +
+    `Camera ${camera.width} × ${camera.height} (${newProjectState.ratio}) at ${camera.x}, ${camera.y}`;
+  return { scale, left, top };
+}
+
+/** Open the dialog that asks for the size of a new document. */
+function openNewProjectDialog() {
   if (!confirmDiscard()) return;
+  const fields = newProjectFields();
+  fillNewProject(fields);
+  document.getElementById("newProjectModal").hidden = false;
+  drawNewProjectPreview(fields);
+  fields.name.focus();
+  fields.name.select();
+}
+
+/** Create the document the dialog asks for. */
+function createFromNewProject() {
+  const fields = newProjectFields();
+  readNewProject(fields);
+  const camera = newProjectCamera();
+  const name = fields.name.value.trim() || "untitled";
+
   stopPlayback();
-  newDocument();
+  const fresh = {
+    project: blankProject(newProjectState.width, newProjectState.height),
+    currentPath: null,
+    suggestedName: `${name}.tvmini`,
+    clipSourcePath: null,
+    tvppSourcePath: null,
+    dirty: false,
+    history: new History({ limit: 100 }),
+  };
+  fresh.project.camera = {
+    keys: [
+      {
+        frame: 1,
+        x: camera.x,
+        y: camera.y,
+        width: camera.width,
+        height: camera.height,
+        rotation: 0,
+        interp: "linear",
+      },
+    ],
+  };
+  fresh.project.title = name;
+
+  captureDocument();
+  state.documents.push(fresh);
+  state.activeIndex = state.documents.length - 1;
+  loadDocument(fresh);
+
+  history.reset();
+  updateHistoryButtons();
+  resizeCanvas();
+  refreshTitle();
+  renderDocumentTabs();
+  document.getElementById("newProjectModal").hidden = true;
+  setStatus(
+    `New project "${name}": ${newProjectState.width}×${newProjectState.height}, ` +
+      `camera ${camera.width}×${camera.height}.`,
+  );
+}
+
+/** Put the camera at the shape of a ratio, in the middle of the paper. */
+function applyCameraRatio(fields, ratio) {
+  newProjectState.ratio = ratio;
+  if (ratio === "free") {
+    // The shape stays as it is; the camera can be dragged to any size.
+  } else {
+    const camera = cameraOfRatio(
+      { width: newProjectState.width, height: newProjectState.height },
+      ratio,
+    );
+    newProjectState.cameraWidth = camera.width;
+    newProjectState.cameraHeight = camera.height;
+    newProjectState.cameraX = camera.x;
+    newProjectState.cameraY = camera.y;
+  }
+  fillNewProject(fields);
+  drawNewProjectPreview(fields);
+}
+
+function newProject() {
+  openNewProjectDialog();
+}
+
+/**
+ * Wire the new-project dialog: the fields, the shape buttons and the
+ * preview, which can be dragged.
+ */
+function wireNewProjectDialog() {
+  const fields = newProjectFields();
+  const modal = document.getElementById("newProjectModal");
+
+  document.getElementById("newCancel").addEventListener("click", () => {
+    modal.hidden = true;
+  });
+  document.getElementById("newCreate").addEventListener("click", createFromNewProject);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.hidden = true;
+  });
+
+  // The paper: a standard size at a number of dots an inch, or a free size.
+  const applyPaper = () => {
+    readNewProject(fields);
+    const pixels = paperPixels(fields.paper.value, newProjectState.dpi);
+    if (pixels) {
+      newProjectState.width = pixels[0];
+      newProjectState.height = pixels[1];
+    }
+    applyCameraRatio(fields, newProjectState.ratio);
+  };
+  fields.paper.addEventListener("change", applyPaper);
+  fields.dpi.addEventListener("change", applyPaper);
+
+  // The camera shape.
+  fields.ratios.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-ratio]");
+    if (!chip) return;
+    readNewProject(fields);
+    applyCameraRatio(fields, chip.dataset.ratio);
+  });
+
+  // Every number of the dialog draws the preview again.
+  for (const input of [
+    fields.width,
+    fields.height,
+    fields.cameraWidth,
+    fields.cameraHeight,
+    fields.cameraX,
+    fields.cameraY,
+  ]) {
+    input.addEventListener("input", () => {
+      readNewProject(fields);
+      drawNewProjectPreview(fields);
+    });
+  }
+  fields.constrain.addEventListener("change", () => {
+    readNewProject(fields);
+    drawNewProjectPreview(fields);
+  });
+
+  // The preview: the frame is dragged to move it, the handle resizes it.
+  const canvas = fields.canvas;
+  let drag = null;
+  const point = (event) => {
+    const box = canvas.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  };
+  canvas.addEventListener("pointerdown", (event) => {
+    readNewProject(fields);
+    const { scale, left, top } = drawNewProjectPreview(fields);
+    const camera = newProjectCamera();
+    const at = point(event);
+    const handle = {
+      x: left + (camera.x + camera.width) * scale,
+      y: top + (camera.y + camera.height) * scale,
+    };
+    const onHandle = Math.hypot(at.x - handle.x, at.y - handle.y) < 12;
+    const inside =
+      at.x >= left + camera.x * scale &&
+      at.x <= left + (camera.x + camera.width) * scale &&
+      at.y >= top + camera.y * scale &&
+      at.y <= top + (camera.y + camera.height) * scale;
+    if (!onHandle && !inside) return;
+    drag = { scale, left, top, mode: onHandle ? "resize" : "move", at, camera };
+    canvas.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    const at = point(event);
+    const dx = (at.x - drag.at.x) / drag.scale;
+    const dy = (at.y - drag.at.y) / drag.scale;
+    if (drag.mode === "move") {
+      newProjectState.cameraY = Math.max(
+        0,
+        Math.min(newProjectState.height - drag.camera.height, Math.round(drag.camera.y + dy)),
+      );
+    } else {
+      const width = Math.round(drag.camera.width + dx);
+      const height = Math.round(drag.camera.height + dy);
+      newProjectState.cameraWidth = Math.max(16, Math.min(newProjectState.width, width));
+      newProjectState.cameraHeight = Math.max(16, Math.min(newProjectState.height, height));
+      if (newProjectState.constrain) {
+        // The shape of the camera is kept when the position is constrained.
+        const shape = drag.camera.width / drag.camera.height;
+        const fitted = Math.round(newProjectState.cameraHeight * shape);
+        if (Math.abs(fitted - newProjectState.cameraWidth) < Math.abs(newProjectState.cameraHeight - height)) {
+          newProjectState.cameraWidth = Math.max(16, Math.min(newProjectState.width, fitted));
+        } else {
+          newProjectState.cameraHeight = Math.max(
+            16,
+            Math.min(newProjectState.height, Math.round(newProjectState.cameraWidth / shape)),
+          );
+        }
+      }
+    }
+    fillNewProject(fields);
+    drawNewProjectPreview(fields);
+  });
+  const endDrag = () => {
+    drag = null;
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 }
 
 /**
@@ -5486,6 +5830,7 @@ async function boot() {
   loadSettings();
   syncSettingsUI();
   syncQuickBar();
+  wireNewProjectDialog();
 
   try {
     state.recent = await backend.listRecent();

@@ -653,6 +653,82 @@
       </div>
     </div>
 
+    <div id="newProjectModal" class="modal" hidden>
+      <div class="modal-card modal-card-new" role="dialog" aria-modal="true" aria-labelledby="newProjectTitle">
+        <h2 id="newProjectTitle">New project</h2>
+        <div class="new-project">
+          <div class="new-project-fields">
+            <label class="field">
+              <span>Name</span>
+              <input id="newName" type="text" spellcheck="false" value="untitled" />
+            </label>
+            <div class="field">
+              <span>Paper ratio</span>
+              <div class="chip-row">
+                <select id="newPaperSize">
+                  <option value="A4">A4</option>
+                  <option value="A3">A3</option>
+                  <option value="A5">A5</option>
+                  <option value="B4">B4</option>
+                  <option value="B5">B5</option>
+                  <option value="Letter">Letter</option>
+                  <option value="Legal">Legal</option>
+                  <option value="Tabloid">Tabloid</option>
+                </select>
+                <label class="chip-label">DPI <input id="newDpi" type="number" min="30" max="1200" step="1" value="150" /></label>
+              </div>
+            </div>
+            <div class="field">
+              <span>Paper size</span>
+              <div class="size-row">
+                <label>W <input id="newPaperWidth" type="number" min="16" max="8192" step="1" value="1754" /></label>
+                <label>H <input id="newPaperHeight" type="number" min="16" max="8192" step="1" value="1240" /></label>
+              </div>
+            </div>
+            <div class="field">
+              <span>Camera aspect ratio</span>
+              <div class="chip-row" id="newCameraRatios">
+                <button type="button" class="chip" data-ratio="4:3">4:3</button>
+                <button type="button" class="chip" data-ratio="16:9">16:9</button>
+                <button type="button" class="chip" data-ratio="9:16">9:16</button>
+                <button type="button" class="chip" data-ratio="1:1">1:1</button>
+                <button type="button" class="chip" data-ratio="2.39:1">2.39:1</button>
+                <button type="button" class="chip" data-ratio="1.85:1">1.85:1</button>
+                <button type="button" class="chip" data-ratio="1.66:1">1.66:1</button>
+                <button type="button" class="chip" data-ratio="free">Free</button>
+                <button type="button" class="chip" data-ratio="paper">Same as paper</button>
+              </div>
+            </div>
+            <label class="field checkbox">
+              <input id="newConstrain" type="checkbox" checked />
+              <span>Constrain position</span>
+            </label>
+            <div class="field">
+              <span>Camera</span>
+              <div class="size-row">
+                <label>W <input id="newCameraWidth" type="number" min="16" max="8192" step="1" value="1500" /></label>
+                <label>H <input id="newCameraHeight" type="number" min="16" max="8192" step="1" value="844" /></label>
+                <label>X <input id="newCameraX" type="number" min="0" max="8192" step="1" value="127" /></label>
+                <label>Y <input id="newCameraY" type="number" min="0" max="8192" step="1" value="262" /></label>
+              </div>
+            </div>
+          </div>
+          <div class="new-project-preview">
+            <p class="hint" id="newPreviewInfo"></p>
+            <canvas id="newPreview" class="new-preview" width="360" height="420"></canvas>
+            <p class="hint">
+              Drag the camera frame in the preview to move it, and the handle at its
+              bottom right to resize it. The frame is always centred horizontally.
+            </p>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="newCancel">Cancel</button>
+          <button id="newCreate" class="primary">Create</button>
+        </div>
+      </div>
+    </div>
+
     <div id="exportModal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
         <h2 id="exportModalTitle">Export settings</h2>

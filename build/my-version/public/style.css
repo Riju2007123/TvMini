@@ -469,6 +469,97 @@ body.hide-inspector.hide-stage .workspace {
   gap: 6px;
 }
 
+.modal-card-new {
+  width: min(880px, 94vw);
+}
+
+.new-project {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 380px);
+  gap: 18px;
+  align-items: start;
+}
+
+.new-project-fields .field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.new-project-fields .field.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.chip {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--surface-3);
+}
+
+.chip.on {
+  background: var(--accent, #2f6fd0);
+  border-color: var(--accent, #2f6fd0);
+  color: #fff;
+}
+
+.chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.chip-label input {
+  width: 56px;
+}
+
+.size-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 6px;
+}
+
+.size-row label {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.new-project-preview {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.new-preview {
+  width: 360px;
+  height: 420px;
+  border: 1px solid var(--line);
+  background: #17181b;
+  touch-action: none;
+  cursor: grab;
+}
+
+
 .export-commands button {
   height: var(--btn-h);
   padding: 0 10px;

@@ -48,11 +48,21 @@ function reportToServer(message) {
 }
 
 async function serverRequest(method, endpoint, body) {
-  const response = await fetch(endpoint, {
-    method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    // The program on the server is not answering. It may have been restarted
+    // while the work was going on, and the work is still there.
+    throw new Error(
+      "the program on the server did not answer. It may have been restarted - " +
+        "try again, and your work is not lost.",
+    );
+  }
 
   let payload = {};
   try {
@@ -199,7 +209,11 @@ function createServerBackend(hooks) {
       });
       if (!target) return null;
       const clean = /\.[^\\/]*$/.test(target.trim()) ? target.trim() : `${target.trim()}.${ext}`;
-      const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+      reportToServer(`the export has the path ${clean}`);
+      const statUrl = `/api/stat?path=${encodeURIComponent(clean)}`;
+      reportToServer(`the export asks ${statUrl}`);
+      const info = await serverRequest("GET", statUrl);
+      reportToServer(`the server says the file ${info.exists ? "is there" : "is not there"}`);
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
       return serverRequest("POST", "/api/export-file", { path: clean, project, kind, options });
