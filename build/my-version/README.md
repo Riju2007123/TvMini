@@ -814,3 +814,28 @@ finding:
 - TVMini does not read or write `.tvpp`. The timing model is informed by the
   evidence, but the schema and defaults are its own.
 - The file picker is a simple directory browser, not a native dialog.
+
+## More exports and picture import
+
+Added after studying what a commercial animation tool (Umoupen 1.9.59) offers
+in its File menu. Only the *feature list* was taken from it: every format
+here is a published one and the code is written from its public
+specification, not from that program.
+
+| Feature | Where | Notes |
+|---|---|---|
+| Layered **PSD** (current frame) | `public/core/psd.js` | Folders become nested layer groups, hidden layers stay (switched off), clipping and opacity kept, layers cropped to their content, PackBits RLE. Opened and read back by Pillow in the tests' cross-check. |
+| **Timesheet XDTS** + **CSV** | `public/core/timesheet.js` | One track per drawing layer, cells written where they change; `parseXdtsText` reads it back. |
+| **Animated GIF** | `public/core/gif.js` | Median-cut palette, LZW, loop extension, project frame rate. The decoder handles transparency, disposal and interlacing. |
+| **Sprite sheet** PNG + JSON | `public/core/exporters.js` | Grid size is automatic or chosen; the JSON lists every frame's rectangle. |
+| **Image sequence** ZIP | `public/core/exporters.js` | PNG or TGA, named by a pattern such as `{name}_{frame:4}`. |
+| **Picture import** | `public/core/imageio.js` | PNG, GIF (frames + timing become cells), BMP, TGA. JPEG is reported as unsupported. Several pictures in the browser become a sequence of cells. |
+| **Export settings & presets** | File → Export settings… | Frame range, file-name pattern, sequence format, sprite-sheet columns; presets are kept in the browser's local storage. |
+
+Both backends use `public/core/export-kinds.js`, so the Node server
+(`POST /api/export-file`, `POST /api/import-pictures`) and the static browser
+build write the same bytes.
+
+Not done: `.umou` (Umoupen's own project format), MP4/MOV/WebP video export,
+SVG/PDF export, Toon Boom Harmony scenes, and `.fla`/`.xfl` import. The
+`.clip` animation-track gaps listed above are also still open.

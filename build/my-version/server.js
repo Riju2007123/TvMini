@@ -7,7 +7,15 @@ import { createProject, normalizeProject, ValidationError } from "./src/model.js
 import { readClipDocument, readClipPreview, readClipProject } from "./src/clip.js";
 import { createTvppBuffer, importTvppBytes } from "./src/tvpp.js";
 import { RecentStore, defaultRecentFile } from "./src/recent.js";
-import { exportClip, exportPng, openProject, saveProject, exportTvpp } from "./src/store.js";
+import {
+  exportClip,
+  exportFile,
+  exportPng,
+  importPictureFiles,
+  openProject,
+  saveProject,
+  exportTvpp,
+} from "./src/store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, "public");
@@ -262,6 +270,19 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       if (route === "POST /api/export-clip") {
         const body = await readJson(req);
         sendJson(res, 200, await exportClip(body.path, body.project, body.sourcePath));
+        return;
+      }
+
+      if (route === "POST /api/export-file") {
+        const body = await readJson(req);
+        sendJson(res, 200, await exportFile(body.path, body.project, body.kind, body.options));
+        return;
+      }
+
+      if (route === "POST /api/import-pictures") {
+        const body = await readJson(req);
+        const project = await importPictureFiles(body.paths);
+        sendJson(res, 200, { project, name: path.basename(String(body.paths[0])), path: path.resolve(String(body.paths[0])) });
         return;
       }
 

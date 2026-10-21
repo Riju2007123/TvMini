@@ -194,6 +194,37 @@ function decodeProject(text) {
   return parsed;
 }
 
+/** Ask the user for one or more files; resolves to `[{name, bytes}]` or null. */
+export function pickFiles(accept) {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    if (accept) input.accept = accept;
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("focus", onFocus);
+      resolve(value);
+    };
+    const onFocus = () => {
+      setTimeout(() => {
+        if (!input.files || input.files.length === 0) finish(null);
+      }, 400);
+    };
+    input.addEventListener("change", async () => {
+      const files = [...(input.files ?? [])];
+      if (files.length === 0) return finish(null);
+      files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      finish(await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))));
+    });
+    window.addEventListener("focus", onFocus);
+    input.click();
+  });
+}
+
 /** Open a `.tvmini` project chosen by the user. */
 export async function openProject() {
   const picked = await pickFile(".tvmini,application/json");

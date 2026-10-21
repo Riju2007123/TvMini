@@ -15,6 +15,7 @@ import {
   listRecent,
   openRecent,
   pickFile,
+  pickFiles,
   removeRecent,
   saveFile,
 } from "./storage.js";
@@ -28,6 +29,8 @@ import {
 import { createTvppBuffer, importTvppBytes } from "./tvpp.js";
 import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
+import { buildExport, EXPORT_KINDS } from "./export-kinds.js";
+import { importPictures } from "./exporters.js";
 
 /* ------------------------------------------------------------ server backend */
 
@@ -168,6 +171,28 @@ function createServerBackend(hooks) {
       });
     },
 
+    async exportFile(kind, project, stem, options) {
+      const ext = EXPORT_KINDS[kind].ext;
+      const target = await hooks.pickPath({
+        mode: "save",
+        title: `Export ${EXPORT_KINDS[kind].label}`,
+        name: `${stem}.${ext}`,
+      });
+      if (!target) return null;
+      const clean = /\.[^\\/]*$/.test(target.trim()) ? target.trim() : `${target.trim()}.${ext}`;
+      const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+      if (info.dir) throw new Error("that path is a folder, not a file");
+      if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+      return serverRequest("POST", "/api/export-file", { path: clean, project, kind, options });
+    },
+
+    async chooseAndImportPictures() {
+      const path = await hooks.pickPath({ mode: "open", title: "Import picture (PNG, GIF, BMP, TGA)" });
+      if (!path) return null;
+      const data = await serverRequest("POST", "/api/import-pictures", { paths: [path] });
+      return { name: data.name, path: data.path, project: data.project };
+    },
+
     async exportTvpp(project, stem, sourcePath) {
       const target = await hooks.pickPath({
         mode: "save",
@@ -305,6 +330,21 @@ function createBrowserBackend(hooks) {
         height: result.height,
         layers: result.layers,
       };
+    },
+
+    async exportFile(kind, project, stem, options) {
+      const built = buildExport(kind, project, stem, options);
+      const saved = await saveFile(`${stem}.${built.ext}`, new Uint8Array(built.bytes));
+      if (!saved) return null;
+      for (const file of built.extra) await saveFile(`${stem}.${file.ext}`, new Uint8Array(file.bytes));
+      return { path: saved.name, bytes: built.bytes.length, summary: built.summary, extra: built.extra.map((f) => `${stem}.${f.ext}`) };
+    },
+
+    async chooseAndImportPictures() {
+      const picked = await pickFiles(".png,.gif,.bmp,.tga,image/png,image/gif,image/bmp");
+      if (!picked) return null;
+      const project = importPictures(picked);
+      return { name: picked[0].name, path: picked[0].name, project };
     },
 
     async exportTvpp(project, stem, sourceName) {
