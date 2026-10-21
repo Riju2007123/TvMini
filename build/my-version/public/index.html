@@ -33,7 +33,7 @@
             <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
             <button role="menuitem" data-action="saveAs">Save As…<span class="key">Ctrl+Shift+S</span></button>
             <button role="menuitem" data-action="export">Export current frame PNG…<span class="key">Ctrl+E</span></button>
-            <button role="menuitem" data-action="exportClip">Export layered .clip (current frame)…<span class="key">Ctrl+Shift+E</span></button>
+            <button role="menuitem" data-action="exportClip">Export layered .clip with the timeline…<span class="key">Ctrl+Shift+E</span></button>
             <button role="menuitem" data-action="exportTvpp">Export .tvpp (TVPaint)…</button>
             <button role="menuitem" data-action="exportPsd">Export layered .psd (current frame)…</button>
             <button role="menuitem" data-action="exportGif">Export animated GIF…</button>
@@ -606,8 +606,11 @@
             recent projects are kept in this browser.</p>
           <p><strong>Importing a .clip</strong> reads the saved canvas preview of a
             Clip Studio file — the original is never changed. <strong>Exporting a
-            .clip</strong> writes the current frame as separate raster layers
-            inside a fresh Clip Studio document.</p>
+            .clip</strong> writes the whole project: every layer becomes a layer
+            of a fresh Clip Studio document, and every drawing of a layer becomes
+            a cell of an animation row, with the frame it starts on. The cells
+            and the tracks that show them are written as Clip Studio writes
+            them, so the file opens with its timeline in place.</p>
         </div>
       </div>
     </div>

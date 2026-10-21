@@ -4449,8 +4449,8 @@ async function exportClip() {
     `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
       `to ${baseName(data.path)} (${data.bytes} bytes). ` +
       (data.animation
-        ? `${data.animation} animation folder${data.animation === 1 ? "" : "s"} written as tracks.`
-        : "Timeline frames are flattened to the current frame."),
+        ? `${data.animation} row${data.animation === 1 ? "" : "s"} of cells written as tracks.`
+        : "The file holds the layers of the project, without a timeline."),
   );
   refreshTitle();
 }
