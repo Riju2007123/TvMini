@@ -240,4 +240,33 @@ Writing `animation: true` is still refused. The remaining work is a
 byte-for-byte round trip of a whole mixer body (the `TimeClip` and `Param`
 tree plus the document checksum), not the cell record.
 
-**next step: 6 - round trip a whole mixer body unchanged, then edit it**
+## Step 6 - round trip a whole mixer body, then edit it (done)
+
+`public/core/clip-mixer.js` parses a document, writes it back from its parts
+and gets the same bytes. Measured:
+
+- 10 of 10 documents of `Animation3.clip` and 4 of 4 of `Animation2.clip`
+  rebuild **byte for byte** (pool, the word after the pool, body and CRC).
+- The document checksum is the standard CRC-32 over the bytes from offset 16
+  to the end; all 14 documents match, so a rebuilt document is always valid
+  by construction.
+- The external blob is the 40 byte locator, `u64` big endian `4 +
+  compressed`, `u32` little endian compressed, then the zlib stream, and it
+  round-trips. `TrackActionMixerSize` is the **unpacked** document length.
+- The `ImageCelName` curve is replaced on its own: same keys, one more, one
+  fewer - each result is read back by `readCelCurve`
+  (`tools/mixer-roundtrip.mjs`, `test/clip-mixer.test.js`).
+- The three words before a field are `[Int32[]][total - 8][total - 4]`,
+  where `total` includes the metadata, name, type, count, values and the
+  trailing `[0][0]`.
+
+`createClipBuffer` still refuses `animation: true`, for one concrete reason:
+a **new** track needs a document skeleton (the `TimeClip`/`Param` tree), and
+the blank template has no animation tables at all. Splicing a curve into an
+existing document is safe; inventing the rest of the tree is not. The two
+ways out are (a) build one small animation template once in Clip Studio
+Paint and ship it like the blank template, or (b) use the imported `.clip`
+itself as the skeleton at export time.
+
+**next step: 7 - choose the skeleton source, then write the animation tables**
+

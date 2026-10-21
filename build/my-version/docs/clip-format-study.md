@@ -688,22 +688,51 @@ first one and each `Track.TrackNextIndex` names the next. A track hangs on
 the layer whose uuid is in `LayerUuidWithTrack`.
 
 The mixer blob and the action document are described above, and so is the
-`FCurve` record. What is still missing for a **writer** is the rest of the
-body: the `TimeClip` and `Param` blocks are nested name/type/value trees whose
-nesting rule has not been walked end to end, and CSP checks a checksum over
-the document. The cell curve itself is understood, but it has to be embedded
-in that tree. `createClipBuffer` therefore still refuses `animation: true`.
+`FCurve` record. What is still missing for a **writer** is a document to put a
+curve into: a new track needs the whole `TimeClip`/`Param` tree, and CSP
+validates a document well enough that guessing that tree is not worth the
+risk.
 
-A malformed mixer is the one thing that could make Clip Studio Paint reject a
-file that otherwise opens, and a static file that opens is worth more than an
-animated file that does not. What the writer still needs is a byte-for-byte
-round trip of a whole mixer, which is the next step: read a track's body and
-write the same bytes back before trying to change anything inside it.
+What *is* settled is the document itself. `public/core/clip-mixer.js` reads
+every mixer of `Animation3.clip` and `Animation2.clip`, rebuilds it from its
+parts and gets the same bytes back (10 of 10 and 4 of 4). That means the
+string pool, the word after it, the body and the checksum are all understood:
+
+- the checksum is the standard CRC-32 of every byte from offset 16 to the end
+  (checked on all 14 documents), so a rebuilt document can always be stamped
+  valid again;
+- a curve record can be replaced on its own, with more keys or fewer, without
+  touching anything outside it - the same edit CSP makes when a key is added
+  by hand. `tools/mixer-roundtrip.mjs` replaces the `ImageCelName` curve of
+  `Animation3.clip` with the same keys, one more and one fewer, and reads each
+  result back;
+- the external chunk that carries a document is the 40 byte locator, the
+  big-endian length of what follows, the little-endian compressed length and
+  the zlib stream, and it round-trips;
+- `TrackActionMixerSize` (and its `2` sister) is the length of the *unpacked*
+  document, not of the compressed blob.
+
+The record grammar was also walked end to end by `tools/binc2.mjs`, which
+re-encodes all fourteen documents byte for byte. Its rules (struct, typed
+leaf, array leaf, string leaf, counted item) are recorded in "Inside the
+mixer blobs" below.
+
+The three words before a field are `[Int32[]]`, `[total - 8]` and
+`[total - 4]`, where `total` is the size of the field including those three
+words, the name, the type, the count and the trailing `[0][0]`. A `Double[]`
+of nine values says 96 and 100, and a `Double` of one value says 28 and 32.
+
+`createClipBuffer` still refuses `animation: true`, but for a narrower reason
+than before: it is not the keyframes that are unknown, it is the skeleton a
+new track has to be built in. A malformed mixer is the one thing that could
+make Clip Studio Paint reject a file that otherwise opens, and a static file
+that opens is worth more than an animated file that does not.
 
 `TrackValueMap` is kept inside the database rather than outside it. Its shape
-is a small property bag: a count, two numbers, the length of a key, the key in
-UTF-16 big endian and the value. The one that was read out holds
-`ImageCelName` with the value `1`.
+is a small property bag: `u32 8`, a `u32` entry count, then per entry
+`u32 size`, a UTF-16 big endian key, a UTF-16 big endian text, `u32 kind` and
+the value. The one that was read out of track 12 is 54 bytes and holds
+`ImageCelName` -> `"9"` with value `8`.
 
 ## The paper
 

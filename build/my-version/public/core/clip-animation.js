@@ -152,7 +152,7 @@ export function readActionBlob(blob) {
   }
   const document = parseActionDocument(raw);
   if (!document) return null;
-  return { ...document, total, compressed, unpacked: raw.length };
+  return { ...document, raw, total, compressed, unpacked: raw.length };
 }
 
 /**
