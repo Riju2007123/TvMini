@@ -4,6 +4,8 @@ import { normalizeProject, projectPath, ValidationError } from "./model.js";
 import { createClipBuffer } from "./clip-write.js";
 import { createTvppBuffer } from "./tvpp.js";
 import { renderPng } from "./png.js";
+import { buildExport, EXPORT_KINDS } from "../public/core/export-kinds.js";
+import { importPictures } from "../public/core/exporters.js";
 
 function tempName(target) {
   return `${target}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`;
@@ -127,4 +129,57 @@ export async function exportTvpp(filePath, project, sourcePath = null) {
   const buffer = createTvppBuffer(clean);
   await writeAtomic(target, buffer);
   return { path: target, bytes: buffer.length, width: clean.width, height: clean.height };
+}
+
+/**
+ * Export a PSD, timesheet, GIF, sprite sheet or image sequence.
+ * The sprite sheet also writes a `.json` description next to the picture.
+ */
+export async function exportFile(filePath, project, kind, options = {}) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  if (!Object.hasOwn(EXPORT_KINDS, kind)) throw new ValidationError(`unknown export kind: ${kind}`);
+  const clean = normalizeProject(project);
+  const ext = EXPORT_KINDS[kind].ext;
+  const target = path.resolve(path.extname(filePath) === "" ? `${filePath}.${ext}` : filePath);
+  const stem = path.basename(target, path.extname(target));
+  let built;
+  try {
+    built = buildExport(kind, clean, stem, options);
+  } catch (error) {
+    throw new ValidationError(error.message);
+  }
+  await writeAtomic(target, built.bytes);
+  const extra = [];
+  for (const file of built.extra) {
+    const side = path.join(path.dirname(target), `${stem}.${file.ext}`);
+    await writeAtomic(side, file.bytes);
+    extra.push(side);
+  }
+  return { path: target, bytes: built.bytes.length, summary: built.summary, extra };
+}
+
+/** Read pictures (PNG, GIF, BMP, TGA) from disk into a new project. */
+export async function importPictureFiles(paths) {
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > 2000) {
+    throw new ValidationError("one or more picture paths are required");
+  }
+  const files = [];
+  for (const file of paths) {
+    const target = path.resolve(String(file));
+    let bytes;
+    try {
+      bytes = await fsp.readFile(target);
+    } catch (error) {
+      if (error.code === "ENOENT") throw new ValidationError(`file not found: ${target}`);
+      throw error;
+    }
+    files.push({ name: path.basename(target), bytes });
+  }
+  try {
+    return importPictures(files);
+  } catch (error) {
+    throw new ValidationError(error.message);
+  }
 }

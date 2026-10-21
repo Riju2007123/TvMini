@@ -1,8 +1,9 @@
 import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
+import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { decodeSound, soundPeaks } from "./audio.js";
-import { floodFillRgba, parseHexColor, smoothPoint } from "./core/paint.js";
+import { floodFillRgba, parseHexColor, smoothPoint, strokePathGroups } from "./core/paint.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -861,14 +862,18 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight) {
     return;
   }
 
-  // Pressure strokes are drawn segment by segment with an interpolated width.
-  for (let i = 1; i < stroke.points.length; i += 1) {
-    const from = stroke.points[i - 1];
-    const to = stroke.points[i];
-    ctx.lineWidth = Math.max(1, radii[i - 1] + radii[i]);
+  // Pressure strokes are drawn segment by segment with an interpolated
+  // width. Segments that end up with the same width are drawn as one
+  // path: a draw call for every segment is what makes the brush slow on
+  // a big canvas, and a mouse gives the same pressure to every point, so
+  // the whole stroke is one path in that case.
+  for (const group of strokePathGroups(stroke.points, radii)) {
+    ctx.lineWidth = group.width;
     ctx.beginPath();
-    ctx.moveTo(from[0], from[1]);
-    ctx.lineTo(to[0], to[1]);
+    ctx.moveTo(stroke.points[group.from][0], stroke.points[group.from][1]);
+    for (let i = group.from + 1; i <= group.to; i += 1) {
+      ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+    }
     ctx.stroke();
   }
   ctx.globalCompositeOperation = "source-over";
@@ -1009,10 +1014,20 @@ function renderCanvas(frame = state.project.currentFrame) {
     // pixel, and a document that is opened rather than drawn is mostly
     // layers like this.
     const base = drawingImageElement(resolved.drawing);
-    if (base && !resolved.drawing.strokes.length) {
+    const strokes = resolved.drawing.strokes;
+    if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
       ctx.drawImage(base, 0, 0, width, height);
       ctx.globalAlpha = 1;
+      continue;
+    }
+
+    // The same goes for a layer with strokes on it, as long as it is drawn
+    // at full strength: the picture and the strokes can go onto the canvas
+    // as they are, without the round trip through a scratch canvas.
+    if (opacity === 1 && base) {
+      ctx.drawImage(base, 0, 0, width, height);
+      drawStrokesInto(ctx, strokes);
       continue;
     }
 
@@ -3651,6 +3666,10 @@ async function handleAction(action) {
     if (action === "export") return exportPng();
     if (action === "exportClip") return exportClip();
     if (action === "exportTvpp") return exportTvpp();
+    if (action === "importPictures") return chooseAndImportPictures();
+    if (action === "exportSettings") return openExportSettings();
+    const kind = EXPORT_ACTIONS[action];
+    if (kind) return exportKind(kind);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -3920,6 +3939,152 @@ async function exportTvpp() {
       "Open it in TVPaint Animation to verify.",
   );
   refreshTitle();
+}
+
+/* -------------------------------------------------- more exports, presets */
+
+const EXPORT_ACTIONS = {
+  exportPsd: "psd",
+  exportGif: "gif",
+  exportSheet: "sheet",
+  exportSequence: "sequence",
+  exportXdts: "xdts",
+  exportCsv: "csv",
+};
+
+const PRESET_KEY = "tvmini.exportPresets.v1";
+
+/** Saved export settings: `{ current: options, presets: { name: options } }`. */
+function loadExportSettings() {
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(PRESET_KEY) ?? "null");
+  } catch {
+    stored = null;
+  }
+  const presets = {};
+  for (const [name, options] of Object.entries(stored?.presets ?? {})) {
+    presets[name] = cleanExportOptions(options);
+  }
+  return { current: cleanExportOptions(stored?.current), presets };
+}
+
+function storeExportSettings(settings) {
+  try {
+    localStorage.setItem(PRESET_KEY, JSON.stringify(settings));
+  } catch {
+    /* the settings still apply for this session */
+  }
+}
+
+state.exportSettings = loadExportSettings();
+
+async function exportKind(kind) {
+  stopPlayback();
+  const stem = state.currentPath
+    ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
+    : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
+  setStatus(`Building ${EXPORT_KINDS[kind].label}…`);
+  const data = await backend.exportFile(kind, state.project, stem, state.exportSettings.current);
+  if (!data) return;
+  const extra = data.extra?.length ? ` and ${data.extra.map(baseName).join(", ")}` : "";
+  setStatus(`Exported ${baseName(data.path)}${extra} (${data.bytes} bytes; ${data.summary}).`);
+  refreshTitle();
+}
+
+async function chooseAndImportPictures() {
+  if (!confirmDiscard()) return;
+  const data = await backend.chooseAndImportPictures();
+  if (!data) return;
+  stopPlayback();
+  showDocument(data.project, {
+    suggestedName: `${data.name.replace(/\.[^.]+$/, "")}.tvmini`,
+    clipSourcePath: null,
+    tvppSourcePath: null,
+  });
+  const cells = data.project.layers.reduce((n, l) => n + l.drawings.length, 0);
+  setStatus(
+    `Imported ${data.name} (${data.project.width}x${data.project.height}): ${cells} cell${cells === 1 ? "" : "s"} at ${data.project.fps} fps. Save as .tvmini to keep it.`,
+  );
+}
+
+function openExportSettings() {
+  const modal = document.getElementById("exportModal");
+  const presetSelect = document.getElementById("exportPreset");
+  const range = document.getElementById("exportRange");
+  const custom = document.getElementById("exportCustomRange");
+  const from = document.getElementById("exportFrom");
+  const to = document.getElementById("exportTo");
+  const pattern = document.getElementById("exportPattern");
+  const format = document.getElementById("exportFormat");
+  const columns = document.getElementById("exportColumns");
+
+  const fill = (options) => {
+    const isCustom = typeof options.range === "object";
+    range.value = isCustom ? "custom" : options.range;
+    custom.hidden = !isCustom;
+    from.value = isCustom ? options.range.from : state.project.startFrame;
+    to.value = isCustom ? options.range.to : state.project.startFrame + 23;
+    pattern.value = options.pattern;
+    format.value = options.format;
+    columns.value = options.columns;
+  };
+  const read = () =>
+    cleanExportOptions({
+      range:
+        range.value === "custom"
+          ? { from: Math.floor(Number(from.value)), to: Math.floor(Number(to.value)) }
+          : range.value,
+      pattern: pattern.value,
+      format: format.value,
+      columns: Math.floor(Number(columns.value) || 0),
+    });
+  const refreshPresets = (selected = "") => {
+    presetSelect.replaceChildren(new Option("Current settings", ""));
+    for (const name of Object.keys(state.exportSettings.presets)) presetSelect.append(new Option(name, name));
+    presetSelect.value = selected;
+  };
+  const commit = () => {
+    state.exportSettings.current = read();
+    storeExportSettings(state.exportSettings);
+  };
+
+  refreshPresets();
+  fill(state.exportSettings.current);
+  modal.hidden = false;
+
+  const close = () => {
+    commit();
+    modal.hidden = true;
+    for (const [target, type, handler] of listeners) target.removeEventListener(type, handler);
+  };
+  const listeners = [
+    [range, "change", () => { custom.hidden = range.value !== "custom"; commit(); }],
+    [from, "change", commit],
+    [to, "change", commit],
+    [pattern, "change", commit],
+    [format, "change", commit],
+    [columns, "change", commit],
+    [presetSelect, "change", () => {
+      const chosen = state.exportSettings.presets[presetSelect.value];
+      if (chosen) { fill(chosen); commit(); }
+    }],
+    [document.getElementById("exportPresetSave"), "click", () => {
+      const name = (prompt("Name for this preset:") ?? "").trim().slice(0, 40);
+      if (!name || name === "__proto__") return;
+      state.exportSettings.presets[name] = read();
+      commit();
+      refreshPresets(name);
+    }],
+    [document.getElementById("exportPresetDelete"), "click", () => {
+      if (!presetSelect.value) return;
+      delete state.exportSettings.presets[presetSelect.value];
+      commit();
+      refreshPresets();
+    }],
+    [document.getElementById("exportSettingsClose"), "click", close],
+  ];
+  for (const [target, type, handler] of listeners) target.addEventListener(type, handler);
 }
 
 /* ------------------------------------------------------------- file modal */

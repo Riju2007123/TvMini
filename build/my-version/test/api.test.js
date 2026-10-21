@@ -243,3 +243,57 @@ test("the UI is served from the public folder", async () => {
     assert.match(await response.text(), /TVMini/);
   });
 });
+
+test("export-file writes a PSD, a sprite sheet with its JSON, and refuses bad input", async () => {
+  await withServer(async (app, dir) => {
+    const project = createProject(40, 30);
+    project.layers[0].drawings = [
+      { at: 1, hold: 1, strokes: [{ color: "#ff0000", width: 6, points: [[5, 5], [30, 20]] }] },
+      { at: 2, hold: 1, strokes: [{ color: "#0000ff", width: 6, points: [[5, 20], [30, 5]] }] },
+    ];
+
+    const psd = await post(app, "/api/export-file", { path: path.join(dir, "shot"), project, kind: "psd" });
+    assert.equal(psd.status, 200);
+    const psdBody = await psd.json();
+    assert.equal(path.extname(psdBody.path), ".psd");
+    assert.equal((await fs.readFile(psdBody.path)).subarray(0, 4).toString(), "8BPS");
+
+    const sheet = await post(app, "/api/export-file", {
+      path: path.join(dir, "hero.png"),
+      project,
+      kind: "sheet",
+      options: { columns: 2 },
+    });
+    assert.equal(sheet.status, 200);
+    const sheetBody = await sheet.json();
+    assert.equal(sheetBody.extra.length, 1);
+    const description = JSON.parse(await fs.readFile(path.join(dir, "hero.json"), "utf8"));
+    assert.equal(description.frames.length, 2);
+    assert.equal(description.image, "hero.png");
+
+    const gif = await post(app, "/api/export-file", { path: path.join(dir, "a.gif"), project, kind: "gif" });
+    assert.equal((await fs.readFile((await gif.json()).path)).subarray(0, 6).toString(), "GIF89a");
+
+    const bad = await post(app, "/api/export-file", { path: path.join(dir, "x.bin"), project, kind: "nope" });
+    assert.equal(bad.status, 400);
+    const noPath = await post(app, "/api/export-file", { path: "", project, kind: "csv" });
+    assert.equal(noPath.status, 400);
+  });
+});
+
+test("import-pictures reads a PNG into a project", async () => {
+  await withServer(async (app, dir) => {
+    const file = path.join(dir, "pic.png");
+    await fs.writeFile(file, encodePng(20, 20, new Uint8Array(20 * 20 * 3).fill(128)));
+    const response = await post(app, "/api/import-pictures", { paths: [file] });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.project.width, 20);
+    assert.equal(body.project.layers[0].drawings.length, 1);
+
+    const missing = await post(app, "/api/import-pictures", { paths: [path.join(dir, "nope.png")] });
+    assert.equal(missing.status, 400);
+    const empty = await post(app, "/api/import-pictures", { paths: [] });
+    assert.equal(empty.status, 400);
+  });
+});

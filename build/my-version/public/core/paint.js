@@ -149,3 +149,34 @@ export function smoothPoint(previous, raw, level) {
   if (raw.length > 2) smoothed.push(raw[2]);
   return smoothed;
 }
+
+/**
+ * The groups a freehand stroke is drawn in.
+ *
+ * The width of a segment is the sum of the radii at its two ends, so a
+ * stroke that tapers is a run of segments of different widths. Segments
+ * that end up with the same width are drawn together, as one path: a draw
+ * call for every segment is what makes the brush slow on a big canvas, and
+ * a mouse gives every point the same pressure, so the whole stroke is one
+ * path in that case.
+ *
+ * Each group says which width it is drawn with and which points of the
+ * stroke it covers, from the first to the last.
+ */
+export function strokePathGroups(points, radii) {
+  const groups = [];
+  let index = 1;
+  while (index < points.length) {
+    const width = Math.max(1, radii[index - 1] + radii[index]);
+    let last = index;
+    while (
+      last + 1 < points.length &&
+      Math.max(1, radii[last] + radii[last + 1]) === width
+    ) {
+      last += 1;
+    }
+    groups.push({ width, from: index - 1, to: last });
+    index = last + 1;
+  }
+  return groups;
+}

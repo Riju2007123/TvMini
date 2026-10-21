@@ -27,6 +27,7 @@
             <button role="menuitem" data-action="open">Open…<span class="key">Ctrl+O</span></button>
             <button role="menuitem" data-action="importClip">Import .clip</button>
             <button role="menuitem" data-action="importTvpp">Import .tvpp (TVPaint)…</button>
+            <button role="menuitem" data-action="importPictures">Import picture / GIF…</button>
             <button role="menuitem" data-action="importAudio">Import a sound…</button>
             <hr />
             <button role="menuitem" data-action="save">Save<span class="key">Ctrl+S</span></button>
@@ -34,6 +35,13 @@
             <button role="menuitem" data-action="export">Export current frame PNG…<span class="key">Ctrl+E</span></button>
             <button role="menuitem" data-action="exportClip">Export layered .clip (current frame)…<span class="key">Ctrl+Shift+E</span></button>
             <button role="menuitem" data-action="exportTvpp">Export .tvpp (TVPaint)…</button>
+            <button role="menuitem" data-action="exportPsd">Export layered .psd (current frame)…</button>
+            <button role="menuitem" data-action="exportGif">Export animated GIF…</button>
+            <button role="menuitem" data-action="exportSheet">Export sprite sheet…</button>
+            <button role="menuitem" data-action="exportSequence">Export image sequence (ZIP)…</button>
+            <button role="menuitem" data-action="exportXdts">Export timesheet .xdts…</button>
+            <button role="menuitem" data-action="exportCsv">Export timesheet .csv…</button>
+            <button role="menuitem" data-action="exportSettings">Export settings &amp; presets…</button>
             <hr />
             <div class="submenu">
               <button role="menuitem" aria-haspopup="true" aria-expanded="false">Recent ▸</button>
@@ -500,6 +508,47 @@
         <div class="modal-actions">
           <button id="cancelButton">Cancel</button>
           <button id="confirmButton" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="exportModal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+        <h2 id="exportModalTitle">Export settings</h2>
+        <label class="field">
+          <span>Preset</span>
+          <select id="exportPreset"></select>
+        </label>
+        <label class="field">
+          <span>Frames</span>
+          <select id="exportRange">
+            <option value="all">All frames</option>
+            <option value="current">Current frame only</option>
+            <option value="custom">From – to</option>
+          </select>
+        </label>
+        <div class="field" id="exportCustomRange" hidden>
+          <span>From / to</span>
+          <input id="exportFrom" type="number" min="1" step="1" />
+          <input id="exportTo" type="number" min="1" step="1" />
+        </div>
+        <label class="field">
+          <span>File names</span>
+          <input id="exportPattern" type="text" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span>Sequence format</span>
+          <select id="exportFormat"><option value="png">PNG</option><option value="tga">TGA</option></select>
+        </label>
+        <label class="field">
+          <span>Sprite sheet columns (0 = auto)</span>
+          <input id="exportColumns" type="number" min="0" max="256" step="1" />
+        </label>
+        <p class="hint">In file names, {name} is the project name and {frame:4} the frame number padded to 4 digits.</p>
+        <div class="modal-actions">
+          <button id="exportPresetSave">Save as preset…</button>
+          <button id="exportPresetDelete">Delete preset</button>
+          <button id="exportSettingsClose" class="primary">Done</button>
         </div>
       </div>
     </div>
