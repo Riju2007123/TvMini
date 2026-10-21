@@ -146,3 +146,65 @@ test("a layer outside an animation folder shows the whole time", () => {
   assert.equal(layer.drawings[0].hold, 21);
   assert.equal(layer.drawings[0].name, undefined);
 });
+
+test("a cell that comes back later gets a drawing on every frame it shows", () => {
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Animation folder", {
+      kind: "folder",
+      folder: true,
+      animationFolder: true,
+      firstChildIndex: 4,
+      uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    }),
+    node(4, "1", { nextIndex: 5 }),
+    node(5, "2", { nextIndex: 0 }),
+  ]);
+  document.tracks = [{
+    mainId: 5,
+    kind: 2000,
+    // The layer uuid is written with dashes, the track without them.
+    layerUuid: "aaaaaaaabbbbccccddddeeeeeeeeeeee",
+    action2: { celSequence: ["1", "2", "1"] },
+  }];
+
+  const project = clipToProject(document, []);
+  const byName = (name) => project.layers.find((layer) => layer.name === name);
+
+  // Cell 1 is on frames 1 and 3, cell 2 is on frame 2.
+  assert.deepEqual(
+    byName("1").drawings.map((drawing) => [drawing.at, drawing.hold]),
+    [[1, 1], [3, 1]],
+  );
+  assert.deepEqual(
+    byName("2").drawings.map((drawing) => [drawing.at, drawing.hold]),
+    [[2, 1]],
+  );
+});
+
+test("the frame of a cell comes from the track when the name disagrees", () => {
+  // Clip Studio can put 3a after 4, where its name would say frame 3.
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Animation folder", {
+      kind: "folder",
+      folder: true,
+      animationFolder: true,
+      firstChildIndex: 4,
+      uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    }),
+    node(4, "3a", { nextIndex: 0 }),
+  ]);
+  document.tracks = [{
+    mainId: 5,
+    kind: 2000,
+    layerUuid: "aaaaaaaabbbbccccddddeeeeeeeeeeee",
+    action2: { celSequence: ["1", "2", "3", "4", "3a"] },
+  }];
+
+  const project = clipToProject(document, []);
+  const cell = project.layers.find((layer) => layer.name === "3a");
+  // The name says frame 3; the track says frame 5, and the track wins.
+  assert.equal(cell.drawings[0].at, 5);
+  assert.equal(cell.drawings.length, 1);
+});

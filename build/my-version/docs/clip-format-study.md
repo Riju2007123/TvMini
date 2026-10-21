@@ -555,7 +555,59 @@ the upper half of the word (`0x0010` for 16, `0x002C` for 44), which is what
 made the body look irregular. Read as 16-bit values, 182 of 302 are pool
 indices and the remaining 120 are real numbers, so the stream carries both
 indices and values, and the width of a value still has to be settled before
-the body can be walked.
+the body can be walked end to end.
+
+### The cell sequence: which cell shows on which frame
+
+One part of the body *is* decoded, and it is the part the timeline needs.
+
+The body holds one flat array of 32-bit little endian string pool indices.
+Each entry names the cell that shows on one frame, so the array is the cel
+track written out frame by frame. In `Animation10.clip` the pool holds the
+names `1` to `6` at indices 57 to 61 and 48, and those six indices sit at body
+offsets 1177, 1181, 1185, 1189, 1193 and 1197 — four bytes apart, in frame
+order:
+
+```
+1177  39 00 00 00   57  pool[57] "1"   frame 1
+1181  3a 00 00 00   58  pool[58] "2"   frame 2
+1185  3b 00 00 00   59  pool[59] "3"   frame 3
+1189  3c 00 00 00   60  pool[60] "4"   frame 4
+1193  3d 00 00 00   61  pool[61] "5"   frame 5
+1197  30 00 00 00   48  pool[48] "6"   frame 6
+```
+
+The array is not at a fixed offset, and it is not aligned to four bytes from
+the start of the body: the values written before it have different widths, so
+the array begins at whatever offset the writer reached. It is found instead by
+taking the **longest run of consecutive 32-bit little endian values that are
+indices of strings that look like cell names** (`1`, `1a`, `2`, `2a`, …).
+
+Read over the whole sample, the array is 1 entry per frame, not 1 entry per
+key. A cell that shows on frames 1, 8, 15 and 22 appears four times. That is
+how a loop is written:
+
+```
+bleach collab.clip, one track: 32 entries, 11 cells
+1,2,3,4,5,6,7,1,2,3,4,5,6,7,1,2,3,4,5,6,7,1,2,3,4,5,6,7,8,9,10,11
+```
+
+This is the difference that matters for the timeline. Clip Studio does **not**
+guarantee that a cell sits on the frame its name gives. One track of
+`bleach collab.clip` reads
+
+```
+1,1a,2,2a,3,5,6,7,8,9,10,3a,4
+```
+
+so `3a` is on frame 12 and `4` is on frame 13, while their names say 3 and 4.
+A reader that trusts the name puts both cells in the wrong place; a reader
+that uses the sequence does not.
+
+What is left over is the other half of the body: the `FCurve` records
+(`Type`, `Frame`, `Value`, `LeftSlope`, `RightSlope`, `Interp`, `Constant`)
+that hold the same information as keyframes. The sequence above is enough to
+read a document; the `FCurve` layout is what a **writer** needs.
 
 ### Writing an animation: what is known and what is missing
 

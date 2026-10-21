@@ -98,4 +98,47 @@ What is missing, and is this task:
     `analyzeHeadless.bat <proj> Umoupen -import H:\Umoupen-windows\Umoupen.exe
     -max-cpu 4 -analysisTimeoutPerFile 7200`
 
-**next step: 3 (waiting for the headless analysis), then 4**
+**next step: 4 — read Umoupen's timeline model, now that the database exists**
+
+- **Step 3a — the headless analysis finished. CONFIRMED.**
+  `analyzeHeadless` reported `Analysis succeeded for file:
+  file:///H:/Umoupen-windows/Umoupen.exe` and `Save succeeded for:
+  /Umoupen.exe (Umoupen:/Umoupen.exe)`, total time 2031 s, 4 CPUs. The
+  project is at
+  `C:\Users\MK\AppData\Local\Temp\opencode\ghidra-proj` and REA can now open
+  it as `format: "analysis-database"` without paying the analysis cost again.
+
+- **Step 4 — read the timeline out of `.clip` without Umoupen. CONFIRMED.**
+  Working on the file directly turned out to be the faster route, and it
+  answered the question the screenshot was about: how folders, cells and
+  frames are held.
+
+  - The layer tree is a **first-child / next-sibling linked list**
+    (`LayerFirstChildIndex` + `LayerNextIndex`), not `LayerFolder`.
+    `LayerFolder` is a flag, not a parent id. CONFIRMED on
+    `Animation10.clip`: `#3 'Animation folder'` has `firstChild=4`, and the
+    chain runs `4 '1' → 9 '2' → 10 '3' → 16 '4' → 21 '5' → 28 '6' → 0`.
+  - The cells of an animation folder are its children in that chain.
+    CONFIRMED.
+  - The cell that shows on each frame is an array of 32-bit little endian
+    string pool indices inside the track's mixer body. One entry per frame,
+    so a cell that loops appears once per frame it shows on. CONFIRMED on
+    `Animation10.clip` (offsets 1177…1197, four bytes apart) and on
+    `bleach collab.clip` (32 entries, 11 cells, one 4-frame loop).
+  - The cell name does **not** always give the frame. CONFIRMED on
+    `bleach collab.clip`: one track reads `1,1a,2,2a,3,5,6,7,8,9,10,3a,4`,
+    so `3a` is on frame 12 and `4` on frame 13.
+  - A track belongs to a layer through `LayerUuidWithTrack`, written without
+    dashes, against `Layer.LayerUuid`, written with dashes. CONFIRMED.
+
+  Implemented in `public/core/clip-animation.js` (`readCelSequence`,
+  `celPlacement`) and used by `clipToProject`. 223 tests pass. Measured over
+  32 documents: 806 drawings, every one inside its timeline and in frame
+  order.
+
+  **Still open:** the `FCurve` keyframe records, which a writer needs; and a
+  pre-existing crash in `clip-blocks.js:187` (`sourceStart` past the end of
+  the tile) that stops `Illustration.clip` from importing.
+
+**next step: 5 — compare this model against Umoupen's own timeline**
+

@@ -32,8 +32,8 @@ import { inflateSync } from "./zlib.js";
  * `RightSlope`, `Interp` and `Constant`.
  *
  * The keyframes themselves are a list of `PWFCurveKey` records, one per
- * point, and they are not decoded here: the value part of the body still has
- * to be mapped out.
+ * point. The value part of the body is not walked from end to end here;
+ * what is read is the cell sequence, which is described below.
  */
 
 const MAGIC = "cmt ";
@@ -136,4 +136,77 @@ export function readActionBlob(blob) {
   const document = parseActionDocument(raw);
   if (!document) return null;
   return { ...document, total, compressed, unpacked: raw.length };
+}
+
+/** A cell name: a frame number, with a letter for a second cell on it. */
+const CELL_NAME = /^\d{1,6}[a-z]?$/i;
+
+/**
+ * The cells of an animation track, in the order they appear on the timeline.
+ *
+ * The body of an action document holds one array of 32-bit little endian
+ * string pool indices that names, frame by frame, the cell the track shows.
+ * The array is not at a fixed offset: the values before it have different
+ * widths, so the array is found by taking the longest run of consecutive
+ * pool indices that name cells.
+ *
+ * Run against `Animation10.clip`, the run is six entries long, the indices
+ * of the pool strings `1` to `6`, in that order, four bytes apart.
+ *
+ * Returns null when there is no run of at least two cells. A single cell is
+ * indistinguishable from the other small numbers in the body, so a one cell
+ * track falls back on the name of the cell instead of guessing.
+ */
+export function readCelSequence(document, accept = () => true) {
+  if (!document) return null;
+  const { body, pool } = document;
+  if (!body || !pool || body.length < 8) return null;
+
+  const cells = new Map();
+  for (let index = 0; index < pool.length; index += 1) {
+    const name = pool[index];
+    if (CELL_NAME.test(name) && accept(name)) cells.set(index, name);
+  }
+  if (cells.size === 0) return null;
+
+  let best = null;
+  for (let start = 0; start + 8 <= body.length; start += 1) {
+    // No run that starts here can beat the best one found so far.
+    if (best && (body.length - start) / 4 <= best.length) break;
+    const run = [];
+    let at = start;
+    while (at + 4 <= body.length) {
+      const name = cells.get(body.readUInt32LE(at));
+      if (name === undefined) break;
+      run.push(name);
+      at += 4;
+    }
+    if (run.length >= 2 && (!best || run.length > best.length)) best = run;
+  }
+  return best;
+}
+
+/**
+ * Where each cell of a sequence sits.
+ *
+ * The sequence names the cell of every single frame, so a cell that shows
+ * again later appears again in the sequence. A cell that shows on several
+ * frames in a row is one drawing held for that many frames; a cell that
+ * comes back after other cells is a drawing of its own.
+ */
+export function celPlacement(sequence, startFrame = 1) {
+  const placement = new Map();
+  if (!sequence) return placement;
+  let index = 0;
+  while (index < sequence.length) {
+    const name = sequence[index];
+    let run = 1;
+    while (index + run < sequence.length && sequence[index + run] === name) {
+      run += 1;
+    }
+    if (!placement.has(name)) placement.set(name, []);
+    placement.get(name).push({ frame: startFrame + index, hold: run });
+    index += run;
+  }
+  return placement;
 }

@@ -2,7 +2,12 @@ import { Buffer } from "./bytes.js";
 import { openDatabase } from "./sqlite.js";
 import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
-import { actionProperties, readActionBlob } from "./clip-animation.js";
+import {
+  actionProperties,
+  celPlacement,
+  readActionBlob,
+  readCelSequence,
+} from "./clip-animation.js";
 import { frameOfCellName } from "../timeline.js";
 import { createProject, normalizeProject } from "./model.js";
 import { encodeRgbaPng } from "./png.js";
@@ -185,6 +190,28 @@ export function clipToProject(document, layers, fallback = {}) {
   const rasterById = new Map((layers ?? []).map((layer) => [Number(layer.id), layer]));
   const nodes = new Map((document.layerTree ?? []).map((node) => [Number(node.id), node]));
 
+  /**
+   * The cells each animation folder holds, frame by frame.
+   *
+   * A track carries the uuid of the layer whose timeline it is, and its cell
+   * sequence says which cell shows on each frame. The same uuid is written
+   * with dashes on the layer and without on the track, so the two are
+   * compared with the dashes taken out.
+   */
+  const uuidKey = (value) => String(value ?? "").replace(/-/g, "").toLowerCase();
+  const sequencesByUuid = new Map();
+  for (const track of document.tracks ?? []) {
+    const sequence = track?.action2?.celSequence;
+    const key = uuidKey(track?.layerUuid);
+    if (!sequence || !sequence.length || !key) continue;
+    if (!sequencesByUuid.has(key)) sequencesByUuid.set(key, sequence);
+  }
+
+  const placementOf = (node) => {
+    const sequence = sequencesByUuid.get(uuidKey(node.uuid));
+    return sequence ? celPlacement(sequence, startFrame) : null;
+  };
+
   /** The picture of a layer, as the base of a drawing. */
   const pictureOf = (node) => {
     const raster = rasterById.get(Number(node.id));
@@ -225,7 +252,7 @@ export function clipToProject(document, layers, fallback = {}) {
    * `inheritedFrame` and `inheritedName` belong to the cell the layer sits
    * in, when the cell holds more than one layer.
    */
-  const buildLayer = (node, insideAnimation, inheritedFrame, inheritedName) => {
+  const buildLayer = (node, insideAnimation, inheritedFrame, inheritedName, placement) => {
     const folder = Boolean(node.folder);
     const ownName = node.name || `Layer ${node.id}`;
 
@@ -234,7 +261,14 @@ export function clipToProject(document, layers, fallback = {}) {
     // an ordinary name is **not** a cell: it is a layer that shows the
     // whole time, the way a layer outside the folder does. Getting this
     // wrong hides the artwork, because a cell only shows on its own frame.
-    const cellFrame = insideAnimation ? frameOfCellName(ownName) : null;
+    //
+    // The sequence of the track is better evidence than the name, because a
+    // cell can be held over several frames. When the track names the cell,
+    // the track decides where it sits and for how long.
+    const runs = insideAnimation ? placement?.get(ownName) : undefined;
+    const cellFrame = insideAnimation
+      ? (runs?.[0]?.frame ?? frameOfCellName(ownName))
+      : null;
     const isCel = cellFrame !== null;
 
     // A layer that sits inside a cell is on the frame of that cell; a layer
@@ -264,14 +298,22 @@ export function clipToProject(document, layers, fallback = {}) {
 
     if (!folder) {
       const picture = pictureOf(node);
-      const drawing = {
-        at: frame,
-        hold: isCel ? 1 : hold,
-        strokes: [],
-      };
-      if (cellName) drawing.name = cellName;
-      if (picture) drawing.image = picture;
-      layer.drawings.push(drawing);
+      // A cell shows on every frame the track names it, so it can carry more
+      // than one drawing. Without a track, the name of the cell is the only
+      // evidence there is, and it holds a single frame.
+      const spots = isCel
+        ? (runs ?? [{ frame: cellFrame, hold: 1 }])
+        : [{ frame, hold }];
+      for (const spot of spots) {
+        const drawing = {
+          at: spot.frame,
+          hold: spot.hold,
+          strokes: [],
+        };
+        if (cellName) drawing.name = cellName;
+        if (picture) drawing.image = picture;
+        layer.drawings.push(drawing);
+      }
     }
 
     // The children of a folder are drawn from the bottom of the screen up,
@@ -279,21 +321,25 @@ export function clipToProject(document, layers, fallback = {}) {
     // animation folder are cells, though, and a cell list reads from the
     // first frame down, so those keep the order the document stores and are
     // sorted by the frame their name gives.
+    const childPlacement = node.animationFolder ? placementOf(node) : null;
+
     let kids = childrenOf(node);
     if (node.animationFolder) {
       const frameOf = (child) => {
+        const spot = childPlacement?.get(child.name ?? "")?.[0];
+        if (spot) return spot.frame;
         const found = frameOfCellName(child.name ?? "");
         return found === null ? Number.MAX_SAFE_INTEGER : found;
       };
       kids = chainOf(node).sort((a, b) => frameOf(a) - frameOf(b));
     }
-
     const children = kids.map((child) =>
       buildLayer(
         child,
         insideAnimation || Boolean(node.animationFolder),
         isCel ? frame : inheritedFrame,
         isCel ? cellName : inheritedName,
+        childPlacement,
       ),
     );
     if (folder) layer.children = children;
@@ -329,12 +375,33 @@ export function clipToProject(document, layers, fallback = {}) {
     delete layer.children;
   }
 
+  // A document can start its timeline in the middle of its animation, but a
+  // project has to show every drawing it holds. When a drawing sits before
+  // the start the document declares, the timeline is stretched back to it,
+  // and a layer that shows the whole time is stretched with it.
+  let firstFrame = startFrame;
+  for (const layer of projectLayers) {
+    for (const drawing of layer.drawings ?? []) {
+      if (drawing.at < firstFrame) firstFrame = drawing.at;
+    }
+  }
+  if (firstFrame < startFrame) {
+    for (const layer of projectLayers) {
+      if (layer.preBehavior !== "hold") continue;
+      for (const drawing of layer.drawings ?? []) {
+        if (drawing.name !== undefined) continue;
+        drawing.at = firstFrame;
+        drawing.hold = endFrame - firstFrame + 1;
+      }
+    }
+  }
+
   const project = createProject(width, height, "#ffffff");
   project.fps = Math.max(1, Number(timeline.frameRate ?? 12));
-  project.startFrame = startFrame;
+  project.startFrame = firstFrame;
   project.currentFrame = Math.min(
     endFrame,
-    Math.max(startFrame, Number(timeline.currentFrame ?? 0) + 1),
+    Math.max(firstFrame, Number(timeline.currentFrame ?? 0) + 1),
   );
   project.layers = projectLayers.length ? projectLayers : [createProject(width, height).layers[0]];
 
@@ -610,6 +677,9 @@ export async function readClipDocumentFromBytes(data) {
           codec: document.codec,
           types: document.types.length,
           properties: actionProperties(document),
+          // The cells the track shows, frame by frame, when it is a track
+          // that carries cells at all.
+          celSequence: readCelSequence(document),
         };
       };
       return {
