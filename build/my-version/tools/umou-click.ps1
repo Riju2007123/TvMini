@@ -4,6 +4,7 @@ param(
   [string]$OutPng = "",
   [int]$WaitMs = 900,
   [switch]$DoubleClick,
+  [switch]$Right,
   [string]$Keys = ""
 )
 
@@ -47,15 +48,17 @@ public class Click {
     EnumWindows(Cb, IntPtr.Zero);
     return found;
   }
-  public static void ClickAt(int x, int y, bool twice) {
+  public static void ClickAt(int x, int y, bool twice, bool right) {
     SetCursorPos(x, y);
     System.Threading.Thread.Sleep(150);
-    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    uint down = right ? 0x0008 : 0x0002;
+    uint up = right ? 0x0010 : 0x0004;
+    mouse_event(down, 0, 0, 0, IntPtr.Zero);
+    mouse_event(up, 0, 0, 0, IntPtr.Zero);
     if (twice) {
       System.Threading.Thread.Sleep(60);
-      mouse_event(0x0002, 0, 0, 0, IntPtr.Zero);
-      mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+      mouse_event(down, 0, 0, 0, IntPtr.Zero);
+      mouse_event(up, 0, 0, 0, IntPtr.Zero);
     }
   }
 }
@@ -73,7 +76,7 @@ Start-Sleep -Milliseconds 250
 if ($Keys -ne "") {
   [System.Windows.Forms.SendKeys]::SendWait($Keys)
 } else {
-  [Click]::ClickAt($r.Left + $X, $r.Top + $Y, $DoubleClick.IsPresent)
+  [Click]::ClickAt($r.Left + $X, $r.Top + $Y, $DoubleClick.IsPresent, $Right.IsPresent)
 }
 Start-Sleep -Milliseconds $WaitMs
 

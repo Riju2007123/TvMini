@@ -163,13 +163,13 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
 
     // Every call is written down, so a request that did not do what it
     // should can be seen afterwards.
-    if (route.startsWith("/api/")) {
+    if (url.pathname.startsWith("/api/")) {
       const line = `${new Date().toISOString()} ${route}\n`;
       console.log(line.trimEnd());
       try {
         appendFileSync(requestLogFile(), line);
-      } catch {
-        // The log is a convenience; a failure to write it is not an error.
+      } catch (error) {
+        console.error(`[tvmini] the request log could not be written: ${error.message}`);
       }
     }
 
@@ -347,4 +347,5 @@ if (isMain) {
   const port = portIndex === -1 ? 4123 : Number(process.argv[portIndex + 1]);
   const app = await startServer({ port });
   console.log(`TVMini running at ${app.url}`);
+  console.log(`requests are written to ${requestLogFile()}`);
 }
