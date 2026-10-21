@@ -34,6 +34,19 @@ import { importPictures } from "./exporters.js";
 
 /* ------------------------------------------------------------ server backend */
 
+/** Write a line down on the server, so the steps of the program can be seen. */
+function reportToServer(message) {
+  try {
+    fetch("api/client-log", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: String(message) }),
+    }).catch(() => {});
+  } catch {
+    // Reporting is a convenience; a failure to report is not an error.
+  }
+}
+
 async function serverRequest(method, endpoint, body) {
   const response = await fetch(endpoint, {
     method,
@@ -155,9 +168,10 @@ function createServerBackend(hooks) {
         start: picker.start ?? null,
       });
       if (!target) return null;
+      reportToServer(`the export has the path ${target}`);
 
       const clean = withClipExtension(target);
-      if (sourcePath && sourcePath.toLowerCase() === clean.toLowerCase()) {
+      if (sourcePath && String(sourcePath).toLowerCase() === clean.toLowerCase()) {
         throw new Error("refusing to overwrite the imported .clip file");
       }
 

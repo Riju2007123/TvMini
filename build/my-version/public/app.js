@@ -4479,11 +4479,13 @@ async function exportClip() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[tvmini] the .clip export failed", error);
+    reportToServer(`the .clip export failed: ${message}`);
     setStatus(message, true);
     if (tick) clearInterval(tick);
     return;
   }
   if (tick) clearInterval(tick);
+  reportToServer(`the .clip export wrote ${data?.path ?? "nothing"}`);
   if (!data) {
     setStatus("The .clip export was cancelled, so no file was written.");
     return;
