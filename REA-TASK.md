@@ -60,4 +60,8 @@ about licence enforcement is reported as documentation only.
     *frame / first frame / last frame* in the corner.
   - The names of the cells and the keys can be hidden.
 
+- **Step 7 re-check:** the push had been missed — the branch was 34 commits
+  ahead of `origin`. Re-ran the tests first (**215/215 pass**) and then pushed;
+  `master` is now in sync with `https://github.com/Riju2007123/tvpaint-save-export-rea`.
+
 **next step: all steps complete — see REPORT.md / SPEC.md**
