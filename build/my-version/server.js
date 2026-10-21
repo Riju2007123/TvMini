@@ -155,6 +155,12 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
     const url = new URL(req.url, "http://127.0.0.1");
     const route = `${req.method} ${url.pathname}`;
 
+    // Every call is written down, so a request that did not do what it
+    // should can be seen afterwards.
+    if (route.startsWith("/api/")) {
+      console.log(`${new Date().toISOString()} ${route}`);
+    }
+
     try {
       if (route === "GET /api/state") {
         sendJson(res, 200, {

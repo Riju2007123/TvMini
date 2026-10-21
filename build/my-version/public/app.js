@@ -4453,10 +4453,16 @@ async function exportClip() {
   let data;
   try {
     data = await backend.exportClip(state.project, stem, state.clipSourcePath);
-  } finally {
+  } catch (error) {
     clearInterval(tick);
+    setStatus(error instanceof Error ? error.message : String(error), true);
+    return;
   }
-  if (!data) return;
+  clearInterval(tick);
+  if (!data) {
+    setStatus("The .clip export was cancelled, so no file was written.");
+    return;
+  }
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   setStatus(
     `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
