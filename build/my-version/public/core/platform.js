@@ -147,11 +147,12 @@ function createServerBackend(hooks) {
       return serverRequest("POST", "/api/export", { path: target, project });
     },
 
-    async exportClip(project, stem, sourcePath) {
+    async exportClip(project, stem, sourcePath, onPath = null, picker = {}) {
       const target = await hooks.pickPath({
         mode: "save",
         title: "Export layered Clip Studio .clip",
-        name: `${stem}.clip`,
+        name: picker.name ?? `${stem}.clip`,
+        start: picker.start ?? null,
       });
       if (!target) return null;
 
@@ -163,6 +164,10 @@ function createServerBackend(hooks) {
       const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+
+      // The file is built from here on, which takes a while for a document
+      // with many layers, so the program is told that it is working.
+      onPath?.(clean);
 
       return serverRequest("POST", "/api/export-clip", {
         path: clean,
@@ -321,8 +326,8 @@ function createBrowserBackend(hooks) {
       return { path: saved.name, bytes: buffer.length, width, height };
     },
 
-    async exportClip(project, stem, sourceName) {
-      const name = `${stem}.clip`;
+    async exportClip(project, stem, sourceName, onPath = null, picker = {}) {
+      const name = picker.name ?? `${stem}.clip`;
       if (sourceName && sourceName.toLowerCase() === name.toLowerCase()) {
         throw new Error("refusing to overwrite the imported .clip file");
       }
@@ -349,6 +354,9 @@ function createBrowserBackend(hooks) {
       if (!result) {
         result = await createClipBuffer(project, { name: name.replace(/\.clip$/i, "") });
       }
+      // The file is built from here on, which takes a while for a document
+      // with many layers, so the program is told that it is working.
+      onPath?.(name);
       const saved = await saveFile(name, new Uint8Array(result.buffer), "clip");
       if (!saved) return null;
       return {

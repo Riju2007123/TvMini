@@ -4445,25 +4445,45 @@ async function exportClip() {
     ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
     : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
   stopPlayback();
-  // A document with many layers takes a while to write, and the program
-  // looks as if it has stopped, so the clock is shown while it works.
+
+  // The export never writes over the file the project came from, so when the
+  // project is a .clip the name that is offered is another one, and the
+  // folder that is offered is the one the file lies in.
+  const source = state.clipSourcePath;
+  const folder = source ? source.replace(/[\\/][^\\/]*$/, "") : null;
+  const sameName = source
+    ? baseName(source).toLowerCase() === `${stem}.clip`.toLowerCase()
+    : false;
+  const name = sameName ? `${stem} (export).clip` : `${stem}.clip`;
+
+  // The program asks where the file should go first and only then builds it,
+  // so the status bar says which of the two is going on.
+  setStatus("Choose where to save the .clip…");
   const started = Date.now();
-  const tick = setInterval(() => {
-    const seconds = Math.round((Date.now() - started) / 1000);
-    setStatus(`Building layered .clip… ${seconds}s (a big document takes a while)`);
-  }, 1000);
-  setStatus("Building layered .clip…");
+  let tick = null;
   let data;
   try {
-    data = await backend.exportClip(state.project, stem, state.clipSourcePath);
+    data = await backend.exportClip(
+      state.project,
+      stem,
+      source,
+      (chosen) => {
+        setStatus(`Building layered .clip… (${chosen})`);
+        tick = setInterval(() => {
+          const seconds = Math.round((Date.now() - started) / 1000);
+          setStatus(`Building layered .clip… ${seconds}s (a big document takes a while)`);
+        }, 1000);
+      },
+      { start: folder, name },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[tvmini] the .clip export failed", error);
     setStatus(message, true);
-    clearInterval(tick);
+    if (tick) clearInterval(tick);
     return;
   }
-  clearInterval(tick);
+  if (tick) clearInterval(tick);
   if (!data) {
     setStatus("The .clip export was cancelled, so no file was written.");
     return;
@@ -4644,18 +4664,18 @@ function openExportSettings() {
 
 let picker = null;
 
-function choosePath({ mode, title, name = "" }) {
+function choosePath({ mode, title, name = "", start = null }) {
   picker = { mode, resolve: null, dir: null };
   modalTitle.textContent = title;
   nameInput.value = name;
   confirmButton.textContent = mode === "open" ? "Open" : "Save";
   modal.hidden = false;
 
-  const start = state.currentPath
+  const home = state.currentPath
     ? state.currentPath.replace(/[\\/][^\\/]*$/, "")
     : null;
 
-  loadDir(start || dirInput.value || state.homeDir || ".");
+  loadDir(start || home || dirInput.value || state.homeDir || ".");
 
   return new Promise((resolve) => {
     picker.resolve = resolve;

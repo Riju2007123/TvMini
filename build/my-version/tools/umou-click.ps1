@@ -51,8 +51,8 @@ public class Click {
   public static void ClickAt(int x, int y, bool twice, bool right) {
     SetCursorPos(x, y);
     System.Threading.Thread.Sleep(150);
-    uint down = right ? 0x0008 : 0x0002;
-    uint up = right ? 0x0010 : 0x0004;
+    uint down = right ? 0x0008u : 0x0002u;
+    uint up = right ? 0x0010u : 0x0004u;
     mouse_event(down, 0, 0, 0, IntPtr.Zero);
     mouse_event(up, 0, 0, 0, IntPtr.Zero);
     if (twice) {
