@@ -357,6 +357,55 @@ function columnsOf(database, table) {
     .filter((name) => name !== "_PW_ID");
 }
 
+/**
+ * Give the layer table of the file the columns a document with an animation
+ * has.
+ *
+ * A blank Clip Studio document does not know about animation folders, the
+ * cel a folder shows now, or the colour settings of a cel. A document with
+ * an animation does, and Clip Studio reads those columns when it opens the
+ * file - so the table of the written file has to have them as well. The
+ * columns are added as they are, with the type and the default of the
+ * skeleton, and the rows that are already there keep their values.
+ */
+function alignLayerTable(database, source) {
+  const wanted = readAll(source, "PRAGMA table_info([Layer])");
+  const have = new Set(columnsOf(database, "Layer"));
+  for (const column of wanted) {
+    if (have.has(column.name) || column.name === "_PW_ID") continue;
+    const type = column.type || "INTEGER";
+    const fallback = column.notnull ? " DEFAULT NULL" : "";
+    database.exec(`ALTER TABLE Layer ADD COLUMN [${column.name}] ${type}${fallback}`);
+  }
+}
+
+/**
+ * Copy the settings of a row of the skeleton onto a layer of the file.
+ *
+ * The identity of a layer is its own: its number, its name, its place in
+ * the tree and its picture. Everything else - the flags of a cel, the
+ * colour settings of a cell - comes from the row the skeleton has, so the
+ * layers of the written file look like the ones Clip Studio wrote.
+ */
+function copyLayerSettings(database, source, sourceRow, layerId) {
+  const skip = new Set([
+    "_PW_ID", "MainId", "CanvasId", "LayerName", "LayerUuid", "LayerNextIndex",
+    "LayerFirstChildIndex", "LayerRenderMipmap", "LayerRenderThumbnail",
+    "LayerLayerMaskMipmap", "LayerLayerMaskThumbnail", "LayerFolder",
+    "LayerType", "AnimationFolder", "LayerVisibility", "LayerSelect",
+    "LayerLock", "LayerOpacity", "LayerComposite",
+  ]);
+  const columns = columnsOf(database, "Layer").filter(
+    (column) => !skip.has(column) && column in sourceRow && sourceRow[column] !== null,
+  );
+  if (!columns.length) return;
+  database
+    .prepare(
+      `UPDATE Layer SET ${columns.map((column) => `[${column}] = ?`).join(", ")} WHERE MainId = ?`,
+    )
+    .run(...columns.map((column) => sourceRow[column]), layerId);
+}
+
 function copyRow(database, table, whereColumn, whereValue, overrides) {
   const columns = columnsOf(database, table);
   const row = readOne(
@@ -978,7 +1027,39 @@ function animationSkeleton(source, container) {
       }
     : null;
 
-  return { tables, timeline, track, paper, first, second, types: curveFieldTypes(curve) };
+  // The rows of a document with an animation: the folder that holds the
+  // cells, and one of the cells itself. Their settings are copied onto the
+  // layers of the written file, so those look like the ones Clip Studio
+  // wrote rather than like the ones of a blank document. A skeleton
+  // without a layer table simply has nothing to copy.
+  const layerRow = (sql, ...params) => {
+    try {
+      return readOne(source, sql, ...params);
+    } catch {
+      return null;
+    }
+  };
+  const folderRow = layerRow(
+    "SELECT * FROM Layer WHERE AnimationFolder = 1 ORDER BY MainId LIMIT 1",
+  );
+  const celRow = folderRow
+    ? layerRow(
+        "SELECT * FROM Layer WHERE LayerFirstChildIndex <> 0 AND MainId <> ? ORDER BY MainId LIMIT 1",
+        folderRow.MainId,
+      )
+    : null;
+
+  return {
+    tables,
+    timeline,
+    track,
+    paper,
+    first,
+    second,
+    types: curveFieldTypes(curve),
+    folderRow,
+    celRow,
+  };
 }
 
 /** The 16 bytes a layer uuid string stands for. */
@@ -1017,10 +1098,13 @@ function insertRow(database, table, source, overrides) {
  * writer does not understand is copied rather than made up. Returns the
  * number of tracks that were written.
  */
-function writeAnimation(database, tree, project, skeleton, pixels, rows) {
+function writeAnimation(database, tree, project, skeleton, pixels, rows, source) {
   if (!columnsOf(database, "Layer").includes("AnimationFolder")) {
     database.exec("ALTER TABLE Layer ADD COLUMN AnimationFolder INTEGER DEFAULT NULL");
   }
+  // A document with an animation has more columns in its layer table than a
+  // blank one, and Clip Studio reads them when it opens the file.
+  if (source) alignLayerTable(database, source);
   for (const sql of [skeleton.tables.TimeLine, skeleton.tables.Track]) {
     const name = /CREATE TABLE\s+"?(\w+)/i.exec(sql)?.[1];
     if (name && columnsOf(database, name).length === 0) database.exec(sql);
@@ -1084,6 +1168,17 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows) {
       .prepare("UPDATE Layer SET AnimationFolder = 1 WHERE MainId = ?")
       .run(row.node.layerId);
     const uuid = readOne(database, "SELECT LayerUuid FROM Layer WHERE MainId = ?", row.node.layerId);
+
+    // The folder and its cells take the settings of the ones the skeleton
+    // has, so they look like the layers Clip Studio wrote.
+    if (source && skeleton.folderRow) {
+      copyLayerSettings(database, source, skeleton.folderRow, row.node.layerId);
+    }
+    if (source && skeleton.celRow) {
+      for (const child of row.node.children) {
+        copyLayerSettings(database, source, skeleton.celRow, tree.nodes[child].layerId);
+      }
+    }
 
     // The plan of the row: the cells it shows, and the frame each one
     // starts on. The frames become ticks of the document's timebase.
@@ -1416,7 +1511,9 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
 
     // The tracks that were written, so the caller can say whether the file
     // carries a timeline.
-    const tracks = skeleton ? writeAnimation(database, tree, project, skeleton, pixels, rows) : 0;
+    const tracks = skeleton
+      ? writeAnimation(database, tree, project, skeleton, pixels, rows, source)
+      : 0;
 
     setPreview(database, project);
 
