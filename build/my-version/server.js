@@ -285,7 +285,20 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
         return;
       }
 
-      if (route === "POST /api/export-clip") {
+      if (route === "POST /api/client-log") {
+      const body = await readJson(req);
+      const line = `${new Date().toISOString()} client: ${body.message ?? ""}\n`;
+      console.log(line.trimEnd());
+      try {
+        appendFileSync(requestLogFile(), line);
+      } catch {
+        // The log is a convenience; a failure to write it is not an error.
+      }
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (route === "POST /api/export-clip") {
         const body = await readJson(req);
         sendJson(res, 200, await exportClip(body.path, body.project, body.sourcePath));
         return;
