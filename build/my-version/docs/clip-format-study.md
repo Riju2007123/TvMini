@@ -194,6 +194,33 @@ Turned around, that is the order the palette shows: the animation folder at
 the top, then the cells `4`, `3`, `2a` (with the three layers inside it),
 `2`, `1a` and `1`, and the paper at the bottom.
 
+### How the writer rebuilds the tree
+
+The project keeps its layers in one list, top first, and every layer has a
+`parent` index, so it holds the same tree in a flat form. The writer turns
+that back into the chain:
+
+- Every project layer becomes a `Layer` row, folders included.
+- A folder is a row with `LayerFolder = 1` and `LayerType = 0`; a drawing
+  layer is `LayerFolder = 0` and `LayerType = 1`. Both flags were read off
+  real folders and raster layers, not guessed.
+- The children of a folder are linked from `LayerFirstChildIndex`, each one
+  pointing at the next with `LayerNextIndex`. Each list is **reversed**
+  before it is written, because the chain runs from the bottom of the canvas
+  up.
+- The root folder (`Canvas.CanvasRootFolder`) points at the paper, the paper
+  points at the bottom layer of the canvas, and the top layer ends the chain
+  with `LayerNextIndex = 0`.
+
+A folder has a mipmap chain but **no blob**: in `Animation10.clip` and in
+`b 3.clip` the `BlockData` id of a folder is not listed in `ExternalChunk`.
+Clip Studio Paint opens such a file, so the writer gives a folder a chain and
+writes no pixels for it.
+
+Measured: a project of five layers with a folder inside a folder exports and
+reads back with the same names, kinds and depths; so do `Animation10.clip`
+(7 layers), `Animation4.clip` (20) and `Animation14.clip` (34).
+
 ### The cells of an animation folder
 
 The children of an animation folder are the **cells** of the animation, and
@@ -717,6 +744,18 @@ This was found by measurement, not by reading the program: writing
 looking at the canvas in Clip Studio Paint gave red `0x11`, green `0x00`
 and blue `0x00`, which says the top byte of each word is the channel and
 nothing else.
+
+The reader now uses that: the three project settings become the background
+colour of the imported project through `paperColorOf`, and the paper row is
+no longer turned into a layer. It used to be, and every export then wrote
+the template's real paper **and** an empty raster layer named `Paper` — two
+paper rows in a file that came from one. Measured on `Animation10.clip`
+before and after the change.
+
+The `LayerType = 800` row, "(Story Information)", is treated the same way:
+it is the document's own metadata, not a layer to paint on. Both rows stay
+in the layer tree the reader reports, so nothing about the document is lost;
+they are only left out of the project.
 
 ## How another program reads all of this
 

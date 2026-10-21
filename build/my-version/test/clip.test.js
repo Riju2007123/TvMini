@@ -9,6 +9,7 @@ import {
   readClipDocument,
   readClipLayers,
 } from "../src/clip.js";
+import { clipToProject } from "../public/core/clip.js";
 import { createProject, normalizeProject, ValidationError } from "../src/model.js";
 import { decodePng, encodePng, renderLayerRgba, renderProject } from "../src/png.js";
 import { openProject, saveProject } from "../src/store.js";
@@ -423,6 +424,71 @@ test("an imported image survives save and open", async () => {
     const opened = await openProject(saved.path);
     assert.deepEqual(opened.project.image, project.image);
   });
+});
+
+test("a written .clip keeps the folders and the layers inside them", async () => {
+  const project = createProject(160, 120, "#ffffff");
+  const folder = (name, parent) => ({
+    name,
+    type: "group",
+    parent,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    preBehavior: "hold",
+    postBehavior: "hold",
+    drawings: [],
+  });
+  const ink = (name, parent) => ({
+    name,
+    type: "anim",
+    parent,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    preBehavior: "hold",
+    postBehavior: "hold",
+    drawings: [{ at: 1, hold: 1, strokes: [] }],
+  });
+
+  // Top first, each layer naming the folder that holds it, so the folder is
+  // followed by the layers inside it.
+  project.layers = [
+    folder("Outer", -1),
+    ink("Ink", 0),
+    folder("Inner", 0),
+    ink("Deep", 2),
+    ink("Sky", -1),
+  ];
+
+  const written = await createClipBuffer(project, { name: "folders" });
+  const document = await readClipDocumentFromBytes(written.buffer);
+  const back = clipToProject(document, []);
+
+  // The paper of the template comes back as a layer of its own at the bottom,
+  // so it is left out: the tree is what this test is about.
+  const layers = back.layers.filter((layer) => layer.name !== "用紙");
+  const parent = (name) => {
+    const index = layers.findIndex((layer) => layer.name === name);
+    assert.ok(index >= 0, `${name} should come back`);
+    const above = layers[index].parent ?? -1;
+    return above < 0 ? null : layers[above].name;
+  };
+
+  assert.deepEqual(
+    layers.map((layer) => [layer.name, layer.type]),
+    [
+      ["Outer", "group"],
+      ["Ink", "anim"],
+      ["Inner", "group"],
+      ["Deep", "anim"],
+      ["Sky", "anim"],
+    ],
+  );
+  assert.equal(parent("Ink"), "Outer");
+  assert.equal(parent("Inner"), "Outer");
+  assert.equal(parent("Deep"), "Inner");
+  assert.equal(parent("Sky"), null);
 });
 
 

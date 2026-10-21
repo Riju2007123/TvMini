@@ -656,16 +656,77 @@ function setTimeline(database, project) {
     );
 }
 
-function linkLayers(database, ordered) {
-  if (ordered.length === 0) return;
-  for (let index = 0; index < ordered.length; index += 1) {
+/**
+ * Put the project layers into the tree their `parent` fields describe.
+ *
+ * The project keeps its layers in one list, top first, and every layer says
+ * which folder holds it. A layer whose folder is missing sits at the top
+ * level, so nothing is lost.
+ */
+function buildTree(layers) {
+  const nodes = layers.map((layer) => ({ layer, layerId: 0, children: [] }));
+  const roots = [];
+  nodes.forEach((node, index) => {
+    const parent = node.layer.parent ?? -1;
+    if (parent >= 0 && parent < nodes.length && parent !== index) {
+      nodes[parent].children.push(index);
+    } else {
+      roots.push(index);
+    }
+  });
+
+  // A parent chain that loops would hide its layers, so anything the roots do
+  // not reach is put at the top level as well.
+  const reached = new Set();
+  const walk = (index) => {
+    if (reached.has(index)) return;
+    reached.add(index);
+    for (const child of nodes[index].children) walk(child);
+  };
+  roots.forEach(walk);
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (!reached.has(index)) roots.push(index);
+  }
+  return { nodes, roots };
+}
+
+/** Link a list of layers as siblings, from the bottom of the canvas up. */
+function linkSiblings(database, ids) {
+  for (let index = 0; index < ids.length; index += 1) {
     database
       .prepare("UPDATE Layer SET LayerNextIndex = ? WHERE MainId = ?")
-      .run(index + 1 < ordered.length ? ordered[index + 1] : 0, ordered[index]);
+      .run(index + 1 < ids.length ? ids[index + 1] : 0, ids[index]);
   }
+}
+
+/**
+ * Link the layers the way Clip Studio stores them.
+ *
+ * The tree is a linked list: a folder points at its first child, and every
+ * layer points at the next sibling. A chain starts at the bottom of the
+ * canvas, so each list is turned around here. `floor` holds the layers that
+ * sit under everything else, the paper first.
+ */
+function linkTree(database, tree, floor, rootId) {
+  const top = [...tree.roots].reverse();
+  const chain = [...floor, ...top.map((index) => tree.nodes[index].layerId)];
+  linkSiblings(database, chain);
   database
     .prepare("UPDATE Layer SET LayerFirstChildIndex = ? WHERE MainId = ?")
-    .run(ordered[0], readOne(database, "SELECT CanvasRootFolder FROM Canvas").CanvasRootFolder);
+    .run(chain[0] ?? 0, rootId);
+
+  const walk = (indexes) => {
+    for (const index of indexes) {
+      const node = tree.nodes[index];
+      const kids = [...node.children].reverse();
+      linkSiblings(database, kids.map((child) => tree.nodes[child].layerId));
+      database
+        .prepare("UPDATE Layer SET LayerFirstChildIndex = ? WHERE MainId = ?")
+        .run(kids.length > 0 ? tree.nodes[kids[0]].layerId : 0, node.layerId);
+      walk(kids);
+    }
+  };
+  walk(top);
 }
 
 function updateExternalChunks(database, headBody, pixels) {
@@ -762,23 +823,27 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     const projectLayers = project.layers.length
       ? project.layers
       : [{ name: "Layer 1", visible: true, locked: false, opacity: 1, drawings: [] }];
-    // A folder holds other layers and has no picture of its own, so it is
-    // left out: the layers inside it are written as layers of their own.
-    const drawable = projectLayers.filter((layer) => layer.type !== "group");
-    const bottomToTop = [...drawable].reverse();
+    // Every project layer becomes a Clip Studio layer, folders included: a
+    // folder is a row with the folder flag set, and the layers inside it are
+    // linked below it. The tree is built from each layer's `parent`.
+    const tree = buildTree(projectLayers);
     const created = [];
 
-    for (let index = 0; index < bottomToTop.length; index += 1) {
+    for (let index = 0; index < tree.nodes.length; index += 1) {
+      const node = tree.nodes[index];
       if (index === 0) {
         created.push({ ...templateLayer, layerId: templateLayer.MainId });
       } else {
+        const folder = node.layer.type === "group";
         created.push(
-          cloneLayer(database, templateLayer.MainId, bottomToTop[index].name, {
+          cloneLayer(database, templateLayer.MainId, node.layer.name, {
             __width: project.width,
             __height: project.height,
+            ...(folder ? { LayerFolder: 1, LayerType: 0 } : {}),
           }),
         );
       }
+      node.layerId = created[index].layerId;
     }
 
     const imageLayer = project.image
@@ -806,16 +871,19 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     }
 
     let currentLayerId = imageLayer?.layerId ?? templateLayer.MainId;
-    for (let index = 0; index < bottomToTop.length; index += 1) {
-      const source = bottomToTop[index];
+    for (let index = 0; index < tree.nodes.length; index += 1) {
+      const source = tree.nodes[index].layer;
       const target = created[index];
-      const opacity = Math.max(0, Math.min(256, Math.round(source.opacity * 256)));
+      const folder = source.type === "group";
+      const opacity = Math.max(0, Math.min(256, Math.round((source.opacity ?? 1) * 256)));
       database
         .prepare(
-          "UPDATE Layer SET LayerName = ?, LayerVisibility = ?, LayerLock = ?, LayerOpacity = ?, LayerComposite = 0, LayerSelect = 0, LayerUuid = ? WHERE MainId = ?",
+          "UPDATE Layer SET LayerName = ?, LayerFolder = ?, LayerType = ?, LayerVisibility = ?, LayerLock = ?, LayerOpacity = ?, LayerComposite = 0, LayerSelect = 0, LayerUuid = ? WHERE MainId = ?",
         )
         .run(
           String(source.name || "Layer").slice(0, 80),
+          folder ? 1 : 0,
+          folder ? 0 : 1,
           source.visible === false ? 0 : 1,
           source.locked ? 1 : 0,
           opacity,
@@ -825,22 +893,31 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       database
         .prepare("UPDATE LayerThumbnail SET ThumbnailCanvasWidth = ?, ThumbnailCanvasHeight = ? WHERE LayerId = ?")
         .run(project.width, project.height, target.layerId);
-      setLayerPixels(database, target.layerId, renderLayerRgba(project, source), pixels);
-      currentLayerId = target.layerId;
+      // A folder holds no picture of its own. Clip Studio still gives it a
+      // mipmap chain, but its block is not in the file, so no pixels are
+      // written for it and none are expected.
+      if (!folder) {
+        setLayerPixels(database, target.layerId, renderLayerRgba(project, source), pixels);
+        currentLayerId = target.layerId;
+      }
     }
 
     // Every layer that was filled has to end up with its pixels in the file.
     if (imageLayer) assertLayerHasPixels(database, imageLayer.layerId, pixels);
-    for (const target of created) assertLayerHasPixels(database, target.layerId, pixels);
+    for (let index = 0; index < tree.nodes.length; index += 1) {
+      if (tree.nodes[index].layer.type === "group") continue;
+      assertLayerHasPixels(database, created[index].layerId, pixels);
+    }
 
     if (imageLayer) {
       if (projectLayers.length === 0) currentLayerId = imageLayer.layerId;
     }
 
-    const ordered = [paper.MainId];
-    if (imageLayer) ordered.push(imageLayer.layerId);
-    for (const target of created) ordered.push(target.layerId);
-    linkLayers(database, ordered);
+    // The paper sits under everything else, so it starts the bottom chain.
+    const floor = [paper.MainId];
+    if (imageLayer) floor.push(imageLayer.layerId);
+    linkTree(database, tree, floor, canvas.CanvasRootFolder);
+    const layerCount = floor.length + created.length;
 
     const refreshColumns = columnsOf(database, "LayerThumbnail").filter((column) =>
       column.includes("NeedRefresh"),
@@ -896,7 +973,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       buffer: output,
       width: project.width,
       height: project.height,
-      layers: ordered.length,
+      layers: layerCount,
     };
   } finally {
     if (database) await database.close();

@@ -155,6 +155,26 @@ What is missing, and is this task:
     and layer masks are not a fidelity gap for these files. CONFIRMED by
     counting, not assumed.
 
+  - **Folders are now written, not flattened.** The writer used to drop every
+    folder (`filter(layer => layer.type !== "group")`) and write the layers
+    inside it as top-level layers, so a round trip lost the tree. It now
+    builds the chain Clip Studio stores: a folder is a row with
+    `LayerFolder = 1` and `LayerType = 0`, its children hang off
+    `LayerFirstChildIndex`, and each list is reversed because the chain runs
+    from the bottom of the canvas up. CONFIRMED on real files — the tree
+    reads back identical for `Animation10.clip` (7 layers),
+    `Animation4.clip` (20), `Animation14.clip` (34) and `b 3.clip` (93,
+    with folders inside folders).
+
+  - **The paper is not a layer any more.** The reader used to turn the
+    paper row into a layer named `Paper`, so an imported document exported
+    with the template's real paper **and** an empty raster of that name.
+    The paper colour now becomes the project background (each channel sits
+    in the top byte of a 32-bit word) and the paper and the
+    "(Story Information)" row are left out of the project. They stay in the
+    layer tree the reader reports. CONFIRMED by the two paper rows being
+    gone from the exported `Animation10.clip`.
+
   **Still open:** the `FCurve` keyframe records, which a writer needs. The
   body is not a pure array of 32-bit pool indices — trying every start offset
   from the end of the pool leaves 108 of 302 words outside the pool — so it

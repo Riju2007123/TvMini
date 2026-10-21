@@ -32,6 +32,31 @@ const LAYER_KIND = {
 };
 
 /**
+ * Whether a row describes the document rather than something to draw on.
+ *
+ * The paper is the colour of the canvas and the story information is the
+ * document's own metadata; neither is a layer the brush can paint. They stay
+ * in the layer tree that is reported, but they are not project layers.
+ */
+function isDocumentRow(node) {
+  return node.kind === "paper" || node.kind === "information";
+}
+
+/**
+ * The colour of the paper, as CSS hex, or null when the document has none.
+ *
+ * Clip Studio Paint keeps the paper colour in the project settings rather
+ * than in pixels, and each channel sits in the top byte of a 32-bit word, so
+ * a white paper is 0xffffffff in all three.
+ */
+function paperColorOf(row) {
+  if (!row || row.DefaultPagePaperRed == null) return null;
+  const channel = (value) => (Number(value ?? 0) >>> 24) & 0xff;
+  const hex = (value) => channel(value).toString(16).padStart(2, "0");
+  return `#${hex(row.DefaultPagePaperRed)}${hex(row.DefaultPagePaperGreen)}${hex(row.DefaultPagePaperBlue)}`;
+}
+
+/**
  * Read the container around the document.
  *
  * A `.clip` file is a flat list of chunks:
@@ -323,7 +348,7 @@ export function clipToProject(document, layers, fallback = {}) {
     // sorted by the frame their name gives.
     const childPlacement = node.animationFolder ? placementOf(node) : null;
 
-    let kids = childrenOf(node);
+    let kids = childrenOf(node).filter((child) => !isDocumentRow(child));
     if (node.animationFolder) {
       const frameOf = (child) => {
         const spot = childPlacement?.get(child.name ?? "")?.[0];
@@ -362,6 +387,9 @@ export function clipToProject(document, layers, fallback = {}) {
 
   if (root) {
     for (const child of childrenOf(root)) {
+      // The paper is the colour of the canvas and the story information is
+      // the document's metadata; neither is a layer to draw on.
+      if (isDocumentRow(child)) continue;
       flatten(buildLayer(child, false, null), -1);
     }
   }
@@ -396,7 +424,7 @@ export function clipToProject(document, layers, fallback = {}) {
     }
   }
 
-  const project = createProject(width, height, "#ffffff");
+  const project = createProject(width, height, document.paperColor ?? "#ffffff");
   project.fps = Math.max(1, Number(timeline.frameRate ?? 12));
   project.startFrame = firstFrame;
   project.currentFrame = Math.min(
@@ -714,6 +742,7 @@ export async function readClipDocumentFromBytes(data) {
       projectVersion: projectRow?.ProjectInternalVersion == null
         ? null
         : String(projectRow.ProjectInternalVersion),
+      paperColor: paperColorOf(projectRow),
       layers,
       layerTree,
       mipmaps,

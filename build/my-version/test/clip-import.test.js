@@ -53,15 +53,16 @@ test("the folders of a document become folders of the project", () => {
 
   const project = clipToProject(document, []);
 
-  // The chain of the document starts at the bottom, so the paper is last.
-  // The cells of an animation folder are listed by frame instead, because
-  // that is how a cell list reads: 1, 1a and then 2.
+  // The chain of the document starts at the bottom, so the cells of the
+  // animation folder follow their folder. The paper is not a layer: it is the
+  // colour of the canvas, and the project keeps it as the background.
+  // The cells of an animation folder are listed by frame, because that is how
+  // a cell list reads: 1, 1a and then 2.
   assert.deepEqual(project.layers.map((layer) => layer.name), [
     "Animation folder",
     "1",
     "1a",
     "2",
-    "Paper",
   ]);
   const folder = project.layers[0];
   assert.equal(folder.type, "group");
@@ -71,8 +72,22 @@ test("the folders of a document become folders of the project", () => {
   );
 });
 
-test("the cells of an animation folder land on the frames they are named after", () => {
-  const document = documentWith([
+test("the paper colour becomes the background of the project", () => {
+  const tree = [
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Ink", { nextIndex: 4 }),
+    node(4, "Paper", { kind: "paper", type: 1584, nextIndex: 0 }),
+  ];
+
+  const white = clipToProject(documentWith(tree), []);
+  assert.equal(white.background, "#ffffff");
+
+  const tinted = clipToProject({ ...documentWith(tree), paperColor: "#f0e0d0" }, []);
+  assert.equal(tinted.background, "#f0e0d0");
+  assert.equal(tinted.layers.length, 1, "the paper is not a layer");
+});
+
+test("the cells of an animation folder land on the frames they are named after", () => {  const document = documentWith([
     node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
     node(3, "Animation folder", {
       kind: "folder",
