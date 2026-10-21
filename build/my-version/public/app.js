@@ -4665,7 +4665,7 @@ function openExportSettings() {
 let picker = null;
 
 function choosePath({ mode, title, name = "", start = null }) {
-  picker = { mode, resolve: null, dir: null };
+  picker = { mode, resolve: null, dir: null, suggested: name, named: false };
   modalTitle.textContent = title;
   nameInput.value = name;
   confirmButton.textContent = mode === "open" ? "Open" : "Save";
@@ -4715,10 +4715,13 @@ async function loadDir(dir) {
       button.append(label, meta);
       button.addEventListener("click", () => {
         if (entry.dir) {
+          // Going into a folder does not throw the name away: the name the
+          // export suggested is still the name the user wants.
           loadDir(entry.path);
-          nameInput.value = "";
+          if (!picker?.named) nameInput.value = picker?.suggested ?? "";
         } else {
           nameInput.value = entry.path;
+          picker.named = true;
         }
       });
 
@@ -4758,11 +4761,15 @@ modal.addEventListener("click", (event) => {
 confirmButton.addEventListener("click", () => {
   const name = nameInput.value.trim();
   if (!name) {
-    setStatus("Enter a file name", true);
+    setStatus("Type a file name for the file, then press Save.", true);
     nameInput.focus();
     return;
   }
   finishPicker(joinPath(picker.dir, name));
+});
+
+nameInput.addEventListener("input", () => {
+  if (picker) picker.named = true;
 });
 
 nameInput.addEventListener("keydown", (event) => {
