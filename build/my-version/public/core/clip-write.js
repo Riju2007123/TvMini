@@ -810,14 +810,16 @@ function writeComposition(database, tree, floor, rootId) {
   const comp = readOne(database, "SELECT MainId, CompLayerInfo FROM LayerComp ORDER BY _PW_ID LIMIT 1");
   if (!comp) return;
 
-  // The settings every entry carries. The template's own entry is the
-  // model; a document without a composition is left alone. The blob is a
-  // header - the version, the number of entries, the size of an entry and
-  // the size of a uuid, all big endian - and then the entries: the uuid of
-  // a layer and four words of settings.
+  // The words every entry carries around its uuid. The template's own entry
+  // is the model: the size of an entry, the size of a uuid, and eight bytes
+  // of settings. A document without a composition is left alone.
+  //
+  // The blob is a header of two words - the version and the number of
+  // entries - and then the entries, one after the other.
   const previous = Buffer.from(comp.CompLayerInfo ?? Buffer.alloc(0));
-  const settings = previous.length >= 40 ? previous.subarray(24, 40) : null;
-  if (!settings) return;
+  const entryPrefix = previous.length >= 40 ? previous.subarray(8, 16) : null;
+  const entrySettings = previous.length >= 40 ? previous.subarray(32, 40) : null;
+  if (!entryPrefix || !entrySettings) return;
 
   // The layers of the canvas, from the bottom up.
   const order = [];
@@ -853,11 +855,11 @@ function writeComposition(database, tree, floor, rootId) {
   for (const index of [...tree.roots].reverse()) walk(tree.nodes[index].layerId, 0);
 
   const parts = [];
-  const header = Buffer.from(previous.subarray(0, 16));
+  const header = Buffer.from(previous.subarray(0, 8));
   header.writeUInt32BE(order.length, 4);
   parts.push(header);
   for (const row of order) {
-    parts.push(uuidBytes(row.LayerUuid), settings);
+    parts.push(entryPrefix, uuidBytes(row.LayerUuid), entrySettings);
   }
   database
     .prepare("UPDATE LayerComp SET CompLayerInfo = ? WHERE MainId = ?")

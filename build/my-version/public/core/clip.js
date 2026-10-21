@@ -170,16 +170,23 @@ function pngDimensions(bytes) {
  * fit: it is put where it is, and the part that falls outside the document
  * is cut away, the way Clip Studio Paint draws it. Scaling it would move
  * every stroke of the layer and squash it.
+ *
+ * A layer sits at the place its own offset says, and the part of the picture
+ * that the offset pushes out of the canvas is cut away with it.
  */
-function placeRgba(source, sourceWidth, sourceHeight, width, height) {
-  if (sourceWidth === width && sourceHeight === height) return source;
+function placeRgba(source, sourceWidth, sourceHeight, width, height, offsetX = 0, offsetY = 0) {
+  if (offsetX === 0 && offsetY === 0 && sourceWidth === width && sourceHeight === height) {
+    return source;
+  }
   const output = Buffer.alloc(width * height * 4);
-  const copyWidth = Math.min(sourceWidth, width);
-  const copyHeight = Math.min(sourceHeight, height);
-  for (let y = 0; y < copyHeight; y += 1) {
+  const copyWidth = Math.min(sourceWidth, width - offsetX);
+  if (copyWidth <= 0) return output;
+  for (let y = 0; y < sourceHeight; y += 1) {
+    const targetY = y + offsetY;
+    if (targetY < 0 || targetY >= height) continue;
     source.copy(
       output,
-      y * width * 4,
+      targetY * width * 4,
       y * sourceWidth * 4,
       y * sourceWidth * 4 + copyWidth * 4,
     );
@@ -261,7 +268,15 @@ export function clipToProject(document, layers, fallback = {}) {
   const pictureOf = (node) => {
     const raster = rasterById.get(Number(node.id));
     if (!raster || !raster.pixels) return null;
-    const picture = placeRgba(raster.pixels, raster.width, raster.height, width, height);
+    const picture = placeRgba(
+      raster.pixels,
+      raster.width,
+      raster.height,
+      width,
+      height,
+      raster.offsetX ?? 0,
+      raster.offsetY ?? 0,
+    );
     return {
       data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
       width,
@@ -810,8 +825,8 @@ export async function readClipDocumentFromBytes(data) {
     return {
       format: "clip-studio-native-container",
       readOnly: true,
-      width: Number(projectRow?.DefaultPageWidth ?? canvasRow?.CanvasWidth ?? 0) || null,
-      height: Number(projectRow?.DefaultPageHeight ?? canvasRow?.CanvasHeight ?? 0) || null,
+      width: Number(canvasRow?.CanvasWidth ?? projectRow?.DefaultPageWidth ?? 0) || null,
+      height: Number(canvasRow?.CanvasHeight ?? projectRow?.DefaultPageHeight ?? 0) || null,
       projectName: String(projectRow?.ProjectName ?? ""),
       projectVersion: projectRow?.ProjectInternalVersion == null
         ? null
@@ -923,8 +938,16 @@ export async function readClipLayersFromBytes(data, { includePaper = false } = {
 
     let layerRows = [];
     try {
+      // A document may leave the offset columns out, so the columns that are
+      // really there are asked for first.
+      const columns = db.prepare("PRAGMA table_info(Layer)").all().map((row) => row.name);
+      const wanted = [
+        "MainId", "LayerName", "LayerType", "LayerFolder", "LayerRenderMipmap",
+        "LayerOffsetX", "LayerOffsetY",
+      ];
+      const present = wanted.filter((name) => columns.includes(name));
       layerRows = db
-        .prepare("SELECT MainId, LayerName, LayerType, LayerFolder, LayerRenderMipmap FROM Layer")
+        .prepare(`SELECT ${present.join(", ")} FROM Layer`)
         .all();
     } catch {
       layerRows = [];
@@ -966,6 +989,11 @@ export async function readClipLayersFromBytes(data, { includePaper = false } = {
         name: String(layer.LayerName ?? ""),
         width: attribute.width,
         height: attribute.height,
+        // Where the picture sits on the canvas: the place of the layer
+        // itself. The offset of the layer's own buffer says where the layer
+        // was drawn from, not where its picture is.
+        offsetX: Number(layer.LayerOffsetX ?? 0),
+        offsetY: Number(layer.LayerOffsetY ?? 0),
         tiles: records,
         tilesWithPixels: decoded,
         pixels,

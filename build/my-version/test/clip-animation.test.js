@@ -4,10 +4,12 @@ import { Buffer } from "../public/core/bytes.js";
 import {
   celPlacement,
   celPlacementFromKeys,
+  readCameraCurves,
   readCelCurve,
   readCelSequence,
   readTrackRange,
 } from "../public/core/clip-animation.js";
+import { buildCurveRecord, buildDocument } from "../public/core/clip-mixer.js";
 
 /**
  * A body made of 32-bit little endian words, which is how the cell sequence
