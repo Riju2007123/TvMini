@@ -729,6 +729,53 @@ function useDocumentSpace(target = ctx) {
   return scale;
 }
 
+/**
+ * The shot the camera takes, or null when the whole canvas is shown.
+ *
+ * The camera tool works on the whole canvas, so the camera view is left
+ * alone while that tool is in the hand.
+ */
+function currentCameraView() {
+  const project = state.project;
+  if (!state.cameraView || state.tool === "camera") return null;
+  return cameraView(
+    project.camera,
+    project.currentFrame,
+    project.width,
+    project.height,
+  );
+}
+
+/**
+ * Put a context into the pixels of the stage.
+ *
+ * The stage shows the shot the camera takes: the context is scaled to the
+ * document and, when the camera view is on, moved so that the camera window
+ * is in the middle of the stage. Everything outside the window is cut away.
+ *
+ * The sheet on top of the stage is put in the same place, so the shape of
+ * the brush sits under the pointer and the stroke that is being drawn is
+ * shown where it will be.
+ */
+function useStageSpace(target = ctx) {
+  const scale = useDocumentSpace(target);
+  const view = currentCameraView();
+  if (!view) return { scale, view: null };
+  target.save();
+  target.setTransform(
+    view.scale * scale,
+    0,
+    0,
+    view.scale * scale,
+    (view.offsetX - view.camera.x * view.scale) * scale,
+    (view.offsetY - view.camera.y * view.scale) * scale,
+  );
+  target.beginPath();
+  target.rect(view.camera.x, view.camera.y, view.camera.width, view.camera.height);
+  target.clip();
+  return { scale, view };
+}
+
 // The stage follows the window: the buffer of the stage holds the dots of
 // the screen, so it is made again when the window changes.
 if (typeof window !== "undefined") {
@@ -1026,9 +1073,7 @@ function renderCanvas(frame = state.project.currentFrame) {
   const camera = cameraAt(project.camera, frame);
   // The stage shows the shot the camera takes; switching the camera view off
   // shows the whole canvas with the camera frame drawn on it instead.
-  const view = state.cameraView && state.tool !== "camera"
-    ? cameraView(project.camera, frame, width, height)
-    : null;
+  const view = currentCameraView();
 
   // The document is drawn in its own pixels; the buffer is the size of the
   // screen, so the context is scaled to the document.
@@ -1038,20 +1083,9 @@ function renderCanvas(frame = state.project.currentFrame) {
     // The area outside the camera window is the letterbox.
     ctx.fillStyle = CAMERA_BACKDROP;
     ctx.fillRect(0, 0, width, height);
-    ctx.save();
-    ctx.setTransform(
-      view.scale * scale,
-      0,
-      0,
-      view.scale * scale,
-      (view.offsetX - view.camera.x * view.scale) * scale,
-      (view.offsetY - view.camera.y * view.scale) * scale,
-    );
-    // Only the camera window shows the canvas.
-    ctx.beginPath();
-    ctx.rect(view.camera.x, view.camera.y, view.camera.width, view.camera.height);
-    ctx.clip();
   }
+  // The camera window is cut out of the drawing, so only the shot is shown.
+  useStageSpace(ctx);
 
   ctx.fillStyle = project.background;
   ctx.fillRect(0, 0, width, height);
@@ -1627,6 +1661,8 @@ brushImageInput.addEventListener("change", async () => {
   afterChange();
   brushImageName.textContent = name;
   setStatus(`The brush is now ${name}`);
+  // The shape of the brush under the pointer is the picture now.
+  drawOverlay();
 });
 
 /* ------------------------------------------------------- the brush library */
@@ -1783,22 +1819,42 @@ function drawBrushTip(target = overlayCtx) {
   if (!tipPoint || state.playing) return;
   if (state.tool !== "brush" && state.tool !== "eraser") return;
 
-  const radius = Math.max(0.5, (Number(widthInput.value) || 1) / 2);
+  const base = Math.max(0.5, (Number(widthInput.value) || 1) / 2);
+  // A pen that is pressed harder draws a wider line, and the shape under
+  // the pointer grows with it, so the tip shows the line that will be left.
+  const pressure = tipPoint.pressure;
+  const radius =
+    pressure === null || pressure === undefined
+      ? base
+      : Math.max(
+          0.5,
+          base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * pressure),
+        );
   const brush = currentBrush();
+  const { x, y } = tipPoint;
 
   target.save();
   if (brush) {
     const image = tipImage(brush);
     if (image.complete && image.naturalWidth > 0) {
       target.globalAlpha = 0.55;
-      target.drawImage(image, tipPoint.x - radius, tipPoint.y - radius, radius * 2, radius * 2);
+      target.drawImage(image, x - radius, y - radius, radius * 2, radius * 2);
     }
   } else {
+    // A light ring under a dark one, so the shape of the brush is seen on
+    // a light paper and on a dark one as well.
+    target.globalAlpha = 0.9;
+    target.strokeStyle = "#ffffff";
+    target.lineWidth = 2.5;
+    target.beginPath();
+    target.arc(x, y, radius, 0, Math.PI * 2);
+    target.stroke();
+
     target.globalAlpha = 0.85;
     target.strokeStyle = "#101418";
     target.lineWidth = 1;
     target.beginPath();
-    target.arc(tipPoint.x, tipPoint.y, radius, 0, Math.PI * 2);
+    target.arc(x, y, radius, 0, Math.PI * 2);
     target.stroke();
   }
   target.restore();
@@ -1809,7 +1865,8 @@ function drawBrushTip(target = overlayCtx) {
  *
  * The sheet holds the shape of the brush and the stroke that is being drawn.
  * The stroke is drawn with the same code the document uses, so the preview
- * looks like the stroke that will be left behind.
+ * looks like the stroke that will be left behind. The sheet is put in the
+ * same place as the stage, so the shape of the brush sits under the pointer.
  */
 function drawOverlay() {
   const width = canvas.width;
@@ -1822,18 +1879,21 @@ function drawOverlay() {
   overlayCtx.clearRect(0, 0, width, height);
   // The sheet is the size of the screen, so the stroke on it is drawn in the
   // pixels of the document.
-  useDocumentSpace(overlayCtx);
+  const { view } = useStageSpace(overlayCtx);
   if (state.drawing && !state.drawing.kind) {
     // The stroke in the hand: the document underneath is not drawn again while
     // the pointer moves, so the stroke is shown here instead.
     drawStrokesInto(overlayCtx, [state.drawing]);
   }
   drawBrushTip();
+  if (view) overlayCtx.restore();
 }
 
 canvas.addEventListener("pointermove", (event) => {
   const [x, y] = canvasPoint(event);
-  tipPoint = { x, y };
+  // The pressure is kept with the place of the pointer, so the shape of the
+  // brush is as wide as the line that will be drawn.
+  tipPoint = { x, y, pressure: pressureFor(event) };
   // Only the sheet on top of the stage is drawn again; the document stays as
   // it is, which is what keeps the stage smooth.
   drawOverlay();
@@ -1886,11 +1946,17 @@ function applyView() {
   canvas.style.height = `${Math.round(project.height * zoom)}px`;
   canvas.style.transformOrigin = "0 0";
   canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px)`;
+  // The sheet on top of the stage moves with the stage, so the shape of the
+  // brush stays under the pointer.
+  overlay.style.transformOrigin = "0 0";
+  overlay.style.transform = `translate(${viewPanX}px, ${viewPanY}px)`;
   // The buffer holds the dots of the screen, so it follows the zoom.
   const buffer = stageBuffer();
   if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
     canvas.width = buffer.width;
     canvas.height = buffer.height;
+    // A new buffer is empty, so the picture is drawn again.
+    renderCanvas();
   }
   showZoom();
 }
@@ -3837,6 +3903,9 @@ canvas.addEventListener("pointercancel", endStroke);
 widthInput.addEventListener("input", () => {
   widthValue.textContent = widthInput.value;
   syncQuickBar();
+  // The shape of the brush under the pointer grows and shrinks with the
+  // width, so it is drawn again at once.
+  drawOverlay();
 });
 
 colorInput.addEventListener("input", () => {
@@ -3887,6 +3956,9 @@ function selectTool(tool) {
   canvas.classList.toggle("picking", picking);
   canvas.classList.toggle("camera-tool", tool === "camera");
   setStatus(TOOL_STATUS[tool] ?? "Tool ready");
+  // The shape of the brush under the pointer belongs to the tool, so it is
+  // drawn again when another tool is taken in the hand.
+  drawOverlay();
 }
 
 brushButton.addEventListener("click", () => selectTool("brush"));
