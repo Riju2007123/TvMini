@@ -6,6 +6,7 @@ import { createTvppBuffer } from "./tvpp.js";
 import { renderPng } from "./png.js";
 import { buildExport, EXPORT_KINDS } from "../public/core/export-kinds.js";
 import { importPictures } from "../public/core/exporters.js";
+import { writeSutBrush } from "../public/core/sut-write.js";
 
 function tempName(target) {
   return `${target}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`;
@@ -186,6 +187,28 @@ export async function exportFile(filePath, project, kind, options = {}) {
     extra.push(side);
   }
   return { path: target, bytes: built.bytes.length, summary: built.summary, extra };
+}
+
+/**
+ * Write a brush as a Clip Studio Paint brush.
+ *
+ * A `.sut` file is a SQLite database, and the server has the library that
+ * makes one, so the file is built here and written to the path that was
+ * asked for.
+ */
+export async function exportBrushFile(filePath, brush) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    throw new ValidationError("a file path is required");
+  }
+  if (!brush || typeof brush !== "object") {
+    throw new ValidationError("a brush is required");
+  }
+  const target = path.resolve(
+    path.extname(filePath).toLowerCase() === ".sut" ? filePath : `${filePath}.sut`,
+  );
+  const bytes = await writeSutBrush(brush);
+  await writeAtomic(target, bytes);
+  return { path: target, bytes: bytes.length, name: path.basename(target) };
 }
 
 /** Read pictures (PNG, GIF, BMP, TGA) from disk into a new project. */

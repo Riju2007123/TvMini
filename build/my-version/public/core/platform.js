@@ -31,6 +31,7 @@ import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
 import { buildExport, EXPORT_KINDS } from "./export-kinds.js";
 import { importPictures } from "./exporters.js";
+import { writeSutBrush } from "./sut-write.js";
 
 /* ------------------------------------------------------------ server backend */
 
@@ -251,6 +252,27 @@ function createServerBackend(hooks) {
       return serverRequest("POST", "/api/export-file", { path: clean, project, kind, options });
     },
 
+    /**
+     * Write a brush as a Clip Studio Paint brush.
+     *
+     * The server makes the file, because it has the SQLite library that a
+     * `.sut` file is built with.
+     */
+    async exportBrush(brush, name) {
+      const target = await hooks.pickPath({
+        mode: "save",
+        title: "Export the brush as a Clip Studio Paint brush",
+        name: `${name}.sut`,
+      });
+      if (!target) return null;
+      const clean = /\.[^\\/]*$/.test(target.trim()) ? target.trim() : `${target.trim()}.sut`;
+      reportToServer(`the brush export has the path ${clean}`);
+      const info = await askAboutPath(clean);
+      if (info.dir) throw new Error("that path is a folder, not a file");
+      if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+      return serverRequest("POST", "/api/export-brush", { path: clean, brush });
+    },
+
     async chooseAndImportPictures() {
       const path = await hooks.pickPath({ mode: "open", title: "Import picture (PNG, GIF, BMP, TGA)" });
       if (!path) return null;
@@ -435,6 +457,19 @@ function createBrowserBackend(hooks) {
       if (!saved) return null;
       for (const file of built.extra) await saveFile(`${stem}.${file.ext}`, new Uint8Array(file.bytes));
       return { path: saved.name, bytes: built.bytes.length, summary: built.summary, extra: built.extra.map((f) => `${stem}.${f.ext}`) };
+    },
+
+    /**
+     * Write a brush as a Clip Studio Paint brush.
+     *
+     * Without a server the file is made in the page, with the SQLite build
+     * that runs in the browser.
+     */
+    async exportBrush(brush, name) {
+      const bytes = await writeSutBrush(brush);
+      const saved = await saveFile(name.endsWith(".sut") ? name : `${name}.sut`, new Uint8Array(bytes), "sut");
+      if (!saved) return null;
+      return { path: saved.name, bytes: bytes.length };
     },
 
     async chooseAndImportPictures() {

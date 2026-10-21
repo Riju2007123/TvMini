@@ -12,6 +12,7 @@ import {
   exportClip,
   exportFile,
   exportPng,
+  exportBrushFile,
   importPictureFiles,
   openProject,
   saveProject,
@@ -336,6 +337,12 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
       if (route === "POST /api/export-file") {
         const body = await readJson(req);
         sendJson(res, 200, await exportFile(body.path, body.project, body.kind, body.options));
+        return;
+      }
+
+      if (route === "POST /api/export-brush") {
+        const body = await readJson(req);
+        sendJson(res, 200, await exportBrushFile(body.path, body.brush));
         return;
       }
 

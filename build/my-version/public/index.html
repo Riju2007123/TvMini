@@ -7,6 +7,114 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="shell">
+    <!--
+      The shape family of the timeline. A rectangle is a layer, a circle is a
+      folder and a triangle is a drawing; a bar in front of the shape means
+      the same thing is taken away. The icons live in one place so the
+      timeline and the layers panel cannot drift apart.
+    -->
+    <svg class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+      <defs>
+        <symbol id="i-layer" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <rect x="4" y="5.5" width="12" height="9" rx="1.5" />
+        </symbol>
+        <symbol id="i-folder" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="10" cy="10" r="6" />
+        </symbol>
+        <symbol id="i-drawing" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M10 3.6 L16.6 16.4 H3.4 Z" />
+        </symbol>
+        <symbol id="i-layer-minus" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M1 10 H4.4" stroke-linecap="round" />
+          <rect x="6" y="5.5" width="11.5" height="9" rx="1.5" />
+        </symbol>
+        <symbol id="i-folder-minus" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 10 H4.4" stroke-linecap="round" />
+          <circle cx="11.9" cy="10" r="5.6" />
+        </symbol>
+        <symbol id="i-drawing-minus" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M1 10 H4.4" stroke-linecap="round" />
+          <path d="M11.9 4.4 L17.6 15.6 H6.2 Z" />
+        </symbol>
+        <symbol id="i-up" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12.5 L10 7.5 L15 12.5" />
+        </symbol>
+        <symbol id="i-down" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 7.5 L10 12.5 L15 7.5" />
+        </symbol>
+
+        <!-- the transport of the timeline -->
+        <symbol id="i-first" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M15.4 6 V14" />
+          <path d="M12.6 6 L8 10 L12.6 14 Z" />
+          <path d="M8.6 6 L4 10 L8.6 14 Z" />
+        </symbol>
+        <symbol id="i-prev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M10 6 L5 10 L10 14 Z" />
+          <path d="M15 6 L10 10 L15 14 Z" />
+        </symbol>
+        <symbol id="i-play" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M7 5 L15.5 10 L7 15 Z" />
+        </symbol>
+        <symbol id="i-pause" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M7.5 5.5 V14.5" />
+          <path d="M12.5 5.5 V14.5" />
+        </symbol>
+        <symbol id="i-next" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M10 6 L15 10 L10 14 Z" />
+          <path d="M5 6 L10 10 L5 14 Z" />
+        </symbol>
+        <symbol id="i-last" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M4.6 6 V14" />
+          <path d="M7.4 6 L12 10 L7.4 14 Z" />
+          <path d="M11.4 6 L16 10 L11.4 14 Z" />
+        </symbol>
+
+        <!-- the small marks of a row of the timeline -->
+        <symbol id="i-eye" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M2 10 C4.5 4.6 7.5 3 10 3 s5.5 1.6 8 7 c-2.5 5.4-5.5 7-8 7 s-5.5-1.6-8-7 Z" />
+          <circle cx="10" cy="10" r="2.6" />
+        </symbol>
+        <symbol id="i-eye-off" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M2 10 C4.5 4.6 7.5 3 10 3 s5.5 1.6 8 7 c-2.5 5.4-5.5 7-8 7 s-5.5-1.6-8-7 Z" />
+          <circle cx="10" cy="10" r="2.6" />
+          <path d="M3.5 16.5 L16.5 3.5" />
+        </symbol>
+        <symbol id="i-lock" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="4.5" y="9" width="11" height="8" rx="1.6" />
+          <path d="M7 9 V6.8 a3 3 0 0 1 6 0 V9" />
+        </symbol>
+        <symbol id="i-unlock" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="4.5" y="9" width="11" height="8" rx="1.6" />
+          <path d="M7 9 V6.8 a3 3 0 0 1 5.6-1.4" />
+        </symbol>
+        <symbol id="i-fold-open" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 7.5 L10 12.5 L15 7.5" />
+        </symbol>
+        <symbol id="i-fold-closed" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7.5 5 L12.5 10 L7.5 15" />
+        </symbol>
+        <symbol id="i-diamond" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M10 4 L16 10 L10 16 L4 10 Z" />
+        </symbol>
+        <symbol id="i-cross" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M6 6 L14 14" />
+          <path d="M14 6 L6 14" />
+        </symbol>
+        <symbol id="i-camera" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="2.5" y="6" width="15" height="10" rx="1.6" />
+          <path d="M7 6 L8.2 3.6 h3.6 L13 6" />
+          <circle cx="10" cy="11" r="2.8" />
+        </symbol>
+        <symbol id="i-frame" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M6 3.5 H3.5 V6" />
+          <path d="M14 3.5 H16.5 V6" />
+          <path d="M6 16.5 H3.5 V14" />
+          <path d="M14 16.5 H16.5 V14" />
+        </symbol>
+      </defs>
+    </svg>
+
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -106,93 +214,6 @@
       <div class="doc-tab-bar" id="docTabBar" role="tablist" aria-label="Open documents"></div>
     </div>
 
-    <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
-      <div class="pane-header timeline-header">
-        <button id="timelineMenuButton" class="tl-menu-button" title="The settings of the timeline" aria-haspopup="menu" aria-expanded="false">
-          <span class="tl-menu-icon" aria-hidden="true">▦</span>
-          <span>Timeline</span>
-          <span class="tl-menu-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="timelineMenu" class="menu-popup timeline-menu" role="menu" hidden>
-          <label class="field">
-            <span>Frames per second</span>
-            <input id="menuFps" type="number" min="1" max="120" step="1" value="12" />
-          </label>
-          <label class="field">
-            <span>First frame</span>
-            <input id="menuStartFrame" type="number" min="1" max="100000" step="1" value="1" />
-          </label>
-          <label class="field checkbox inline">
-            <input id="menuLoop" type="checkbox" checked />
-            <span>Loop the playback</span>
-          </label>
-          <label class="field checkbox inline">
-            <input id="menuOnion" type="checkbox" />
-            <span>Onion skin</span>
-          </label>
-          <hr />
-          <button id="menuAddFolder" type="button" role="menuitem">New animation folder</button>
-          <button id="menuFirstFrame" type="button" role="menuitem">Go to the first frame</button>
-          <button id="menuLastFrame" type="button" role="menuitem">Go to the last frame</button>
-        </div>
-        <button id="firstFrameButton" class="transport" title="Go to the first frame">⏮</button>
-        <button id="previousKeyButton" class="transport" title="Go to the key before this frame">⏪</button>
-        <button id="playButton" class="transport" title="Play or pause (Space)">▶ Play</button>
-        <button id="nextKeyButton" class="transport" title="Go to the key after this frame">⏩</button>
-        <button id="lastFrameButton" class="transport" title="Go to the last frame">⏭</button>
-        <label class="field checkbox inline">
-          <input id="loop" type="checkbox" checked />
-          <span>Loop</span>
-        </label>
-        <label class="field inline" title="Frames per second">
-          <span class="chip-label">FPS</span> <input id="fps" type="number" min="1" max="120" step="1" value="12" />
-        </label>
-        <label class="field inline" title="Playback speed multiplier">
-          <span class="chip-label">Speed</span>
-          <select id="speed">
-            <option value="0.25">¼×</option>
-            <option value="0.5">½×</option>
-            <option value="1" selected>1×</option>
-            <option value="2">2×</option>
-          </select>
-        </label>
-        <label class="field inline" title="First frame number">
-          <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
-        </label>
-        <span class="pane-header-spacer"></span>
-        <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
-        <button class="ghost-btn" type="button" data-pane-toggle="timeline" title="Hide the Timeline panel" aria-label="Hide the Timeline panel">
-          <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
-        </button>
-      </div>
-      <div class="timeline-toolbar">
-        <div class="toolbar-group">
-          <button id="addLayerButton" title="Add an animation layer">+ Layer</button>
-          <button id="addGroupButton" title="Add a folder and put the current layer inside it">+ Folder</button>
-          <button id="removeGroupButton" title="Take the current folder apart">− Folder</button>
-          <button id="deleteLayerButton" title="Delete the current layer">− Layer</button>
-          <button id="layerUpButton" title="Move layer up">↑</button>
-          <button id="layerDownButton" title="Move layer down">↓</button>
-        </div>
-        <span class="toolbar-sep" aria-hidden="true"></span>
-        <div class="toolbar-group">
-          <button id="addFrameButton" title="Insert a blank drawing at the current frame">+ Drawing</button>
-          <button id="duplicateFrameButton" title="Duplicate the current drawing">Duplicate</button>
-          <button id="holdButton" title="Extend the current exposure by one frame">Hold +1</button>
-          <button id="deleteFrameButton" title="Delete the current drawing">Delete</button>
-        </div>
-        <span class="toolbar-sep" aria-hidden="true"></span>
-        <div class="toolbar-group">
-          <button id="cellNamesButton" class="toggle on" title="Show the name of every cell in the timeline">Cell names</button>
-          <button id="keyMarkersButton" class="toggle on" title="Show the keys of the timeline above the frame numbers">Keys</button>
-        </div>
-      </div>
-      <div class="timeline-scroll">
-        <div id="timeline" class="timeline"></div>
-      </div>
-    </section>
-
-    <div id="timelineGrip" class="pane-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="-1"></div>
 
     <main class="workspace">
       <aside class="pane tools-pane" data-pane="tools">
@@ -360,12 +381,24 @@
             <button id="layerLock" class="layer-lock" type="button" title="Lock this layer" aria-pressed="false">🔒</button>
           </div>
           <div class="layer-actions">
-            <button id="panelAddLayer" type="button" title="Add a drawing layer">+ Layer</button>
-            <button id="panelAddFolder" type="button" title="Add a folder around this layer">+ Folder</button>
-            <button id="panelUnfold" type="button" title="Take this layer out of its folder">− Folder</button>
-            <button id="panelDeleteLayer" type="button" title="Delete this layer">− Layer</button>
-            <button id="panelLayerUp" type="button" title="Move this layer up">↑</button>
-            <button id="panelLayerDown" type="button" title="Move this layer down">↓</button>
+            <button id="panelAddLayer" class="shape-btn" type="button" title="Add a drawing layer" aria-label="Add a drawing layer">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer" /></svg>
+            </button>
+            <button id="panelAddFolder" class="shape-btn" type="button" title="Add a folder around this layer" aria-label="Add a folder">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder" /></svg>
+            </button>
+            <button id="panelUnfold" class="shape-btn" type="button" title="Take this layer out of its folder" aria-label="Take the layer out of its folder">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder-minus" /></svg>
+            </button>
+            <button id="panelDeleteLayer" class="shape-btn" type="button" title="Delete this layer" aria-label="Delete this layer">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer-minus" /></svg>
+            </button>
+            <button id="panelLayerUp" class="shape-btn" type="button" title="Move this layer up" aria-label="Move the layer up">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-up" /></svg>
+            </button>
+            <button id="panelLayerDown" class="shape-btn" type="button" title="Move this layer down" aria-label="Move the layer down">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-down" /></svg>
+            </button>
           </div>
           <div class="pane-body layer-tree" id="layerTree"></div>
         </aside>
@@ -486,13 +519,11 @@
         <div class="property-group">
           <div class="panel-title">Brush</div>
           <div class="brush-image-row">
-            <button id="brushImageButton" type="button" title="Use a picture as the shape of the brush. A PNG works, and so does a Clip Studio Paint brush.">Brush image…</button>
             <span id="brushImageName" class="brush-image-name">the round tip</span>
             <select id="brushLibrary" title="The brushes you have saved"></select>
             <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
-            <button id="brushRemove" type="button" title="Remove the brush that is picked">Remove</button>
+            <button id="brushPanelButton" type="button" title="Open the brush panel: bring in a brush, look at the brushes you have and write one out again">Brushes…</button>
           </div>
-          <input id="brushImageInput" type="file" accept="image/png,.sut" hidden />
         </div>
         <div class="property-group">
           <label class="field">
@@ -534,6 +565,129 @@
       </div>
     </section>
 
+
+
+
+
+
+    <div id="timelineGrip" class="pane-grip" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="-1"></div>
+
+    <section class="pane timeline-pane" data-pane="timeline" aria-label="Timeline">
+      <div class="pane-header timeline-header">
+        <button id="timelineMenuButton" class="tl-menu-button" title="The settings of the timeline" aria-haspopup="menu" aria-expanded="false">
+          <span class="tl-menu-icon" aria-hidden="true">▦</span>
+          <span>Timeline</span>
+          <span class="tl-menu-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="timelineMenu" class="menu-popup timeline-menu" role="menu" hidden>
+          <label class="field">
+            <span>Frames per second</span>
+            <input id="menuFps" type="number" min="1" max="120" step="1" value="12" />
+          </label>
+          <label class="field">
+            <span>First frame</span>
+            <input id="menuStartFrame" type="number" min="1" max="100000" step="1" value="1" />
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuLoop" type="checkbox" checked />
+            <span>Loop the playback</span>
+          </label>
+          <label class="field checkbox inline">
+            <input id="menuOnion" type="checkbox" />
+            <span>Onion skin</span>
+          </label>
+          <hr />
+          <button id="menuAddFolder" type="button" role="menuitem">New animation folder</button>
+          <button id="menuFirstFrame" type="button" role="menuitem">Go to the first frame</button>
+          <button id="menuLastFrame" type="button" role="menuitem">Go to the last frame</button>
+        </div>
+        <button id="firstFrameButton" class="transport" title="Go to the first frame" aria-label="Go to the first frame">
+          <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-first" /></svg>
+        </button>
+        <button id="previousKeyButton" class="transport" title="Go to the key before this frame" aria-label="Go to the key before this frame">
+          <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-prev" /></svg>
+        </button>
+        <button id="playButton" class="transport" title="Play or pause (Space)">
+          <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-play" /></svg>
+          <span id="playLabel">Play</span>
+        </button>
+        <button id="nextKeyButton" class="transport" title="Go to the key after this frame" aria-label="Go to the key after this frame">
+          <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-next" /></svg>
+        </button>
+        <button id="lastFrameButton" class="transport" title="Go to the last frame" aria-label="Go to the last frame">
+          <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-last" /></svg>
+        </button>
+        <label class="field checkbox inline">
+          <input id="loop" type="checkbox" checked />
+          <span>Loop</span>
+        </label>
+        <label class="field inline" title="Frames per second">
+          <span class="chip-label">FPS</span> <input id="fps" type="number" min="1" max="120" step="1" value="12" />
+        </label>
+        <label class="field inline" title="Playback speed multiplier">
+          <span class="chip-label">Speed</span>
+          <select id="speed">
+            <option value="0.25">¼×</option>
+            <option value="0.5">½×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+        <label class="field inline" title="First frame number">
+          <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
+        </label>
+        <button id="compactViewButton" class="toggle on" title="Small rows in the timeline. Turn this off for rows with room for a name." aria-pressed="true">Compact view</button>
+        <span class="pane-header-spacer"></span>
+        <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
+        <button class="ghost-btn" type="button" data-pane-toggle="timeline" title="Hide the Timeline panel" aria-label="Hide the Timeline panel">
+          <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+        </button>
+      </div>
+      <div class="timeline-toolbar">
+        <div class="toolbar-group">
+          <button id="addLayerButton" class="shape-btn" title="Add an animation layer" aria-label="Add an animation layer">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer" /></svg>
+          </button>
+          <button id="addGroupButton" class="shape-btn" title="Add a folder and put the current layer inside it" aria-label="Add a folder">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder" /></svg>
+          </button>
+          <button id="removeGroupButton" class="shape-btn" title="Take the current folder apart" aria-label="Take the folder apart">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder-minus" /></svg>
+          </button>
+          <button id="deleteLayerButton" class="shape-btn" title="Delete the current layer" aria-label="Delete the layer">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer-minus" /></svg>
+          </button>
+        </div>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-group">
+          <button id="addFrameButton" class="shape-btn" title="Insert a blank drawing at the current frame" aria-label="Insert a drawing">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-drawing" /></svg>
+          </button>
+          <button id="deleteFrameButton" class="shape-btn" title="Delete the current drawing" aria-label="Delete the drawing">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-drawing-minus" /></svg>
+          </button>
+          <button id="duplicateFrameButton" title="Duplicate the current drawing">Duplicate</button>
+          <button id="holdButton" title="Extend the current exposure by one frame">Hold +1</button>
+        </div>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-group">
+          <button id="layerUpButton" class="shape-btn" title="Move the current layer up" aria-label="Move the layer up">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-up" /></svg>
+          </button>
+          <button id="layerDownButton" class="shape-btn" title="Move the current layer down" aria-label="Move the layer down">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-down" /></svg>
+          </button>
+        </div>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-group">
+          <button id="cellNamesButton" class="toggle on" title="Show the name of every cell in the timeline">Cell names</button>
+          <button id="keyMarkersButton" class="toggle on" title="Show the keys of the timeline above the frame numbers">Keys</button>
+        </div>
+      </div>
+      <div class="timeline-scroll">
+        <div id="timeline" class="timeline"></div>
+      </div>
+    </section>
 
     <footer class="statusbar">
       <span id="status">Ready</span>
@@ -631,6 +785,28 @@
           <button class="overlay-close" type="button" data-close aria-label="Close">&times;</button>
         </div>
         <div id="keysBody" class="keys-body"></div>
+      </div>
+    </div>
+
+    <div id="brushDialog" class="overlay" hidden>
+      <div class="overlay-card wide brush-dialog">
+        <div class="overlay-title-row">
+          <div class="overlay-title">Brushes</div>
+          <button class="overlay-close" type="button" data-close aria-label="Close">&times;</button>
+        </div>
+        <div class="brush-drop" id="brushDrop">
+          <p>Drop .sut / .png files here, or tap to choose</p>
+          <input id="brushDropInput" type="file" accept=".sut,.png,image/png" multiple hidden />
+        </div>
+        <div class="brush-group">
+          <div class="brush-group-title">Built-in</div>
+          <div class="brush-list" id="brushBuiltins"></div>
+        </div>
+        <div class="brush-group">
+          <div class="brush-group-title">Imported</div>
+          <div class="brush-list" id="brushImported"></div>
+          <p class="brush-empty" id="brushImportedEmpty">No brush has been brought in yet.</p>
+        </div>
       </div>
     </div>
 

@@ -132,6 +132,11 @@ export const FILE_KINDS = {
     mime: "application/octet-stream",
     extensions: [".tvpp"],
   },
+  sut: {
+    description: "Clip Studio Paint brush",
+    mime: "application/octet-stream",
+    extensions: [".sut"],
+  },
 };
 
 /**

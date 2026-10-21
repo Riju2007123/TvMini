@@ -91,6 +91,15 @@ shipped earlier. Includes eraser touch-draw toggle.
 - The measurement (`tools/draw-check.mjs`, a headless browser, 120 moves):
   the stroke path went from **601 ms to 27 ms**, about twenty times faster,
   because the document is no longer drawn for every move of the pointer.
+- **The brush panel** (2026-10-21). MoArt has a panel of its own with a place
+  to drop files on, a list of the brushes that come with the program and a
+  list of the ones that were brought in. TVMini has the same panel now: the
+  "Brushes…" button in the brush part of the tool property panel opens it.
+  Files can be dropped on it or picked with the mouse; a `.png` and a Clip
+  Studio Paint brush (a `.sut` file) are both understood, and the name in
+  the file is kept. Every brush in the panel can be written out again as a
+  Clip Studio Paint brush, which is a file of its own (the format is
+  written down in `docs/sut-format-study.md`).
 
 Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
 0.25–2.0) of the brush thumbnails in the library, and building the paint
@@ -330,3 +339,65 @@ only; no code, markup or CSS was copied.
   records, the canvas size and its own limits, and it never writes to the
   file. It reports the native structure, it does not claim to decode CSP's
   raster tiles into editable pixels.
+
+## 13. The shell, brought in line with MoArt (measured 2026-10-21)
+
+The palette tokens of section 10 were already recorded, but the window was
+still painted in the old light grey and the timeline was a band at the top.
+This batch put the shell on the recorded tokens.
+
+### 13.1 What changed (our own code)
+
+- **The whole window is the MoArt shell now.** `:root` carries the recorded
+  values — ground `#303336`, well `#292C2F`, surface `#43464A`, surface-2
+  `#4E5257`, surface-3 `#575B61`, text `#E9EBED`, muted `#A9AEB4`, accent
+  `#3FA3EC` — and every rule reads them, so the panels, the wells, the
+  buttons and the fields are the same greys as MoArt's. One blue means
+  "live" and one red means "the playhead"; nothing else is coloured.
+- **The timeline is a dock at the bottom**, the way MoArt's dope sheet is,
+  with the properties bar above it and the status bar below. The drag grip
+  sits above the timeline, so pulling it down gives the timeline more room.
+- **The rows of the timeline are one line high.** `--tl-row-h` is the single
+  source of that height and the head, the cells, the lanes and the ruler all
+  read it, so the rows cannot drift apart. The *Compact view* button in the
+  header switches them to 34px rows and the choice is remembered.
+- **The ruler marks the playhead with a red triangle** in the key line, and
+  the frame the playhead is on is the only number in the ruler that is red.
+- **Every mark is a shape, not a picture of a character.** The transport, the
+  eye, the lock, the fold arrow, the camera key and the row buttons are
+  drawn as SVG in one sprite at the top of the page, so the window looks the
+  same on every machine — and the colour-emoji glyphs that used to render
+  the transport as blue blocks are gone.
+- **The toolbar of the timeline carries a shape for each thing it acts on:**
+  a **rectangle** is a layer, a **circle** is a folder and a **triangle** is a
+  drawing. The action that takes a thing away is the same shape with a
+  **bar in front of it**. The six buttons are layer, folder, folder away,
+  layer away, drawing and drawing away, and not one of them carries a word.
+  The layers panel uses the same six, so the two places that do the same
+  thing look the same.
+- **A bug in the layout was found and fixed while doing this.** Hiding a
+  panel took its grid row with it, and every part below it slid up by one.
+  Each part of the window now says which row it sits in, so the window holds
+  still when a panel is hidden.
+
+### 13.2 Clean room
+
+- Nothing was copied from MoArt's build. The palette values are the ones
+  already written down in section 10 of this document; the shapes, the
+  sprite, the geometry and the code are ours. The sprite at the top of
+  `public/index.html` is drawn from scratch in the same way as the icons
+  that were already in the file.
+
+### 13.3 Checked
+
+- 285 tests green (`node --test`).
+- The whole window, the timeline at 1× and at 3×, the layers panel, the
+  tools panel, the properties bar, the export dialog and the start screen
+  were rendered and looked at.
+- Every rewritten button was driven in the running app: add layer, add
+  folder, fold, delete layer, add drawing, delete drawing, the eye, the
+  lock, the camera key and the *Compact view* switch all still do what they
+  did.
+- Hiding the timeline, the properties and the tools panel, and putting them
+  back, was measured: the window holds still.
+

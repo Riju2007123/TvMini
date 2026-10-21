@@ -20,17 +20,22 @@
 
 /* -------------------------------------------------------------- node:sqlite */
 
-async function openNodeDatabase(bytes) {
+/**
+ * A database that lives in a file.
+ *
+ * node:sqlite opens a file, so a new database is made in a temporary file
+ * and the image is read back from it when the database is closed. That is
+ * also how an image that was read in is handed back.
+ */
+async function nodeDatabase(stage) {
   const { DatabaseSync } = await import("node:sqlite");
-  // node:sqlite opens a file, so the image is staged in a temporary file.
-  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { mkdtemp, rm, readFile, writeFile } = await import("node:fs/promises");
   const os = await import("node:os");
   const path = await import("node:path");
 
   const dir = await mkdtemp(path.join(os.tmpdir(), "tvmini-sqlite-"));
   const file = path.join(dir, "document.db");
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(file, bytes);
+  if (stage) await writeFile(file, stage);
 
   const database = new DatabaseSync(file);
   return {
@@ -40,7 +45,6 @@ async function openNodeDatabase(bytes) {
     // after the database is closed.
     export: async () => {
       database.close();
-      const { readFile } = await import("node:fs/promises");
       return new Uint8Array(await readFile(file));
     },
     close: async () => {
@@ -52,6 +56,10 @@ async function openNodeDatabase(bytes) {
       await rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+function openNodeDatabase(bytes) {
+  return nodeDatabase(bytes);
 }
 
 /* ----------------------------------------------------------------- sql.js */
@@ -93,7 +101,7 @@ function loadSqlJs() {
 
 async function openWasmDatabase(bytes) {
   const SQL = await loadSqlJs();
-  const database = new SQL.Database(new Uint8Array(bytes));
+  const database = bytes ? new SQL.Database(new Uint8Array(bytes)) : new SQL.Database();
 
   // sql.js uses a step/bind API rather than node:sqlite's all/get/run.
   // These helpers translate between the two.
@@ -137,4 +145,17 @@ export async function openDatabase(bytes) {
     return openNodeDatabase(bytes);
   }
   return openWasmDatabase(bytes);
+}
+
+/**
+ * Make a new, empty SQLite database.
+ *
+ * This is what a writer needs: the tables are made, the rows are put in and
+ * `export()` gives the file image.
+ */
+export async function createDatabase() {
+  if (typeof process !== "undefined" && process.versions?.node) {
+    return nodeDatabase(null);
+  }
+  return openWasmDatabase(null);
 }
