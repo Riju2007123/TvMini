@@ -92,7 +92,13 @@
             <path d="M8 20v-6h8v6" />
           </svg>
         </button>
-        <button class="primary topbar-export" type="button" data-shell-action="export">Export</button>
+        <button class="primary topbar-export" type="button" data-shell-action="export" title="Export the current frame as a PNG (Ctrl+E)" aria-label="Export the current frame as a PNG">Export</button>
+        <button class="bar-action topbar-clip" type="button" data-shell-action="exportClip" title="Export a Clip Studio .clip with the timeline (Ctrl+Shift+E)" aria-label="Export a Clip Studio .clip with the timeline">
+          <svg class="tli" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 5h16v14H4z" />
+            <path d="M4 15l4-4 3 3 3-3 6 6" />
+          </svg>
+        </button>
       </div>
     </header>
 

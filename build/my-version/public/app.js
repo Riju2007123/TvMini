@@ -4442,12 +4442,25 @@ async function exportClip() {
     ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
     : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
   stopPlayback();
+  // A document with many layers takes a while to write, and the program
+  // looks as if it has stopped, so the clock is shown while it works.
+  const started = Date.now();
+  const tick = setInterval(() => {
+    const seconds = Math.round((Date.now() - started) / 1000);
+    setStatus(`Building layered .clip… ${seconds}s (a big document takes a while)`);
+  }, 1000);
   setStatus("Building layered .clip…");
-  const data = await backend.exportClip(state.project, stem, state.clipSourcePath);
+  let data;
+  try {
+    data = await backend.exportClip(state.project, stem, state.clipSourcePath);
+  } finally {
+    clearInterval(tick);
+  }
   if (!data) return;
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
   setStatus(
     `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
-      `to ${baseName(data.path)} (${data.bytes} bytes). ` +
+      `to ${data.path} (${data.bytes} bytes, ${seconds}s). ` +
       (data.animation
         ? `${data.animation} row${data.animation === 1 ? "" : "s"} of cells written as tracks.`
         : "The file holds the layers of the project, without a timeline."),

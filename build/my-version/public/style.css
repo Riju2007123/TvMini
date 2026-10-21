@@ -463,6 +463,10 @@ body.hide-inspector.hide-stage .workspace {
   flex: none;
 }
 
+.topbar-clip {
+  margin-left: 2px;
+}
+
 .topbar-export {
   height: var(--btn-h);
   margin-left: 4px;
