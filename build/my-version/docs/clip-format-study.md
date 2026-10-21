@@ -526,6 +526,37 @@ and the rest) and whether a record is terminated by a count or by a sentinel.
 Until those two are settled the body cannot be walked from end to end, and an
 animation cannot be written back.
 
+### The size of a mixer body is fixed by the size of its pool
+
+Ten documents of the sample were measured, and the length of the body is a
+straight line in the number of pool entries, to the byte:
+
+| pool entries | body bytes | | pool entries | body bytes |
+|---|---|---|---|---|
+| 57 | 1009 | | 65 | 1329 |
+| 58 | 1049 | | 69 | 1489 |
+| 59 | 1089 | | 72 | 1609 |
+| 62 | 1209 | | 74 | 1689 |
+| 64 | 1289 | | 88 | 2249 |
+
+```
+body bytes = 1009 + 40 * (pool entries - 57)
+```
+
+Every extra pool entry costs exactly **40 bytes** of body. Since a cell adds
+one entry to the pool (its name — the names `1` to `6` are pool entries 57 to
+61 and 48 of `Animation10.clip`) and 40 bytes to the body, the record for one
+cell is **40 bytes**. The earlier note in this document that the keyframe
+table is laid out in 256 byte records was a misreading of the data and is
+withdrawn.
+
+Reading the body as 32-bit integers does not stay in step: every value sits in
+the upper half of the word (`0x0010` for 16, `0x002C` for 44), which is what
+made the body look irregular. Read as 16-bit values, 182 of 302 are pool
+indices and the remaining 120 are real numbers, so the stream carries both
+indices and values, and the width of a value still has to be settled before
+the body can be walked.
+
 ### Writing an animation: what is known and what is missing
 
 An animation document needs three things: a `TimeLine` row, a chain of

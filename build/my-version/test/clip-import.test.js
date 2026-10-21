@@ -54,18 +54,20 @@ test("the folders of a document become folders of the project", () => {
   const project = clipToProject(document, []);
 
   // The chain of the document starts at the bottom, so the paper is last.
+  // The cells of an animation folder are listed by frame instead, because
+  // that is how a cell list reads: 1, 1a and then 2.
   assert.deepEqual(project.layers.map((layer) => layer.name), [
     "Animation folder",
-    "2",
-    "1a",
     "1",
+    "1a",
+    "2",
     "Paper",
   ]);
   const folder = project.layers[0];
   assert.equal(folder.type, "group");
   assert.deepEqual(
     project.layers.filter((layer) => layer.parent === 0).map((layer) => layer.name),
-    ["2", "1a", "1"],
+    ["1", "1a", "2"],
   );
 });
 

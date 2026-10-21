@@ -216,6 +216,9 @@ export function clipToProject(document, layers, fallback = {}) {
     return list.reverse();
   };
 
+  /** The same chain the other way round: the order the document stores. */
+  const chainOf = (node) => [...childrenOf(node)].reverse();
+
   /**
    * Build one layer of the document.
    *
@@ -271,7 +274,21 @@ export function clipToProject(document, layers, fallback = {}) {
       layer.drawings.push(drawing);
     }
 
-    const children = childrenOf(node).map((child) =>
+    // The children of a folder are drawn from the bottom of the screen up,
+    // which is why the chain is turned around for layers. The children of an
+    // animation folder are cells, though, and a cell list reads from the
+    // first frame down, so those keep the order the document stores and are
+    // sorted by the frame their name gives.
+    let kids = childrenOf(node);
+    if (node.animationFolder) {
+      const frameOf = (child) => {
+        const found = frameOfCellName(child.name ?? "");
+        return found === null ? Number.MAX_SAFE_INTEGER : found;
+      };
+      kids = chainOf(node).sort((a, b) => frameOf(a) - frameOf(b));
+    }
+
+    const children = kids.map((child) =>
       buildLayer(
         child,
         insideAnimation || Boolean(node.animationFolder),
