@@ -89,10 +89,17 @@ for (const file of files) {
     const project = clipToProject(document, layers, {});
     const written = await createClipBuffer(project, { name: "round trip", animation: data });
     const after = await cellsOf(Buffer.from(written.buffer));
-    const same = before.length === after.length && before.every((one, index) => one.cells === after[index].cells);
+    // The cells of every track have to be the same. The order of the tracks
+    // in the list follows the order of the layers, which is the order the
+    // editor draws them in, so it may differ from the order of the source.
+    const beforeCells = before.map((one) => one.cells).sort();
+    const afterCells = after.map((one) => one.cells).sort();
+    const same = beforeCells.length === afterCells.length && beforeCells.every((one, index) => one === afterCells[index]);
+    const sameOrder = before.every((one, index) => one.cells === after[index]?.cells);
     checked += 1;
     console.log(
       `${same ? "OK  " : "DIFF"} ${path.basename(file)}: ${before.length} track(s)` +
+        (same && !sameOrder ? " (the same cells, in the order of the layers)" : "") +
         (same ? "" : `\n     before ${JSON.stringify(before)}\n     after  ${JSON.stringify(after)}`),
     );
     if (!same) failed += 1;

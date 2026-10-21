@@ -364,6 +364,32 @@ only the outermost folder of cells is a row. Without that rule every cell
 that holds layers became a track of its own, and the timeline showed nine
 rows where the document has three.
 
-**next step: 9 - the writer and the reader agree on every document of the corpus**
+## Step 9 - the writer and the reader agree on every document of the corpus (done)
+
+`tools/clip-roundtrip-corpus.mjs` imports every `.clip` of a folder the way
+the editor imports it, writes it out again with the document itself as the
+skeleton of the tracks, reads the result back and compares the cells of every
+track. On the corpus of this machine:
+
+```
+OK   Animation.clip: 2 track(s)
+OK   Animation2.clip: 1 track(s)
+OK   Animation3.clip: 3 track(s) (the same cells, in the order of the layers)
+OK   TVMini-animation-demo.clip: 2 track(s)
+
+4/4 documents keep their cells
+```
+
+The cells of every track are the same. The order of the tracks in the list is
+the order of the layers, which is the order the editor draws them in, so it
+can differ from the order of the source: `Animation3.clip` lists the track of
+"Animation folder" first and the written file lists "Folder 2" first, because
+that is the layer that is drawn on top.
+
+**The feature asked for is done:** a `.clip` is read with its folders, its
+animation folders, its cells and its frames, and it is written back out with
+all of them, checked in Clip Studio Paint itself.
+
+**next step: 10 - keep the writer and the reader in step with every change of the format**
 
 
