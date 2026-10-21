@@ -161,17 +161,23 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
     const url = new URL(req.url, "http://127.0.0.1");
     const route = `${req.method} ${url.pathname}`;
 
-    // Every call is written down, so a request that did not do what it
-    // should can be seen afterwards.
-    if (url.pathname.startsWith("/api/")) {
-      const line = `${new Date().toISOString()} ${route}\n`;
+    // Every call is written down with what it answered, so a request that did
+    // not do what it should can be seen afterwards.
+    const write = (line) => {
       console.log(line.trimEnd());
       try {
         appendFileSync(requestLogFile(), line);
       } catch (error) {
         console.error(`[tvmini] the request log could not be written: ${error.message}`);
       }
-    }
+    };
+    const noted = { done: false };
+    const note = (status, detail = "") => {
+      if (noted.done || !url.pathname.startsWith("/api/")) return;
+      noted.done = true;
+      write(`${new Date().toISOString()} ${route} -> ${status}${detail ? ` ${detail}` : ""}\n`);
+    };
+    res.on("finish", () => note(res.statusCode));
 
     try {
       if (route === "GET /api/state") {
@@ -335,7 +341,9 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
 
       sendJson(res, 405, { error: "method not allowed" });
     } catch (error) {
-      sendJson(res, statusFor(error), { error: messageFor(error) });
+      const status = statusFor(error);
+      note(status, messageFor(error));
+      sendJson(res, status, { error: messageFor(error) });
     }
   });
 
