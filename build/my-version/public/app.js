@@ -709,19 +709,17 @@ function stageBuffer() {
   const project = state.project;
   const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   const zoom = viewZoom || 1;
-  // The size the element has on the screen, which is smaller than the
-  // document when the document does not fit the pane.
-  const shownWidth = canvas.offsetWidth || project.width;
-  const shownHeight = canvas.offsetHeight || project.height;
-  let width = Math.round(shownWidth * zoom * ratio);
-  let height = Math.round(shownHeight * zoom * ratio);
+  // The buffer holds the dots of the screen: the size of the document, times
+  // the zoom, times the number of dots a pixel of the screen has.
+  let width = Math.round(project.width * zoom * ratio);
+  let height = Math.round(project.height * zoom * ratio);
   const biggest = Math.max(width, height);
   if (biggest > MAX_STAGE_BUFFER) {
     const shrink = MAX_STAGE_BUFFER / biggest;
     width = Math.max(1, Math.round(width * shrink));
     height = Math.max(1, Math.round(height * shrink));
   }
-  return { width, height, ratio };
+  return { width, height, ratio, scale: (width / project.width) };
 }
 
 /** Put a context into the pixels of the document. */
@@ -747,10 +745,9 @@ function resizeCanvas() {
   const buffer = stageBuffer();
   canvas.width = buffer.width;
   canvas.height = buffer.height;
-  // The element keeps the size of the document on the screen; the buffer
-  // holds the dots of the screen.
-  canvas.style.width = `${state.project.width}px`;
-  canvas.style.height = `${state.project.height}px`;
+  // The element is the size the document is shown at, and the buffer holds
+  // the dots of the screen.
+  applyView();
   renderCanvas();
   renderTimeline();
   renderLayerPanel();
@@ -1874,10 +1871,21 @@ let viewZoom = 1;
 let viewPanX = 0;
 let viewPanY = 0;
 
-/** Put the zoom and the pan on the canvas element. */
+/**
+ * Put the zoom and the pan on the canvas element.
+ *
+ * The element is the size the document is shown at, and the buffer behind it
+ * holds the dots of the screen, so the picture is drawn one to one. The pane
+ * scrolls when the document is larger than the pane, the way Clip Studio
+ * Paint does.
+ */
 function applyView() {
+  const project = state.project;
+  const zoom = viewZoom || 1;
+  canvas.style.width = `${Math.round(project.width * zoom)}px`;
+  canvas.style.height = `${Math.round(project.height * zoom)}px`;
   canvas.style.transformOrigin = "0 0";
-  canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
+  canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px)`;
   // The buffer holds the dots of the screen, so it follows the zoom.
   const buffer = stageBuffer();
   if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
@@ -1890,12 +1898,27 @@ function applyView() {
 /** Zoom the stage by a factor, keeping the point under the pointer in place. */
 function zoomStage(factor, clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
+  // The point under the pointer, in the pixels of the document.
   const local = (clientX - rect.left) / viewZoom;
   const next = Math.max(0.1, Math.min(16, viewZoom * factor));
   if (next === viewZoom) return;
-  // The element has to move so that the same point is under the pointer.
-  viewPanX += clientX - local * next - rect.left;
+  // The element grows with the zoom, so the pan has to move so that the
+  // same point of the document stays under the pointer.
+  viewPanX += clientX - rect.left - local * next;
   viewZoom = next;
+  applyView();
+}
+
+/** The zoom that shows the whole document in the pane. */
+function fitStage() {
+  const project = state.project;
+  const wrap = document.querySelector(".canvas-wrap");
+  const box = wrap?.getBoundingClientRect();
+  if (!box || !box.width || !box.height) return;
+  const zoom = Math.min(box.width / project.width, box.height / project.height);
+  viewZoom = Math.max(0.1, Math.min(16, zoom));
+  viewPanX = 0;
+  viewPanY = 0;
   applyView();
 }
 
@@ -1922,11 +1945,8 @@ function panStage(event) {
 }
 
 zoomLabel.addEventListener("click", () => {
-  viewZoom = 1;
-  viewPanX = 0;
-  viewPanY = 0;
-  applyView();
-  setStatus("The stage is back to full size");
+  fitStage();
+  setStatus("The whole canvas is shown");
 });
 
 for (const [input, field] of [
