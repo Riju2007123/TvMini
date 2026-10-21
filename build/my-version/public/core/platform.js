@@ -47,21 +47,53 @@ function reportToServer(message) {
   }
 }
 
+/**
+ * Ask the server about a path before it is written to.
+ *
+ * The answer is a convenience: it tells the program whether the file is
+ * already there, so it can ask whether to replace it. A browser may block
+ * the question, and that must not stop the export, so a question that fails
+ * is answered with "nothing is known" and the export goes on.
+ */
+async function askAboutPath(path) {
+  const url = `/api/stat?path=${encodeURIComponent(path)}`;
+  try {
+    return await serverRequest("GET", url);
+  } catch (error) {
+    reportToServer(`the question about the path failed: ${error.message}`);
+    return { exists: false, dir: false, size: 0, path };
+  }
+}
+
 async function serverRequest(method, endpoint, body) {
   let response;
-  try {
-    response = await fetch(endpoint, {
-      method,
-      headers: body === undefined ? {} : { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch (error) {
-    // The program on the server is not answering. It may have been restarted
-    // while the work was going on, and the work is still there.
-    throw new Error(
-      "the program on the server did not answer. It may have been restarted - " +
-        "try again, and your work is not lost.",
-    );
+  // A connection that was closed while it was idle makes the next request
+  // fail, even though the program is there: the file dialog can be open for
+  // a while, and the server closes the connection after five seconds. The
+  // request is therefore tried once more, on a fresh connection. A file that
+  // is written twice is the same file, so every kind of request may be
+  // tried again.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      response = await fetch(endpoint, {
+        method,
+        headers: body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: "no-store",
+      });
+      break;
+    } catch (error) {
+      if (attempt > 0) {
+        // The program on the server is not answering. It may have been
+        // restarted while the work was going on, and the work is still there.
+        reportToServer(`the request ${method} ${endpoint} failed: ${error.message}`);
+        throw new Error(
+          "the program on the server did not answer. It may have been restarted - " +
+            "try again, and your work is not lost.",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
 
   let payload = {};
@@ -151,7 +183,7 @@ function createServerBackend(hooks) {
 
       const clean = withTvminiExtension(target);
       if (options.saveAs) {
-        const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+        const info = await askAboutPath(clean);
         if (info.dir) throw new Error("that path is a folder, not a file");
         if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
       }
@@ -185,7 +217,7 @@ function createServerBackend(hooks) {
         throw new Error("refusing to overwrite the imported .clip file");
       }
 
-      const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+      const info = await askAboutPath(clean);
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
 
@@ -212,7 +244,7 @@ function createServerBackend(hooks) {
       reportToServer(`the export has the path ${clean}`);
       const statUrl = `/api/stat?path=${encodeURIComponent(clean)}`;
       reportToServer(`the export asks ${statUrl}`);
-      const info = await serverRequest("GET", statUrl);
+      const info = await askAboutPath(clean);
       reportToServer(`the server says the file ${info.exists ? "is there" : "is not there"}`);
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
@@ -239,7 +271,7 @@ function createServerBackend(hooks) {
         throw new Error("refusing to overwrite the imported .tvpp file");
       }
 
-      const info = await serverRequest("GET", `/api/stat?path=${encodeURIComponent(clean)}`);
+      const info = await askAboutPath(clean);
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
 
