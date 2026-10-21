@@ -199,3 +199,45 @@ Separately, a layer *inside* a cell took the length of the whole animation, so
 its drawing ran past the end of the timeline (frames 18..21 in a 17 frame
 file). Fixed in `public/core/clip.js`: the hold now comes from the cell, and
 `test/clip-import.test.js` covers it.
+
+
+
+**Session note - the cel timing field is identified (step 5 closed).** The
+`FCurve` record is found by scanning the body at **every byte offset**, not
+only at multiples of four: nothing in that part of the document is aligned.
+A record starts with the pool index of `FCurve`, then a zero, then a property
+count (1..8), then `(name, value)` pairs; the cell curve carries
+`Type = ImageCelName`. Then comes a field count and, for every field, three
+metadata words (`Int32[]`, width + 24, width + 28), the field name, the field
+type, the count, the values and two zero words.
+
+CONFIRMED against `Animation3.clip` (three tracks, 9 / 5 / 7 cells):
+
+```
+Frame   0  4  8 10 16 18 20 22 24     (60 Hz ticks)
+Tag     1  2  3  4  5  6  7  8  9
+Value   0  1  2  3  4  5  6  7  8
+```
+
+`Frame` is a time in **60 Hz ticks**: `frame = Frame * fps / 60`. At 30 fps
+that is frames 0,2,4,5,8,9,10,11,12, so cels are **held**, not consecutive.
+The decisive check is `Animation2.clip` at 24 fps, whose keys step by 2.5
+ticks (0, 2.5, 5, 7.5, 10, 17.5) and become the whole frames 0,1,2,3,4,7.
+`TimeClip.End` / `Rate` are plain little endian doubles; `End` is the last
+frame of the track in the same ticks. Across the corpus `End * fps / 60`
+equals `TimeLine.BiggestEndFrame` (248 -> 124, 240 -> 120, 300 -> 120).
+
+The reader now uses this: `readCelCurve`, `celPlacementFromKeys` and
+`readTrackRange` in `public/core/clip-animation.js`. The last cell is held to
+the end of its track. The old "longest run of cell names" heuristic stays as
+the fallback for a document whose curve cannot be read.
+
+Also fixed: a layer *inside* a cell whose own name happened to be a number was
+treated as a cell of its own (frame from the name, one frame of hold). It now
+follows the cell it sits in.
+
+Writing `animation: true` is still refused. The remaining work is a
+byte-for-byte round trip of a whole mixer body (the `TimeClip` and `Param`
+tree plus the document checksum), not the cell record.
+
+**next step: 6 - round trip a whole mixer body unchanged, then edit it**

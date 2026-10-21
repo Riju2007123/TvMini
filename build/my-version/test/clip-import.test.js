@@ -178,6 +178,85 @@ test("a layer inside a cell lasts as long as the cell, not the whole animation",
   );
 });
 
+test("cells follow the times of the track, not the order of their names", () => {
+  // Three cells, keyed at 0, 4 and 8 ticks of a 30 fps document: frames 1, 3
+  // and 5. The track ends on tick 12, which is frame 7, so the last cell is
+  // held for frames 5, 6 and 7.
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Animation folder", {
+      kind: "folder",
+      folder: true,
+      animationFolder: true,
+      firstChildIndex: 4,
+      uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    }),
+    node(4, "1", { nextIndex: 5 }),
+    node(5, "2", { nextIndex: 6 }),
+    node(6, "3", { nextIndex: 0 }),
+  ], { frameRate: 30, endFrame: 16 });
+  document.tracks = [{
+    mainId: 5,
+    kind: 2000,
+    layerUuid: "aaaaaaaabbbbccccddddeeeeeeeeeeee",
+    action2: {
+      celKeys: [
+        { time: 0, value: 0, tag: "1" },
+        { time: 4, value: 1, tag: "2" },
+        { time: 8, value: 2, tag: "3" },
+      ],
+      clipRange: { start: 0, end: 12, rate: 60 },
+    },
+  }];
+
+  const project = clipToProject(document, []);
+  const byName = (name) => project.layers.find((layer) => layer.name === name);
+  assert.deepEqual(
+    byName("1").drawings.map((drawing) => [drawing.at, drawing.hold]),
+    [[1, 2]],
+  );
+  assert.deepEqual(
+    byName("2").drawings.map((drawing) => [drawing.at, drawing.hold]),
+    [[3, 2]],
+  );
+  assert.deepEqual(
+    byName("3").drawings.map((drawing) => [drawing.at, drawing.hold]),
+    [[5, 3]],
+  );
+});
+
+test("a layer inside a cell follows the cell even when its name is a number", () => {
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Animation folder", {
+      kind: "folder",
+      folder: true,
+      animationFolder: true,
+      firstChildIndex: 4,
+      uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    }),
+    node(4, "1a", { kind: "folder", folder: true, firstChildIndex: 5, nextIndex: 0 }),
+    node(5, "2", { nextIndex: 0 }),
+  ], { frameRate: 30, endFrame: 16 });
+  document.tracks = [{
+    mainId: 5,
+    kind: 2000,
+    layerUuid: "aaaaaaaabbbbccccddddeeeeeeeeeeee",
+    action2: {
+      celKeys: [{ time: 0, value: 0, tag: "1a" }],
+      clipRange: { start: 0, end: 8, rate: 60 },
+    },
+  }];
+
+  const project = clipToProject(document, []);
+  const inner = project.layers.find((layer) => layer.name === "2");
+  // The layer is inside the cell "1a", which lasts frames 1 to 5. Its own
+  // name, "2", must not move it to frame 2 or cut it down to one frame.
+  assert.equal(inner.drawings[0].at, 1);
+  assert.equal(inner.drawings[0].hold, 5);
+  assert.equal(inner.drawings[0].name, "1a");
+});
+
 test("a layer outside an animation folder shows the whole time", () => {
   const document = documentWith([
     node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),

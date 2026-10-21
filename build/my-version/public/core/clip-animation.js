@@ -24,19 +24,14 @@ import { inflateSync } from "./zlib.js";
  * followed by the names of the properties and the string values. The body
  * after the pool refers to those entries by their index.
  *
- * The names are what make a track readable: they say which properties the
- * track animates. An animation track carries `ActionNodeClip` with a
- * `TimeClip` (`Start`, `End`, `Rate`), the blend properties `MotionBlend`,
- * `ShiftBlend`, `NextBlend` and `BlendEnable`, `Param` with `ImageCelName`
- * and `Tag`, and one `FCurve` with `Type`, `Frame`, `Value`, `LeftSlope`,
- * `RightSlope`, `Interp` and `Constant`.
- *
- * The keyframes themselves are a list of `PWFCurveKey` records, one per
- * point. The value part of the body is not walked from end to end here;
- * what is read is the cell sequence, which is described below.
+ * A track that shows cells carries an `ImageCelName` curve, and the curve
+ * says on which frame each cell starts. That is what `readCelCurve` reads.
  */
 
 const MAGIC = "cmt ";
+
+/** The smallest mixer document this reader understands. */
+const HEADER_SIZE = 20;
 
 /**
  * The type names a document can start its pool with.
@@ -53,13 +48,35 @@ const TYPE_NAMES = new Set([
 ]);
 
 /**
+ * The width of one element of each array type, and how to read it.
+ *
+ * Only the types a curve actually uses are read; the rest are skipped by
+ * their width, so a curve with a type this reader does not know still walks
+ * to its end instead of losing its place.
+ */
+const ELEMENTS = {
+  "Byte[]": { width: 1, read: (data, at) => data[at] },
+  "Single[]": { width: 4, read: (data, at) => data.readFloatLE(at) },
+  "String[]": { width: 4, read: (data, at) => data.readUInt32LE(at) },
+  "Int32[]": { width: 4, read: (data, at) => data.readUInt32LE(at) },
+  "UInt32[]": { width: 4, read: (data, at) => data.readUInt32LE(at) },
+  "Double[]": { width: 8, read: (data, at) => data.readDoubleLE(at) },
+  "Float2[]": { width: 8 },
+  "Float3[]": { width: 12 },
+  "Double2[]": { width: 16 },
+  "Double3[]": { width: 24 },
+  "Quat[]": { width: 16 },
+  "Matrix44[]": { width: 64 },
+};
+
+/**
  * Read the header and the string pool of an action document.
  *
  * Returns null when the bytes are not an action document.
  */
 export function parseActionDocument(input) {
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input);
-  if (data.length < 20 || data.toString("ascii", 0, 4) !== MAGIC) return null;
+  if (data.length < HEADER_SIZE || data.toString("ascii", 0, 4) !== MAGIC) return null;
 
   const version = data.toString("ascii", 4, 8);
   const codec = data.toString("ascii", 8, 12);
@@ -67,7 +84,7 @@ export function parseActionDocument(input) {
   const poolSize = data.readUInt32LE(16);
 
   const pool = [];
-  let cursor = 20;
+  let cursor = HEADER_SIZE;
   for (let index = 0; index < poolSize; index += 1) {
     if (cursor >= data.length) break;
     const length = data[cursor];
@@ -138,24 +155,251 @@ export function readActionBlob(blob) {
   return { ...document, total, compressed, unpacked: raw.length };
 }
 
+/**
+ * Read the curve record that starts at `start`, or null when none does.
+ *
+ * A curve record is a small tree, and none of it is aligned, so the caller
+ * tries every byte offset. The record is:
+ *
+ *   u32   the pool index of "FCurve"
+ *   u32   0
+ *   u32   how many properties follow (1 to 8)
+ *   n x   u32 property name, u32 property value
+ *   u32   how many fields follow
+ *   n x   u32 the pool index of "Int32[]",
+ *         u32 the size of the field,
+ *         u32 that size plus four,
+ *         u32 the field name, u32 the field type, u32 how many values,
+ *         the values, u32 0, u32 0
+ *
+ * The three words before a field name are metadata about the array that
+ * follows. Their second word is the width of the array plus 24, and their
+ * third word is four more; both are checked, which is what keeps a chance
+ * match from being taken for a curve.
+ */
+function readCurveAt(data, start, pool) {
+  if (start + 12 > data.length) return null;
+  if (pool[data.readUInt32LE(start)] !== "FCurve") return null;
+  if (data.readUInt32LE(start + 4) !== 0) return null;
+
+  const propertyCount = data.readUInt32LE(start + 8);
+  if (propertyCount < 1 || propertyCount > 8) return null;
+
+  let at = start + 12;
+  if (at + propertyCount * 8 > data.length) return null;
+  const props = new Map();
+  for (let index = 0; index < propertyCount; index += 1) {
+    const nameId = data.readUInt32LE(at);
+    const valueId = data.readUInt32LE(at + 4);
+    at += 8;
+    if (nameId >= pool.length || valueId >= pool.length) return null;
+    if (!props.has(pool[nameId])) props.set(pool[nameId], pool[valueId]);
+  }
+
+  // A curve always says what it animates, so a record without a `Type`
+  // property is not a curve.
+  const kind = props.get("Type");
+  if (kind === undefined) return null;
+
+  if (at + 4 > data.length) return null;
+  const fieldCount = data.readUInt32LE(at);
+  at += 4;
+  if (fieldCount < 1 || fieldCount > 32) return null;
+
+  const fields = new Map();
+  for (let index = 0; index < fieldCount; index += 1) {
+    if (at + 24 > data.length) return null;
+
+    const metaType = data.readUInt32LE(at);
+    const metaSize = data.readUInt32LE(at + 4);
+    const metaEnd = data.readUInt32LE(at + 8);
+    if (pool[metaType] !== "Int32[]") return null;
+
+    const nameId = data.readUInt32LE(at + 12);
+    const typeId = data.readUInt32LE(at + 16);
+    const count = data.readUInt32LE(at + 20);
+    if (nameId >= pool.length || typeId >= pool.length) return null;
+
+    const name = pool[nameId];
+    const type = pool[typeId];
+    const element = ELEMENTS[type];
+    if (!element) return null;
+
+    const width = count * element.width;
+    if (!Number.isSafeInteger(width) || at + 24 + width + 8 > data.length) return null;
+    if (metaSize !== width + 24 || metaEnd !== metaSize + 4) return null;
+
+    const values = [];
+    const valueAt = at + 24;
+    for (let item = 0; item < count; item += 1) {
+      values.push(element.read ? element.read(data, valueAt + item * element.width) : null);
+    }
+
+    const tail = valueAt + width;
+    if (data.readUInt32LE(tail) !== 0 || data.readUInt32LE(tail + 4) !== 0) return null;
+
+    fields.set(name, { type, values });
+    at = tail + 8;
+  }
+
+  return { kind, axis: props.get("Axis") ?? null, props, fields, start, end: at };
+}
+
+/**
+ * Every curve a track document holds, in the order the document stores them.
+ *
+ * The records are not aligned to four bytes anywhere, so every offset is
+ * tried. A record that is found is stepped over, which keeps a run of zeroes
+ * inside it from being read as a second curve.
+ */
+export function readAnimationCurves(document) {
+  if (!document?.body || !document.pool) return [];
+  const { body, pool } = document;
+  if (pool.indexOf("FCurve") < 0) return [];
+
+  const curves = [];
+  let start = 0;
+  while (start + 12 <= body.length) {
+    const curve = readCurveAt(body, start, pool);
+    if (!curve) {
+      start += 1;
+      continue;
+    }
+    curves.push(curve);
+    start = Math.max(start + 1, curve.end);
+  }
+  return curves;
+}
+
+/**
+ * The cell curve of a track: on which frame each cell starts, and which cell.
+ *
+ * Clip Studio Paint keeps the frame in `Frame` and the name of the cell in
+ * `Tag`; the two arrays line up one for one. `Frame` is a time in the 60 Hz
+ * ticks the whole action document uses, so a track of a 24 fps document
+ * steps by 2.5 ticks per frame and a track of a 30 fps document by 2.
+ *
+ * Returns null when the track shows no cells, or when its curve cannot be
+ * read, so the caller can fall back on the names of the cells.
+ */
+export function readCelCurve(document) {
+  const curve = readAnimationCurves(document).find((entry) => entry.kind === "ImageCelName");
+  if (!curve) return null;
+
+  const frames = curve.fields.get("Frame")?.values ?? [];
+  const tags = curve.fields.get("Tag")?.values ?? [];
+  const values = curve.fields.get("Value")?.values ?? [];
+  if (!frames.length || !tags.length) return null;
+
+  const keys = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const tagId = tags[index];
+    const tag = tagId === undefined ? null : (document.pool[tagId] ?? null);
+    // A tag is a pool index of a name; an index outside the pool is not one.
+    if (tag === null) break;
+    keys.push({
+      // In 1/60 second, the unit of every time in an action document.
+      time: Number(frames[index]),
+      // The cell's index in its folder, as Clip Studio Paint numbers it.
+      value: values[index] === undefined ? null : Number(values[index]),
+      tag,
+    });
+  }
+  if (!keys.length) return null;
+
+  return { keys, start: curve.start, end: curve.end };
+}
+
+/**
+ * The range a track covers, in 60 Hz ticks.
+ *
+ * The `TimeClip` of the track carries `Start`, `End` and `Rate` as plain
+ * doubles. `End` is the last frame of the track, so a 24 fps track that ends
+ * on frame 60 carries 150. The cell curve says when each cell starts, but it
+ * cannot say how long the last one is held; the end of the track is that
+ * answer.
+ */
+export function readTrackRange(document) {
+  if (!document?.body || !document.pool) return null;
+  const { body, pool } = document;
+  const range = {};
+  for (const name of ["Start", "End", "Rate"]) {
+    const id = pool.indexOf(name);
+    if (id < 0) continue;
+    // A plain double is written as its name, its type, and the value.
+    for (let at = 0; at + 12 <= body.length; at += 1) {
+      if (body.readUInt32LE(at) !== id) continue;
+      if (pool[body.readUInt32LE(at + 4)] !== "Double") continue;
+      range[name.toLowerCase()] = body.readDoubleLE(at + 8);
+      break;
+    }
+  }
+  return Object.keys(range).length ? range : null;
+}
+
+/**
+ * Where each cell of a track sits on the timeline of a project.
+ *
+ * A cell starts on its key and is held until the next key starts, so the
+ * gaps between the keys are the holds. The last cell is held to the end of
+ * the track: Clip Studio Paint keeps a cell on screen until another cell
+ * replaces it, and the `End` of the track says where that stops.
+ *
+ * `frameRate` and `tickRate` turn the 60 Hz time of the document into
+ * frames. `startFrame` is the first frame of the project, and `endFrame` is
+ * its last one, used when the track does not say where it ends.
+ */
+export function celPlacementFromKeys(
+  keys,
+  { frameRate = 30, tickRate = 60, startFrame = 1, endFrame = startFrame, endTick = null } = {},
+) {
+  const placement = new Map();
+  if (!keys?.length) return placement;
+
+  const fps = Number(frameRate) > 0 ? Number(frameRate) : 30;
+  const ticks = Number(tickRate) > 0 ? Number(tickRate) : 60;
+  const frameOf = (time) => startFrame + Math.round((Number(time) * fps) / ticks);
+
+  // Two keys can land on the same frame when the document plays slower than
+  // its ticks. The later one is the cell that is left on screen.
+  const byFrame = new Map();
+  for (const key of keys) {
+    const frame = frameOf(key.time);
+    if (!Number.isFinite(frame) || !key.tag) continue;
+    byFrame.set(Math.max(startFrame, frame), key.tag);
+  }
+
+  const spots = [...byFrame].map(([frame, name]) => ({ frame, name })).sort((a, b) => a.frame - b.frame);
+  if (!spots.length) return placement;
+
+  const last = Number.isFinite(endTick) ? frameOf(endTick) : Number(endFrame);
+  const stop = Math.max(spots[spots.length - 1].frame, Number.isFinite(last) ? last : endFrame);
+
+  for (let index = 0; index < spots.length; index += 1) {
+    const spot = spots[index];
+    const next = spots[index + 1];
+    const until = next ? next.frame : stop + 1;
+    const hold = Math.max(1, until - spot.frame);
+    if (!placement.has(spot.name)) placement.set(spot.name, []);
+    placement.get(spot.name).push({ frame: spot.frame, hold });
+  }
+  return placement;
+}
+
 /** A cell name: a frame number, with a letter for a second cell on it. */
 const CELL_NAME = /^\d{1,6}[a-z]?$/i;
 
 /**
- * The cells of an animation track, in the order they appear on the timeline.
+ * The run of cell names an action document holds, in the order it stores them.
  *
- * The body of an action document holds one array of 32-bit little endian
- * string pool indices that names, frame by frame, the cell the track shows.
- * The array is not at a fixed offset: the values before it have different
- * widths, so the array is found by taking the longest run of consecutive
- * pool indices that name cells.
- *
- * Run against `Animation10.clip`, the run is six entries long, the indices
- * of the pool strings `1` to `6`, in that order, four bytes apart.
+ * This is the fallback for a document whose curve cannot be read. It takes
+ * the longest run of consecutive pool indices that name cells, which in a
+ * real file is the `Tag` array of the cell curve. The run says which cells
+ * the track shows, but it does **not** say on which frame each one starts;
+ * that is what the curve is for.
  *
  * Returns null when there is no run of at least two cells. A single cell is
- * indistinguishable from the other small numbers in the body, so a one cell
- * track falls back on the name of the cell instead of guessing.
+ * indistinguishable from the other small numbers in the body.
  */
 export function readCelSequence(document, accept = () => true) {
   if (!document) return null;
@@ -187,11 +431,11 @@ export function readCelSequence(document, accept = () => true) {
 }
 
 /**
- * Where each cell of a sequence sits.
+ * Where each cell of a sequence sits, one frame apart.
  *
- * The sequence names the cell of every single frame, so a cell that shows
- * again later appears again in the sequence. A cell that shows on several
- * frames in a row is one drawing held for that many frames; a cell that
+ * This is the fallback used when a track has no readable curve: the sequence
+ * names the cell of every single frame, so a cell that shows on several
+ * frames in a row is one drawing held for that many frames, and a cell that
  * comes back after other cells is a drawing of its own.
  */
 export function celPlacement(sequence, startFrame = 1) {

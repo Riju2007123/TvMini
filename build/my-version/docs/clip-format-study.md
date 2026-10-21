@@ -227,32 +227,23 @@ The children of an animation folder are the **cells** of the animation, and
 each one of them is a layer of its own. A cell can be a raster layer or a
 folder that holds several layers.
 
-**A cell is named after the frame it sits on.** The name is a number and an
-optional letter: `1`, `1a`, `1b`, `2`, `2a`. The letter tells which cell it is
-when a frame carries more than one of them. The rule holds over the whole
-corpus, for instance in `bleach collab.clip`:
+**A cell's name is not its frame.** The name is a number and an optional
+letter: `1`, `1a`, `1b`, `2`, `2a`. The letter tells which cell it is when a
+frame carries more than one of them, but the number is only the frame the
+cell was *made* on, and moving a cell on the timeline does not rename it.
+The corpus proves it: one track of `bleach collab.clip` holds
+`1, 1a, 2, 2a, 3, 5, 6, 7, 8, 9, 10, 3a, 4`, and the action document places
+`3a` and `4` next to each other, not on frames 3 and 4.
 
-```
-"hand 1"    1, 1a, 2, 2a, 3, 3a, 4, 5, 6, 7, 8, 9, 10
-"Folder 3"  1, 1a, 2, 2a, 3, 3a, 4, 4a, 5, 6, 6a, 7, 8, ... 17
-```
+The truth is in the action document of the track that belongs to the
+animation folder. Its `ImageCelName` curve holds one key per cell: the
+`Frame` array gives the time in 60 Hz ticks, the `Value` array gives the
+cell's index in the folder, and the `Tag` array gives its name. The layout
+is written out under "The FCurve record" below.
 
-and in `Animation4.clip`:
-
-```
-1, 1a, 2, 3, 4, 4a, 4b, 5, 6, Layer 1, 6a, 7, 7a, 7b, 8, 9
-```
-
-The name is what says which frame a cell belongs to, so a reader does not have
-to decode the action document to place the cells of an animation. A cell whose
-name is not a frame number — `Layer 1`, or the uuid a folder gets when it is
-copied — keeps the frame of the cell it is in.
-
-The frame of every cell is also written down in the action document of the
-track of the animation folder: the pool of the track holds the names of the
-cells (`ImageCelName`), and the FCurve of the track holds the keyframes. The
-keyframe list inside the action body is still not decoded, so the reader takes
-the frame from the name of the cell instead.
+A cell whose name does not appear in the curve — a layer inside a cell that
+is not a cell itself, for instance — keeps the frame and the hold of the
+cell it sits in.
 
 ### How a blob is found
 
@@ -380,10 +371,11 @@ keyframes, in two opaque blobs, `TrackActionMixer` and `TrackActionMixer2`,
 with a `TrackKind` that says what the track animates (2000 and 2003 were seen).
 The `TrackValueMap` column maps the values onto the frames.
 
-TVMini reads the timeline and reports the tracks, but it does not decode the
-mixers. The writer writes a static document: the bundled template has no
-`TimeLine` table at all, so an export carries the timing of the template
-rather than the timing of the project.
+TVMini reads the timeline, reports the tracks, and reads the `ImageCelName`
+curve of every track to place the cels of an animation folder. The writer
+still writes a static document: the bundled template has no `TimeLine` table
+at all, so an export carries the timing of the template rather than the timing
+of the project.
 
 ## The animation
 
@@ -481,14 +473,16 @@ appear in the body at fixed offsets. Around offset 380 the body holds a run of
 numbers that step by 256, which is the stride of one tile, so the keyframe
 table is laid out in 256 byte records.
 
-What is still missing is how a value is tagged and where a nested object
-ends. The property names themselves are in the body at fixed offsets, so the
-body is a tree, but the rule that decides where each child starts has not
-been found yet.
+What is still missing in that first reading is how a value is tagged and where
+a nested object ends. The answer turned out to be that the records are simply
+not aligned: the body has to be scanned at **every byte offset**, and a record
+is recognised by its first words. The `FCurve` record, which is the one that
+places the cells, is written out under "The FCurve record" below.
 
-Because of that, the animation cannot be written back yet, and TVMini does
-not try to. The writer keeps a document static on purpose: a malformed mixer
-is the one thing that could make Clip Studio Paint reject a file that
+The rest of the tree — `TimeClip`, `Param`, the blend properties — is still
+not walked end to end, so the animation cannot be written back yet, and TVMini
+does not try to. The writer keeps a document static on purpose: a malformed
+mixer is the one thing that could make Clip Studio Paint reject a file that
 otherwise opens, and a static file that opens is worth more than an animated
 file that does not.
 
@@ -599,64 +593,77 @@ cell is **40 bytes**. The earlier note in this document that the keyframe
 table is laid out in 256 byte records was a misreading of the data and is
 withdrawn.
 
-Reading the body as 32-bit integers does not stay in step: every value sits in
-the upper half of the word (`0x0010` for 16, `0x002C` for 44), which is what
-made the body look irregular. Read as 16-bit values, 182 of 302 are pool
-indices and the remaining 120 are real numbers, so the stream carries both
-indices and values, and the width of a value still has to be settled before
-the body can be walked end to end.
+Reading the body as 32-bit integers **from the start of the body** does not
+stay in step: the records are not aligned to four bytes. Reading at every
+offset and checking the words against the pool is what finds them. The earlier
+note that "every value sits in the upper half of the word" (`0x0010` for 16)
+was this misalignment: `00 10 00 00` is not 16, it is what the bytes look like
+when the real word `10 00 00 00` is read two bytes off its start.
 
-### The cell sequence: which cell shows on which frame
+### The FCurve record: where every cell sits
 
-One part of the body *is* decoded, and it is the part the timeline needs.
-
-The body holds one flat array of 32-bit little endian string pool indices.
-Each entry names the cell that shows on one frame, so the array is the cel
-track written out frame by frame. In `Animation10.clip` the pool holds the
-names `1` to `6` at indices 57 to 61 and 48, and those six indices sit at body
-offsets 1177, 1181, 1185, 1189, 1193 and 1197 — four bytes apart, in frame
-order:
+The `ImageCelName` curve of a track is what places the cells. It is a record
+inside the body that is found by scanning every byte offset, because nothing
+in this part of the document is aligned. The record is:
 
 ```
-1177  39 00 00 00   57  pool[57] "1"   frame 1
-1181  3a 00 00 00   58  pool[58] "2"   frame 2
-1185  3b 00 00 00   59  pool[59] "3"   frame 3
-1189  3c 00 00 00   60  pool[60] "4"   frame 4
-1193  3d 00 00 00   61  pool[61] "5"   frame 5
-1197  30 00 00 00   48  pool[48] "6"   frame 6
+u32   the pool index of "FCurve"
+u32   0
+u32   the number of properties (1 to 8)
+n x   u32 property name, u32 property value      Type = ImageCelName
+u32   the number of fields (one per array)
+n x   u32 the pool index of "Int32[]"
+      u32 the width of the array plus 24
+      u32 that number plus 4
+      u32 the field name, u32 the field type, u32 how many values
+      the values
+      u32 0
+      u32 0
 ```
 
-The array is not at a fixed offset, and it is not aligned to four bytes from
-the start of the body: the values written before it have different widths, so
-the array begins at whatever offset the writer reached. It is found instead by
-taking the **longest run of consecutive 32-bit little endian values that are
-indices of strings that look like cell names** (`1`, `1a`, `2`, `2a`, …).
+Every field starts with those three metadata words. Their second word is the
+payload plus 24 and their third is four more, which is a strong enough check
+that a chance match in the body is not mistaken for a curve.
 
-Read over the whole sample, the array is 1 entry per frame, not 1 entry per
-key. A cell that shows on frames 1, 8, 15 and 22 appears four times. That is
-how a loop is written:
+The fields of a cell curve are `Frame`, `Value`, `LeftSlope`, `RightSlope`,
+`Interp` and `Tag`, all arrays of the same length:
 
-```
-bleach collab.clip, one track: 32 entries, 11 cells
-1,2,3,4,5,6,7,1,2,3,4,5,6,7,1,2,3,4,5,6,7,1,2,3,4,5,6,7,8,9,10,11
-```
+| Field | Type | Meaning |
+|---|---|---|
+| `Frame` | `Double[]` | when the key starts, in 60 Hz ticks |
+| `Value` | `Double[]` | the cell's index inside the animation folder |
+| `Tag` | `String[]` | the pool index of the cell's name |
+| `LeftSlope`, `RightSlope` | `Double[]` | unused for a cell, always 0 |
+| `Interp` | `String[]` | `Constant`: a cell does not blend |
 
-This is the difference that matters for the timeline. Clip Studio does **not**
-guarantee that a cell sits on the frame its name gives. One track of
-`bleach collab.clip` reads
+Measured on `Animation3.clip`, the Animation folder with nine cells:
 
 ```
-1,1a,2,2a,3,5,6,7,8,9,10,3a,4
+Frame   0  4  8 10 16 18 20 22 24        (60 Hz ticks)
+Tag     1  2  3  4  5  6  7  8  9
+Value   0  1  2  3  4  5  6  7  8
 ```
 
-so `3a` is on frame 12 and `4` is on frame 13, while their names say 3 and 4.
-A reader that trusts the name puts both cells in the wrong place; a reader
-that uses the sequence does not.
+At 30 fps a frame is two ticks, so the cells start on frames 0, 2, 4, 5, 8,
+9, 10, 11 and 12 — **not** on consecutive frames. The rest of the file
+confirms the unit: the 24 fps `Animation2.clip` steps by 2.5 ticks
+(`0, 2.5, 5, 7.5, 10, 17.5`), which becomes the whole frames
+`0, 1, 2, 3, 4, 7`.
 
-What is left over is the other half of the body: the `FCurve` records
-(`Type`, `Frame`, `Value`, `LeftSlope`, `RightSlope`, `Interp`, `Constant`)
-that hold the same information as keyframes. The sequence above is enough to
-read a document; the `FCurve` layout is what a **writer** needs.
+The `TimeClip` of the same document carries `Start`, `End` and `Rate` as plain
+doubles (`Rate` is 60). `End` is the last frame of the track, in the same
+ticks, and it is what says how long the **last** cell is held: a cell stays on
+screen until another replaces it. The corpus agrees with `TimeLine`:
+
+```
+Animation3.clip   End 248 -> 124 frames at 30 fps   BiggestEndFrame 124
+Animation10.clip  End 240 -> 120 frames at 30 fps   BiggestEndFrame 120
+Animation2.clip   End 300 -> 120 frames at 24 fps   BiggestEndFrame 120
+```
+
+So the rule for a reader is: a cell starts on `round(Frame * fps / 60)`
+frames after the first frame of the document, and lasts until the next key;
+the last cell lasts until `End`.
 
 ### Writing an animation: what is known and what is missing
 
@@ -680,41 +687,23 @@ The tracks of one timeline form a list: `TimeLine.FirstTrack` names the
 first one and each `Track.TrackNextIndex` names the next. A track hangs on
 the layer whose uuid is in `LayerUuidWithTrack`.
 
-The mixer blob and the action document are described above. What is still
-missing is how the **keyframe list** is laid out inside the action document.
-The corpus narrows it down a long way:
+The mixer blob and the action document are described above, and so is the
+`FCurve` record. What is still missing for a **writer** is the rest of the
+body: the `TimeClip` and `Param` blocks are nested name/type/value trees whose
+nesting rule has not been walked end to end, and CSP checks a checksum over
+the document. The cell curve itself is understood, but it has to be embedded
+in that tree. `createClipBuffer` therefore still refuses `animation: true`.
 
-- The corpus holds 480 mixer blobs with **86 different string pools**. The
-  pool is the set of properties a track animates, so a pool is a kind of
-  track.
-- **The body of a track is the same length for every track with the same
-  pool**, whether the document has 20 frames or 150. The number of keyframes
-  is therefore a field and not a length.
-- Two documents with completely different frame ranges and completely
-  different artwork produce **byte identical bodies**, apart from **two
-  single precision floats** at fixed offsets (176 and 264 in the first
-  mixer, 284 and 420 in the second). Those two numbers are a document level
-  scale, about 3.54 to 3.72 in the files that were looked at.
-- Further into the body, from about offset 444, there is a table of 32-bit
-  numbers that are all **multiples of 256**: 512, 768, 3584, 12032, 12288,
-  12544, 12800, 13312, 13824 and so on. They are indices into a keyframe
-  table with a stride of 256, and they are the same in every document, which
-  means they describe the table and not its contents.
-- `TrackValueMap` is kept inside the database rather than outside it. Its
-  shape is a small property bag: a count, two numbers, the length of a key,
-  the key in UTF-16 big endian and the value. The one that was read out
-  holds `ImageCelName` with the value `1`.
+A malformed mixer is the one thing that could make Clip Studio Paint reject a
+file that otherwise opens, and a static file that opens is worth more than an
+animated file that does not. What the writer still needs is a byte-for-byte
+round trip of a whole mixer, which is the next step: read a track's body and
+write the same bytes back before trying to change anything inside it.
 
-So the shape of the answer is known, and the one thing still missing is which
-of those numbers is the frame of a key and which is its value. The way to
-find it is to find two tracks that share a pool **and** have a different
-number of keys, and read the difference against the frame numbers of the
-two timelines.
-
-Until that is done, the writer keeps a document static. A malformed mixer is
-the one thing that could make Clip Studio Paint reject a file that otherwise
-opens, and a static file that opens is worth more than an animated file that
-does not.
+`TrackValueMap` is kept inside the database rather than outside it. Its shape
+is a small property bag: a count, two numbers, the length of a key, the key in
+UTF-16 big endian and the value. The one that was read out holds
+`ImageCelName` with the value `1`.
 
 ## The paper
 
@@ -873,9 +862,87 @@ These are real parts of the format that this reader does not read, and it says
 so in its own output:
 
 - The vector layers, the masks and the text layer attributes.
-- The animation mixers, so a document's motion is reported but not replayed.
+- The camera and object tracks of an animation (`ImagePosition`, `ImageScale`
+  and the like): the cell curve is read, the motion curves are not.
 - The 3D models and the time lapse blobs.
 - The `ElemScheme` and `ParamScheme` settings.
 
 Nothing is ever written back into a source file: reading a `.clip` never
 changes it.
+
+## Inside the mixer blobs: the CELSYS document
+
+The two 40-byte blob pointers of an animation track resolve to a zlib
+envelope (40 byte locator, u64 big-endian total length at offset 48, u32
+little-endian compressed length at offset 56) whose body inflates to a
+CELSYS `binc` document.
+
+Document layout: `"cmt "`, a version tag (`0100` or `0110`), `"binc"`,
+a u32 checksum (CRC-32 over the document bytes from offset 16 onward), then
+a string pool (u32 count followed by u32-byte-length + bytes strings), a u32
+word total, and a little-endian word stream.
+
+### The record grammar (confirmed by exact round-trip)
+
+The word stream is a forest of records. `tools/binc2.mjs` now parses all
+fourteen mixer documents of Animation2.clip and Animation3.clip (both
+versions, 0100 and 0110) and re-encodes each one byte for byte, which is the
+experimental guarantee behind these rules.
+
+- Header: in 0100 the stream begins with 2 extra words ([0][1]); in 0110
+  with 4. The header words are captured verbatim and re-emitted.
+- Pool indices 0..21 are always the type names (null, Byte, SByte, UInt16,
+  Int16, UInt32, Int32, Single, Double, String, ... through Matrix44[]).
+  In 0110 the mid list differs: 10/11/14 become Double2, Double3 and
+  Double[] instead of the Float/Single variants, and pool indices shift by
+  one where 0100 carries an extra `"2.0.0"` row.
+- Typed leaf: [name idx >= 22][type 1..21][value in natural size][aux two
+  words]. Every leaf the tools observed carries aux (0, 0), and the codec
+  rejects anything else, which prunes false parses. `Byte` stores 1 byte;
+  everything else stores 2/4/8/16/64 bytes by type.
+- Array leaf: same, with type 14..21 and a u32 element count before the raw
+  elements. `Double[]` elements are 8 bytes (observed in 0110 Frame/Value
+  curves); `Single[]` are 4.
+- String leaf: [name][pool index] - two words, no aux.
+- Counted item: [count <= 63][name][count x u32][optional (0,0) aux]. The
+  body top level uses it for `Param [Int32, UInt16]` in front of the FCurve
+  card.
+- Struct: [name][0][extra 0?][count][count records]. The 3 word form ends
+  after the count (General, ActionNodeClip, Version-Information); the 4 word
+  form has one extra zero word (TimeClip, MotionClip, MotionBlend, TimeInfo,
+  AnimInfo). AnimInfo normally carries 0 children and is followed by the
+  FCurve card as top level records.
+- 0110 triplets: a [16][x][y] triplet can appear before nearly any record
+  and also *between* the words of a record. Observed positions: before a
+  struct/leaf (usually right after the small lead word), and inside the
+  counted item between the count word and the name word (0100
+  `[2][Param][6][3]` becomes 0110 `[2][triplet][Param][6][3]`). The codec
+  captures every triplet verbatim as the record's prefix and re-emits it in
+  the same position, so no triplet semantics are needed.
+- Lead words: small words (1, 2, 5, 0, 6 ...) can stand before a named
+  record; they are captured as 4 byte prefixes and re-emitted verbatim.
+
+### Round-trip results
+
+`node tools/binc2.mjs <file>` decodes every TrackActionMixer / mixer2 blob,
+parses the document with the grammar above and re-encodes the tree:
+
+- Animation2.clip: pass=4 fail=0, all four re-encodes byte identical.
+- Animation3.clip: pass=10 fail=0, all ten re-encodes byte identical.
+
+`node tools/binc2.mjs <file> dump` prints the record tree with byte spans;
+set BINC2_TRACE=1 to log every candidate the search yields.
+
+### What the FCurve card holds (Animation2 track 2, kind 2000)
+
+After AnimInfo the stream carries, as top level records:
+`[2][Param][6][3]`, `Name = "ImageCelName"`, `Tag = "4"`,
+`FCurve (1) { Type = "" }` (a struct whose one child is the string leaf
+`Type = "ImageCelName"`), then six array leaves - `Frame`, `Value`,
+`LeftSlope`, `RightSlope` (Single[]/Double[]), `Interp` (String[], six
+`"Constant"`), `Tag` (String[], the cel names per keyframe, e.g.
+`"1","1a","2","2a","3","4"`). TimeClip's `Start`/`End`/`Rate` doubles sit in
+the kind-2003 track with Start=0, End=300, Rate=60, and TimeInfo's `Rate`
+double repeats the frame rate. These are exactly the nodes a writer must
+splice to rewrite timing, frame count and the cell plan.
+

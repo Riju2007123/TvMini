@@ -5,8 +5,11 @@ import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
 import {
   actionProperties,
   celPlacement,
+  celPlacementFromKeys,
   readActionBlob,
+  readCelCurve,
   readCelSequence,
+  readTrackRange,
 } from "./clip-animation.js";
 import { frameOfCellName } from "../timeline.js";
 import { createProject, normalizeProject } from "./model.js";
@@ -216,26 +219,42 @@ export function clipToProject(document, layers, fallback = {}) {
   const nodes = new Map((document.layerTree ?? []).map((node) => [Number(node.id), node]));
 
   /**
-   * The cells each animation folder holds, frame by frame.
+   * The cells each animation folder holds, and where each one starts.
    *
-   * A track carries the uuid of the layer whose timeline it is, and its cell
-   * sequence says which cell shows on each frame. The same uuid is written
-   * with dashes on the layer and without on the track, so the two are
-   * compared with the dashes taken out.
+   * A track carries the uuid of the layer whose timeline it is. Its cell
+   * curve names the cell of every key and gives the time of that key in
+   * 60 Hz ticks; the ticks become frames with the frame rate of the
+   * document. A track whose curve cannot be read falls back on the run of
+   * cell names, which loses the timing but keeps the cells. The same uuid
+   * is written with dashes on the layer and without on the track, so the
+   * two are compared with the dashes taken out.
    */
   const uuidKey = (value) => String(value ?? "").replace(/-/g, "").toLowerCase();
-  const sequencesByUuid = new Map();
+  const frameRate = Number(timeline.frameRate) > 0 ? Number(timeline.frameRate) : 30;
+  const placementsByUuid = new Map();
   for (const track of document.tracks ?? []) {
-    const sequence = track?.action2?.celSequence;
     const key = uuidKey(track?.layerUuid);
-    if (!sequence || !sequence.length || !key) continue;
-    if (!sequencesByUuid.has(key)) sequencesByUuid.set(key, sequence);
+    if (!key || placementsByUuid.has(key)) continue;
+    // The cell curve lives in the second mixer, but a track that has none
+    // there can still carry one in the first.
+    const second = track?.action2;
+    const action = second?.celKeys?.length || second?.celSequence?.length
+      ? second
+      : (track?.action ?? second);
+    if (!action) continue;
+    if (action.celKeys?.length) {
+      placementsByUuid.set(key, celPlacementFromKeys(action.celKeys, {
+        frameRate,
+        startFrame,
+        endFrame,
+        endTick: action.clipRange?.end,
+      }));
+    } else if (action.celSequence?.length) {
+      placementsByUuid.set(key, celPlacement(action.celSequence, startFrame));
+    }
   }
 
-  const placementOf = (node) => {
-    const sequence = sequencesByUuid.get(uuidKey(node.uuid));
-    return sequence ? celPlacement(sequence, startFrame) : null;
-  };
+  const placementOf = (node) => placementsByUuid.get(uuidKey(node.uuid)) ?? null;
 
   /** The picture of a layer, as the base of a drawing. */
   const pictureOf = (node) => {
@@ -288,19 +307,22 @@ export function clipToProject(document, layers, fallback = {}) {
     const folder = Boolean(node.folder);
     const ownName = node.name || `Layer ${node.id}`;
 
-    // A cell is named after the frame it sits on, so the name of the cell
-    // says where it belongs. A layer inside an animation folder that has
-    // an ordinary name is **not** a cell: it is a layer that shows the
-    // whole time, the way a layer outside the folder does. Getting this
-    // wrong hides the artwork, because a cell only shows on its own frame.
-    //
-    // The sequence of the track is better evidence than the name, because a
-    // cell can be held over several frames. When the track names the cell,
-    // the track decides where it sits and for how long.
-    const runs = insideAnimation ? placement?.get(ownName) : undefined;
-    const cellFrame = insideAnimation
-      ? (runs?.[0]?.frame ?? frameOfCellName(ownName))
-      : null;
+    // A layer that sits inside a cell belongs to that cell: it is on the
+    // frame of the cell and shows for as long as the cell does. Its own name
+    // says nothing, even when it happens to be a number. Getting this wrong
+    // hides the artwork, because a cell only shows on its own frame.
+    const insideCell = inheritedName !== null && inheritedName !== undefined;
+
+    // A cell of an animation folder starts where the track says it starts.
+    // The curve of the track is better evidence than the name, because a
+    // cell can be held over several frames; the name is only the fallback
+    // for a document whose curve cannot be read.
+    const runs = insideAnimation && !insideCell ? placement?.get(ownName) : undefined;
+    const cellFrame = insideCell
+      ? inheritedFrame
+      : insideAnimation
+        ? (runs?.[0]?.frame ?? frameOfCellName(ownName))
+        : null;
     const isCel = cellFrame !== null;
 
     // A layer that sits inside a cell is on the frame of that cell; a layer
@@ -338,10 +360,13 @@ export function clipToProject(document, layers, fallback = {}) {
       const picture = pictureOf(node);
       // A cell shows on every frame the track names it, so it can carry more
       // than one drawing. Without a track, the name of the cell is the only
-      // evidence there is, and it holds a single frame.
-      const spots = isCel
-        ? (runs ?? [{ frame: cellFrame, hold: 1 }])
-        : [{ frame, hold: span }];
+      // evidence there is, and it holds a single frame. A layer inside a cell
+      // follows the cell it belongs to.
+      const spots = insideCell
+        ? [{ frame: cellFrame, hold: inheritedHold ?? 1 }]
+        : isCel
+          ? (runs ?? [{ frame: cellFrame, hold: 1 }])
+          : [{ frame, hold: span }];
       for (const spot of spots) {
         const drawing = {
           at: spot.frame,
@@ -719,8 +744,10 @@ export async function readClipDocumentFromBytes(data) {
           codec: document.codec,
           types: document.types.length,
           properties: actionProperties(document),
-          // The cells the track shows, frame by frame, when it is a track
-          // that carries cells at all.
+          // The cells the track shows, and the time of each key, when it is a
+          // track that carries cells at all.
+          celKeys: readCelCurve(document)?.keys ?? null,
+          clipRange: readTrackRange(document),
           celSequence: readCelSequence(document),
         };
       };
