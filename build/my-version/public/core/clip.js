@@ -7,6 +7,7 @@ import {
   celPlacement,
   celPlacementFromKeys,
   readActionBlob,
+  readCameraCurves,
   readCelCurve,
   readCelSequence,
   readTrackRange,
@@ -472,6 +473,36 @@ export function clipToProject(document, layers, fallback = {}) {
   );
   project.layers = projectLayers.length ? projectLayers : [createProject(width, height).layers[0]];
 
+  // The camera of the document, when it has one.
+  //
+  // A camera is a track of kind 2005. Its curves give the size of the frame
+  // it looks through, where that frame sits on the canvas, how far it is
+  // turned and how much of the canvas it shows, and every key of the camera
+  // is one row of those numbers. The window the camera shows is the frame
+  // scaled by the zoom, with its middle where the position says.
+  const cameraTrack = (document.tracks ?? []).find((track) => Number(track?.kind) === 2005);
+  const cameraKeys = cameraTrack?.action2?.camera?.keys ?? cameraTrack?.action?.camera?.keys ?? null;
+  if (cameraKeys?.length) {
+    project.camera = {
+      keys: cameraKeys.map((key) => {
+        const zoom = (Number(key.scale) || 0) / 100;
+        const halfWidth = (Number(key.centreX) || 0) * zoom;
+        const halfHeight = (Number(key.centreY) || 0) * zoom;
+        return {
+          frame: firstFrame + Math.round((Number(key.time) * frameRate) / 60),
+          x: (Number(key.positionX) || 0) - halfWidth,
+          y: (Number(key.positionY) || 0) - halfHeight,
+          width: halfWidth * 2,
+          height: halfHeight * 2,
+          rotation: Number(key.rotation) || 0,
+          // The camera curves carry no easing of their own, so the camera
+          // moves at a constant speed between two keys.
+          interp: "linear",
+        };
+      }),
+    };
+  }
+
   // The layer that was selected in the document is the one the work was
   // done on, so that is the one the brush starts on.
   const selected = Number(document.currentLayerId ?? 0);
@@ -749,6 +780,8 @@ export async function readClipDocumentFromBytes(data) {
           celKeys: readCelCurve(document)?.keys ?? null,
           clipRange: readTrackRange(document),
           celSequence: readCelSequence(document),
+          // The curves of a camera, when this track is one.
+          camera: readCameraCurves(document),
         };
       };
       return {

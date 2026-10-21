@@ -792,6 +792,79 @@ function linkSiblings(database, ids) {
 }
 
 /**
+ * Write the composition of the canvas: the layers it holds, in the order
+ * they are stacked.
+ *
+ * The `LayerComp` table holds a blob with one entry per layer of the
+ * canvas: the 16 bytes of its uuid and four words of settings. A document
+ * that was written without this says that its canvas holds the layers of
+ * the template, and Clip Studio Paint then shows a canvas without the
+ * layers that were added - the cells of an animation among them.
+ *
+ * The order is the order of the canvas, from the bottom up: the paper
+ * first, then the children of a folder before the folder itself. The root
+ * of the tree and the story information are not layers of the canvas and
+ * are left out, the way Clip Studio Paint leaves them out.
+ */
+function writeComposition(database, tree, floor, rootId) {
+  const comp = readOne(database, "SELECT MainId, CompLayerInfo FROM LayerComp ORDER BY _PW_ID LIMIT 1");
+  if (!comp) return;
+
+  // The settings every entry carries. The template's own entry is the
+  // model; a document without a composition is left alone. The blob is a
+  // header - the version, the number of entries, the size of an entry and
+  // the size of a uuid, all big endian - and then the entries: the uuid of
+  // a layer and four words of settings.
+  const previous = Buffer.from(comp.CompLayerInfo ?? Buffer.alloc(0));
+  const settings = previous.length >= 40 ? previous.subarray(24, 40) : null;
+  if (!settings) return;
+
+  // The layers of the canvas, from the bottom up.
+  const order = [];
+  const byId = new Map();
+  for (const node of tree.nodes) byId.set(node.layerId, node);
+  const rowOf = (layerId) =>
+    readOne(database, "SELECT LayerUuid, LayerType, LayerName FROM Layer WHERE MainId = ?", layerId);
+
+  const walk = (layerId, depth) => {
+    const row = rowOf(layerId);
+    if (!row) return;
+    const type = Number(row.LayerType ?? 0);
+    // The story information is the document's own metadata, not a layer.
+    if (type === 800) return;
+    const children = [];
+    let at = Number(
+      readOne(database, "SELECT LayerFirstChildIndex FROM Layer WHERE MainId = ?", layerId)
+        ?.LayerFirstChildIndex ?? 0,
+    );
+    const seen = new Set();
+    while (at && !seen.has(at)) {
+      seen.add(at);
+      children.push(at);
+      at = Number(
+        readOne(database, "SELECT LayerNextIndex FROM Layer WHERE MainId = ?", at)?.LayerNextIndex ?? 0,
+      );
+    }
+    for (const child of children) walk(child, depth + 1);
+    order.push(row);
+  };
+
+  for (const layerId of floor) walk(layerId, 0);
+  for (const index of [...tree.roots].reverse()) walk(tree.nodes[index].layerId, 0);
+
+  const parts = [];
+  const header = Buffer.from(previous.subarray(0, 16));
+  header.writeUInt32BE(order.length, 4);
+  parts.push(header);
+  for (const row of order) {
+    parts.push(uuidBytes(row.LayerUuid), settings);
+  }
+  database
+    .prepare("UPDATE LayerComp SET CompLayerInfo = ? WHERE MainId = ?")
+    .run(Buffer.concat(parts), comp.MainId);
+}
+
+/**
  * Link the layers the way Clip Studio stores them.
  *
  * The tree is a linked list: a folder points at its first child, and every
@@ -1482,6 +1555,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     const floor = [paper.MainId];
     if (imageLayer) floor.push(imageLayer.layerId);
     linkTree(database, tree, floor, canvas.CanvasRootFolder);
+    writeComposition(database, tree, floor, canvas.CanvasRootFolder);
     const layerCount = floor.length + created.length;
 
     const refreshColumns = columnsOf(database, "LayerThumbnail").filter((column) =>

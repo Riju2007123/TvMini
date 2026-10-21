@@ -70,16 +70,23 @@ $proc = Start-Process -FilePath $exe -ArgumentList "`"$ClipFile`"" -WorkingDirec
 
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $win = [IntPtr]::Zero
+$ready = $false
 while ((Get-Date) -lt $deadline) {
   $w = [Umou]::Find("Umoupen")
   if ($w -ne [IntPtr]::Zero) {
     $r = New-Object Umou+RECT
     [void][Umou]::GetWindowRect($w, [ref]$r)
-    if (($r.Right - $r.Left) -gt 500 -and ($r.Bottom - $r.Top) -gt 300) { $win = $w; break }
+    # The program shows a splash window first and the document afterwards.
+    # The title of the loaded window carries the state of the program.
+    if (($r.Right - $r.Left) -gt 500 -and ($r.Bottom - $r.Top) -gt 300) {
+      $win = $w
+      if ([Umou]::Title($win) -match "Trial") { $ready = $true; break }
+    }
   }
   Start-Sleep -Milliseconds 800
 }
 if ($win -eq [IntPtr]::Zero) { Write-Error "the window never appeared"; exit 1 }
+if (-not $ready) { Write-Output "warning: the document may not have finished loading" }
 
 Write-Output "window title: $([Umou]::Title($win))"
 

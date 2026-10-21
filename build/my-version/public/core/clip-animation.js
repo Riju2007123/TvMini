@@ -386,6 +386,59 @@ export function celPlacementFromKeys(
   return placement;
 }
 
+/**
+ * The curves of a camera track.
+ *
+ * A camera is a track of kind 2005. Its curves say how big the frame the
+ * camera looks through is (`ImageCenter`, the half width on the X axis and
+ * the half height on the Y axis), where that frame sits on the canvas
+ * (`ImagePosition`), how far the camera is turned (`ImageRotation`) and how
+ * much of the canvas it shows (`ImageScale`, in percent).
+ *
+ * Every curve carries the times of its keys and the value of every key, so
+ * the keys of the camera are the keys that all of them share.
+ */
+export function readCameraCurves(document) {
+  const curves = readAnimationCurves(document);
+  const find = (kind, axis = null) =>
+    curves.find((curve) => curve.kind === kind && (curve.axis ?? null) === axis) ?? null;
+
+  const centreX = find("ImageCenter", "X");
+  const centreY = find("ImageCenter", "Y");
+  const positionX = find("ImagePosition", "X");
+  const positionY = find("ImagePosition", "Y");
+  const rotation = find("ImageRotation");
+  const scale = find("ImageScale");
+  if (!positionX || !positionY || !scale) return null;
+
+  const frames = positionX.fields.get("Frame")?.values ?? [];
+  if (!frames.length) return null;
+  const value = (curve, index) => {
+    const numbers = curve?.fields.get("Value")?.values ?? [];
+    return numbers[index] === undefined ? null : Number(numbers[index]);
+  };
+
+  const keys = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const zoom = value(scale, index);
+    if (zoom === null) continue;
+    keys.push({
+      // The time of the key, in the 60 Hz ticks of the document.
+      time: Number(frames[index]),
+      // The half size of the frame the camera looks through.
+      centreX: value(centreX, index),
+      centreY: value(centreY, index),
+      // Where the middle of that frame sits on the canvas.
+      positionX: value(positionX, index) ?? 0,
+      positionY: value(positionY, index) ?? 0,
+      rotation: value(rotation, index) ?? 0,
+      // How much of the canvas the camera shows, in percent.
+      scale: zoom,
+    });
+  }
+  return keys.length ? { keys } : null;
+}
+
 /** A cell name: a frame number, with a letter for a second cell on it. */
 const CELL_NAME = /^\d{1,6}[a-z]?$/i;
 
