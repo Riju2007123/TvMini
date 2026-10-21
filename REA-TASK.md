@@ -185,3 +185,17 @@ What is missing, and is this task:
 between the reader and a writer that keeps the animation**
 
 
+
+**Session note - cel timing and a hold fix (Animation3.clip, the file in the
+Umoupen screenshots).** The track blob ends with the cel names; the frames are
+not stored as 32-bit words after them. A per-track array of 64-bit doubles does
+appear, and for the Animation folder's 9 cels it reads 0,1,...,8 - which agrees
+with placing cels on consecutive frames. The other two tracks in the same file
+do not give a clean increasing run (5 cels give 1,2,3,4; 7 cels give a
+non-monotonic list), so the field is **not** identified. Cel timing stays
+UNKNOWN; animation writing stays refused.
+
+Separately, a layer *inside* a cell took the length of the whole animation, so
+its drawing ran past the end of the timeline (frames 18..21 in a 17 frame
+file). Fixed in `public/core/clip.js`: the hold now comes from the cell, and
+`test/clip-import.test.js` covers it.
