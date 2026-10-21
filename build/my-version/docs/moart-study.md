@@ -68,9 +68,29 @@ compound control, so plan a 214×214 module).
   ranges, applied to felt-tip/pencil style brushes). **MOART-FACT**
 
 **TVMini status:** brush with pressure + `pressureGain` (25–300%, persisted)
-shipped earlier. Includes eraser touch-draw toggle. Still stubs by design;
-the interesting pieces to adopt next are coalesced events (smoothness on fast
-strokes) and size preview multiplier.
+shipped earlier. Includes eraser touch-draw toggle.
+
+**What TVMini now does (measured, 2026-10-21):**
+
+- **Coalesced events are used** (`getCoalescedEvents`): every sample of a fast
+  stroke is kept, so a quick line comes out as a line and not as a few dots.
+- **The stage is two canvases.** The document is on one, and a thin sheet on
+  top of it holds the shape of the brush and the stroke in the hand. Moving
+  the pointer draws the sheet only, so the document is not drawn again for
+  every move. The stroke in the hand is drawn with the same code the
+  document uses, so the preview looks like the stroke that will be left.
+- **The document is drawn in the pixels of the screen.** The buffer of the
+  stage is the size the stage is shown at, times the number of dots a pixel of
+  the screen has (at most two, and at most 4096 pixels on the longest side),
+  and the context is scaled to the document. That is what MoArt does, and it
+  is what keeps the picture sharp on a screen with many dots per pixel.
+- The measurement (`tools/draw-check.mjs`, a headless browser, 120 moves):
+  the stroke path went from **601 ms to 27 ms**, about twenty times faster,
+  because the document is no longer drawn for every move of the pointer.
+
+Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
+0.25–2.0) of the brush thumbnails in the library, and building the paint
+material in a **worker** as MoArt does.
 
 ## 5. Onion skin and flip preview
 

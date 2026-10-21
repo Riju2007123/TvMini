@@ -330,7 +330,10 @@
             <span class="quick-sep" aria-hidden="true"></span>
             <button class="quick-btn" id="quickHide" type="button" title="Hide this bar" aria-label="Hide the quick bar">×</button>
           </div>
-          <canvas id="canvas" width="960" height="600"></canvas>
+          <div class="canvas-stack">
+            <canvas id="canvas" width="960" height="600"></canvas>
+            <canvas id="overlay" aria-hidden="true"></canvas>
+          </div>
           <button id="zoomLabel" class="zoom-label" type="button" title="The zoom of the stage. Click to fit the whole canvas.">100%</button>
         </div>
       </section>

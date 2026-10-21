@@ -61,6 +61,11 @@ const CAMERA_BACKDROP = "#12161c";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+// The sheet on top of the stage: the shape of the brush and the stroke that is
+// being drawn. It is drawn again for every move of the pointer, so the
+// document underneath is only drawn when the document itself changes.
+const overlay = document.getElementById("overlay");
+const overlayCtx = overlay.getContext("2d");
 const statusEl = document.getElementById("status");
 const statusBar = document.querySelector(".statusbar");
 const pathLabel = document.getElementById("pathLabel");
@@ -687,9 +692,65 @@ function updateFrameLabel() {
   updateFrameReadout();
 }
 
+/**
+ * The size of the stage's own buffer.
+ *
+ * The document is drawn in the pixels of the document, but the buffer it is
+ * drawn into is the size the stage is shown at, times the number of dots a
+ * pixel of the screen has. That is what keeps the picture sharp on a screen
+ * with many dots per pixel, and it is the way MoArt draws as well.
+ *
+ * A big zoom would ask for a buffer that no screen can show, so the buffer
+ * is held back at four thousand pixels on its longest side.
+ */
+const MAX_STAGE_BUFFER = 4096;
+
+function stageBuffer() {
+  const project = state.project;
+  const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const zoom = viewZoom || 1;
+  // The size the element has on the screen, which is smaller than the
+  // document when the document does not fit the pane.
+  const shownWidth = canvas.offsetWidth || project.width;
+  const shownHeight = canvas.offsetHeight || project.height;
+  let width = Math.round(shownWidth * zoom * ratio);
+  let height = Math.round(shownHeight * zoom * ratio);
+  const biggest = Math.max(width, height);
+  if (biggest > MAX_STAGE_BUFFER) {
+    const shrink = MAX_STAGE_BUFFER / biggest;
+    width = Math.max(1, Math.round(width * shrink));
+    height = Math.max(1, Math.round(height * shrink));
+  }
+  return { width, height, ratio };
+}
+
+/** Put a context into the pixels of the document. */
+function useDocumentSpace(target = ctx) {
+  const scale = canvas.width / Math.max(1, state.project.width);
+  target.setTransform(scale, 0, 0, scale, 0, 0);
+  return scale;
+}
+
+// The stage follows the window: the buffer of the stage holds the dots of
+// the screen, so it is made again when the window changes.
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", () => {
+    const buffer = stageBuffer();
+    if (canvas.width === buffer.width && canvas.height === buffer.height) return;
+    canvas.width = buffer.width;
+    canvas.height = buffer.height;
+    renderCanvas();
+  });
+}
+
 function resizeCanvas() {
-  canvas.width = state.project.width;
-  canvas.height = state.project.height;
+  const buffer = stageBuffer();
+  canvas.width = buffer.width;
+  canvas.height = buffer.height;
+  // The element keeps the size of the document on the screen; the buffer
+  // holds the dots of the screen.
+  canvas.style.width = `${state.project.width}px`;
+  canvas.style.height = `${state.project.height}px`;
   renderCanvas();
   renderTimeline();
   renderLayerPanel();
@@ -803,12 +864,15 @@ function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
   const rgb = parseHexColor(stroke.color);
   if (!rgb) return;
   const image = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  // The seed is in the pixels of the document, and the context may be
+  // scaled to the pixels of the screen.
+  const matrix = ctx.getTransform();
   floodFillRgba(
     image.data,
     canvasWidth,
     canvasHeight,
-    stroke.points[0][0],
-    stroke.points[0][1],
+    stroke.points[0][0] * matrix.a,
+    stroke.points[0][1] * matrix.d,
     rgb,
   );
   ctx.putImageData(image, 0, 0);
@@ -969,8 +1033,9 @@ function renderCanvas(frame = state.project.currentFrame) {
     ? cameraView(project.camera, frame, width, height)
     : null;
 
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalAlpha = 1;
+  // The document is drawn in its own pixels; the buffer is the size of the
+  // screen, so the context is scaled to the document.
+  const scale = useDocumentSpace();
 
   if (view) {
     // The area outside the camera window is the letterbox.
@@ -978,12 +1043,12 @@ function renderCanvas(frame = state.project.currentFrame) {
     ctx.fillRect(0, 0, width, height);
     ctx.save();
     ctx.setTransform(
-      view.scale,
+      view.scale * scale,
       0,
       0,
-      view.scale,
-      view.offsetX - view.camera.x * view.scale,
-      view.offsetY - view.camera.y * view.scale,
+      view.scale * scale,
+      (view.offsetX - view.camera.x * view.scale) * scale,
+      (view.offsetY - view.camera.y * view.scale) * scale,
     );
     // Only the camera window shows the canvas.
     ctx.beginPath();
@@ -1047,7 +1112,11 @@ function renderCanvas(frame = state.project.currentFrame) {
     // pixel, and a document that is opened rather than drawn is mostly
     // layers like this.
     const base = drawingImageElement(resolved.drawing);
-    const strokes = resolved.drawing.strokes;
+    // The stroke that is in the hand is drawn on the sheet on top of the
+    // stage, so it is left out here: it would otherwise be painted twice.
+    const strokes = state.drawing
+      ? resolved.drawing.strokes.filter((stroke) => stroke !== state.drawing)
+      : resolved.drawing.strokes;
     if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
       ctx.drawImage(base, 0, 0, width, height);
@@ -1071,9 +1140,9 @@ function renderCanvas(frame = state.project.currentFrame) {
     ctx.globalAlpha = 1;
   }
 
-  drawBrushTip();
+  drawOverlay();
 
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
   if (view) ctx.restore();
 
   // With the camera view off, mark the shot on the canvas.
@@ -1709,42 +1778,74 @@ function tipImage(brush) {
  * preview is the size of the stroke that will be left. A picture brush is
  * shown as its own picture, so what is painted can be seen before it is
  * painted.
+ *
+ * The tip goes on the sheet on top of the stage, so that moving the pointer
+ * does not draw the whole document again.
  */
-function drawBrushTip() {
+function drawBrushTip(target = overlayCtx) {
   if (!tipPoint || state.playing) return;
   if (state.tool !== "brush" && state.tool !== "eraser") return;
 
   const radius = Math.max(0.5, (Number(widthInput.value) || 1) / 2);
   const brush = currentBrush();
 
-  ctx.save();
+  target.save();
   if (brush) {
     const image = tipImage(brush);
     if (image.complete && image.naturalWidth > 0) {
-      ctx.globalAlpha = 0.55;
-      ctx.drawImage(image, tipPoint.x - radius, tipPoint.y - radius, radius * 2, radius * 2);
+      target.globalAlpha = 0.55;
+      target.drawImage(image, tipPoint.x - radius, tipPoint.y - radius, radius * 2, radius * 2);
     }
   } else {
-    ctx.globalAlpha = 0.85;
-    ctx.strokeStyle = "#101418";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(tipPoint.x, tipPoint.y, radius, 0, Math.PI * 2);
-    ctx.stroke();
+    target.globalAlpha = 0.85;
+    target.strokeStyle = "#101418";
+    target.lineWidth = 1;
+    target.beginPath();
+    target.arc(tipPoint.x, tipPoint.y, radius, 0, Math.PI * 2);
+    target.stroke();
   }
-  ctx.restore();
+  target.restore();
+}
+
+/**
+ * Draw the sheet on top of the stage again.
+ *
+ * The sheet holds the shape of the brush and the stroke that is being drawn.
+ * The stroke is drawn with the same code the document uses, so the preview
+ * looks like the stroke that will be left behind.
+ */
+function drawOverlay() {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (overlay.width !== width || overlay.height !== height) {
+    overlay.width = width;
+    overlay.height = height;
+  }
+  overlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+  overlayCtx.clearRect(0, 0, width, height);
+  // The sheet is the size of the screen, so the stroke on it is drawn in the
+  // pixels of the document.
+  useDocumentSpace(overlayCtx);
+  if (state.drawing && !state.drawing.kind) {
+    // The stroke in the hand: the document underneath is not drawn again while
+    // the pointer moves, so the stroke is shown here instead.
+    drawStrokesInto(overlayCtx, [state.drawing]);
+  }
+  drawBrushTip();
 }
 
 canvas.addEventListener("pointermove", (event) => {
   const [x, y] = canvasPoint(event);
   tipPoint = { x, y };
-  renderCanvas();
+  // Only the sheet on top of the stage is drawn again; the document stays as
+  // it is, which is what keeps the stage smooth.
+  drawOverlay();
 });
 
 canvas.addEventListener("pointerleave", () => {
   if (!tipPoint) return;
   tipPoint = null;
-  renderCanvas();
+  drawOverlay();
 });
 
 refreshBrushLibrary();
@@ -1777,6 +1878,12 @@ let viewPanY = 0;
 function applyView() {
   canvas.style.transformOrigin = "0 0";
   canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
+  // The buffer holds the dots of the screen, so it follows the zoom.
+  const buffer = stageBuffer();
+  if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
+    canvas.width = buffer.width;
+    canvas.height = buffer.height;
+  }
   showZoom();
 }
 
@@ -3648,25 +3755,37 @@ canvas.addEventListener("pointermove", (event) => {
     return;
   }
   if (!state.drawing) return;
-  const point = drawPoint(event);
 
-  if (state.drawing.kind && state.drawing.kind !== "fill") {
-    // Shapes: the second point tracks the pointer for a live preview.
-    state.drawing.points[1] = point;
-    renderCanvas();
-    return;
+  // A fast stroke is reported by the pointer as one move with many samples
+  // inside it. Every one of them is a place the brush passed, so every one
+  // of them is kept: without this a quick line comes out as a few dots.
+  const samples =
+    typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : null;
+  const list = samples && samples.length ? samples : [event];
+
+  for (const sample of list) {
+    const point = drawPoint(sample);
+
+    if (state.drawing.kind && state.drawing.kind !== "fill") {
+      // Shapes: the second point tracks the pointer for a live preview.
+      state.drawing.points[1] = point;
+      continue;
+    }
+    if (state.drawing.kind === "fill") break; // a fill is a single click
+
+    // Freehand with stabiliser: ease each raw sample toward the running
+    // point so shaky input becomes a smoother path (higher = smoother).
+    const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer);
+    state.smoothedPoint = smoothed;
+
+    const last = state.drawing.points[state.drawing.points.length - 1];
+    if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) continue;
+    state.drawing.points.push(smoothed);
   }
-  if (state.drawing.kind === "fill") return; // a fill is a single click
 
-  // Freehand with stabiliser: ease each raw sample toward the running
-  // point so shaky input becomes a smoother path (higher = smoother).
-  const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer);
-  state.smoothedPoint = smoothed;
-
-  const last = state.drawing.points[state.drawing.points.length - 1];
-  if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) return;
-  state.drawing.points.push(smoothed);
-  renderCanvas();
+  // The stroke is shown on the sheet on top of the stage; the document
+  // underneath is drawn when the stroke is finished.
+  drawOverlay();
 });
 
 function endStroke() {
@@ -3779,8 +3898,11 @@ function rgbToHex(red, green, blue) {
 /** Sample the composited canvas colour under the cursor, then draw again. */
 function pickColourAt(event) {
   const [x, y] = canvasPoint(event);
-  const px = Math.min(canvas.width - 1, Math.max(0, Math.round(x)));
-  const py = Math.min(canvas.height - 1, Math.max(0, Math.round(y)));
+  // The buffer holds the dots of the screen, so the place under the cursor is
+  // found through the scale of the context.
+  const matrix = ctx.getTransform();
+  const px = Math.min(canvas.width - 1, Math.max(0, Math.round(x * matrix.a)));
+  const py = Math.min(canvas.height - 1, Math.max(0, Math.round(y * matrix.d)));
   const [red, green, blue] = ctx.getImageData(px, py, 1, 1).data;
   colorInput.value = rgbToHex(red, green, blue);
   selectTool("brush");
@@ -5142,13 +5264,16 @@ modal.addEventListener("click", (event) => {
 
 confirmButton.addEventListener("click", () => {
   const name = nameInput.value.trim();
-  reportToServer(`save was pressed with the name "${name}" in "${picker?.dir ?? "?"}"`);
+  // The folder is the one in the field, not the one that was listed last: a
+  // folder that is still loading would send the file somewhere else.
+  const folder = dirInput.value.trim() || picker?.dir || state.homeDir || ".";
+  reportToServer(`save was pressed with the name "${name}" in "${folder}"`);
   if (!name) {
     setStatus("Type a file name for the file, then press Save.", true);
     nameInput.focus();
     return;
   }
-  finishPicker(joinPath(picker.dir, name));
+  finishPicker(joinPath(folder, name));
 });
 
 nameInput.addEventListener("input", () => {
