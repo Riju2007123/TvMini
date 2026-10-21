@@ -730,27 +730,98 @@ of nine values says 96 and 100, and a `Double` of one value says 28 and 32.
 
 ### Writing a whole animation
 
-`createClipBuffer(project, { animation })` takes the `.clip` the project came
-from and writes the timeline into a new file:
+`createClipBuffer(project, { animation })` writes the timeline of a project
+into a new file. `animation` is the skeleton to copy from: the `.clip` the
+project was imported from, or `true` for the bundled document that holds a
+real animation (`public/assets/clip-animation-template.clip`, a copy of
+`Animation2.clip`).
 
-- the `TimeLine` and `Track` tables are created with the definitions of the
-  skeleton, and the rows of the skeleton are copied;
-- every animation folder of the project becomes one track: its layer gets
-  `AnimationFolder = 1`, and its cells become the keys of the `ImageCelName`
-  curve. A cell's frame becomes a time in 60 Hz ticks
-  (`(frame - startFrame) * 60 / fps`) and its name becomes the `Tag`;
-- the end of a track is the end of the project, and the timeline says the same;
-- the mixer blobs become external chunks of their own, and the
+The skeleton gives the writer the parts of the format it does not understand:
+the definitions of the `TimeLine` and `Track` tables, the row of a cell track
+and the two action documents of that track. Everything else is written from
+the project.
+
+#### The model Clip Studio Paint uses
+
+Measured on `Animation2.clip` and `Animation3.clip`:
+
+- A **cell is a layer**. The cells of a row live inside an *animation
+  folder* (`LayerType = 0`, `LayerFolder = 1`, `AnimationFolder = 1`), and
+  the name of the cell is the name of that layer. In `Animation2.clip` the
+  folder "Animation folder" holds the layers `1`, `1a`, `2`, `2a`, `3`, `4` -
+  the same names the `Tag` values of the cell curve carry.
+- Every animation folder has **its own track** of kind 2000, bound to the
+  folder through `LayerUuidWithTrack` (the 16 bytes of the layer's uuid
+  without its dashes). `Animation3.clip` has three of them: one for the
+  animation folder and one for each of the folders "Folder 1" and "Folder 2".
+- The **paper has a track of kind 2003** that carries the range of the whole
+  timeline: `Start`, `End` and `Rate` as plain doubles (`Rate` is 60, the
+  timebase of the document). The same three numbers sit in the `TimeClip` and
+  in the `TimeInfo` of the document, and a writer sets them together.
+- The frames of the timeline are counted from zero: `TimeLine.StartFrame` is
+  the frame before the first one, `TimeLine.EndFrame` is the *number* of
+  frames, and a key time is `(frame - 1) * 60 / fps` ticks. `Animation2.clip`
+  has 120 frames at 24 fps, so the range runs from 0 to 300 ticks.
+- A cell holds until the next cell starts, which is what the `Interp` value
+  `Constant` says. The `Value` of a key is the number of the cell among the
+  plain cells of its folder: `Animation2.clip` numbers its plain cells
+  `1`, `2`, `3`, `4` as 0, 1, 2, 3, while the two cells that are folders of
+  their own carry a number of their own.
+
+#### What the writer does
+
+- The `TimeLine` and `Track` tables are created with the definitions of the
+  skeleton, and the rows of the skeleton are copied.
+- A project layer that holds drawings becomes a **row**: an animation folder
+  with one child layer per drawing, each holding the picture of that drawing,
+  and a track of kind 2000 whose `ImageCelName` curve names the cells and
+  gives the frame each one starts on. A group whose children are cells (the
+  shape a document that came from Clip Studio has) is a row as well, and its
+  cells are the layers that are already there.
+- The cell names are the names of the drawings, or their number in the layer
+  when a drawing has no name - the same rule the exposure sheet uses.
+- Both mixers of a track are written: the version 0110 one and the version
+  0100 one. Each is spliced in its own flavour, so whichever of the two
+  Clip Studio reads, it reads the same cells.
+- The range of every track is the range of the project: `Start` is the tick of
+  the first frame, `End` the tick of the frame behind the last one, `Rate` 60.
+- The mixer blobs become external chunks of their own, and the
   `ExternalChunk` offsets are written again.
 
-An animation folder is recognised the way the importer marks one: a folder
-whose direct children are cells. A cell is a layer with `preBehavior:
-"none"`, because a cell only shows on its own frame.
+#### Which layer is a row
 
-`createClipBuffer` still refuses `animation: true` on its own: without a
-skeleton there is nothing to copy the track tree from, and a malformed mixer
-is the one thing that could make Clip Studio Paint reject a file that
-otherwise opens.
+A row is a folder whose children are cells, but a cell can be a folder of its
+own: the cells of "Folder 1" in `Animation3.clip` each hold layers of their
+own, and those layers are cells of the cell, not rows of their own. So a
+folder that sits inside another folder of cells is a cell, and a layer that
+sits inside a row is a cell too. Only the outermost folder of cells is a
+row.
+
+A layer of the project that holds **more than one** drawing is a row as well:
+its drawings become the cells of an animation folder, one layer each. A layer
+with a single drawing stays an ordinary layer, so a project without an
+animation exports as a document without one.
+
+#### Checked in Clip Studio Paint
+
+`tools/clip-export-animation.mjs` imports `Animation3.clip` and writes it out
+again; `tools/clip-export-cells.mjs` makes a project with three cells of its
+own and writes that. Clip Studio Paint opens both, and their timelines show
+
+```
+Folder 2 : 7 cel        3 4 5      (cells 1 1a 2 2a 3 4 5)
+Folder 1 : 5 cel        3 4 5      (cells 1a 2 3 4 5)
+Animation folder : 9 cel 5 6 7 8 9  (cells 1 2 3 4 5 6 7 8 9)
+```
+
+and
+
+```
+Dots : 3 cel            first second third   (frames 0, 2 and 4)
+```
+
+which are the cells and the frames the files record. The layer panel of the
+second one shows the folder "Dots : 3" with the three cells below it.
 
 `TrackValueMap` is kept inside the database rather than outside it. Its shape
 is a small property bag: `u32 8`, a `u32` entry count, then per entry
@@ -758,6 +829,30 @@ is a small property bag: `u32 8`, a `u32` entry count, then per entry
 the value. The one that was read out of track 12 is 54 bytes and holds
 `ImageCelName` -> `"9"` with value `8`. The writer copies it as it is: CSP
 reads the cells from the curve and not from this map.
+
+#### The two flavours of a mixer document
+
+A track carries two action documents, and they are not the same format:
+
+- The **0110** document writes three words in front of every array field:
+  the pool index of `Int32[]`, the size of the field and that size plus
+  four. The reader checks them, and the writer writes them.
+- The **0100** document writes the same record without those three words:
+  the field follows the field count directly, as
+  `[name][type][count][values][0][0]`, and its times are `Single[]` where
+  the newer flavour uses `Double[]`.
+
+The reader of TVMini only understands the 0110 flavour, so a 0100 document
+reads as a track without cells. The writer understands both: `locateCurve`
+walks the record in either flavour, and the record is rebuilt in the flavour
+it was found in. Splicing a document with the plan it already carries gives
+the document back byte for byte - that was checked on all eight cell
+documents of `Animation2.clip` and `Animation3.clip`.
+
+The pool of a document is written from the pool the record was built with, so
+a curve whose cell names are **not yet in the pool** needs the longer pool
+handed to the writer as well. Without it the tag values point past the end
+of the pool and the curve reads back empty.
 
 ## The paper
 
@@ -927,13 +1022,21 @@ changes it.
 ## Inside the mixer blobs: the CELSYS document
 
 The two 40-byte blob pointers of an animation track resolve to a zlib
-envelope (40 byte locator, u64 big-endian total length at offset 48, u32
+envelope (40 byte locator, u64 big-endian total at offset 48, u32
 little-endian compressed length at offset 56) whose body inflates to a
 CELSYS `binc` document.
 
+The total at offset 48 is **four plus the compressed length** - the length of
+what follows the compressed length word, not the length of the unpacked
+document. Measured on the fourteen documents of `Animation2.clip` and
+`Animation3.clip`: 419 against 415 compressed bytes, 486 against 482, 600
+against 596, 700 against 696, and so on. The length of the *unpacked*
+document is a column of its own, `TrackActionMixerSize` (and its `2`
+sister), and that one is the document's own length.
+
 Document layout: `"cmt "`, a version tag (`0100` or `0110`), `"binc"`,
 a u32 checksum (CRC-32 over the document bytes from offset 16 onward), then
-a string pool (u32 count followed by u32-byte-length + bytes strings), a u32
+a string pool (u32 count followed by one-byte-length + bytes strings), a u32
 word total, and a little-endian word stream.
 
 ### The record grammar (confirmed by exact round-trip)
@@ -973,6 +1076,10 @@ experimental guarantee behind these rules.
   `[2][Param][6][3]` becomes 0110 `[2][triplet][Param][6][3]`). The codec
   captures every triplet verbatim as the record's prefix and re-emits it in
   the same position, so no triplet semantics are needed.
+  In front of an **array field** the triplet is not a prefix but the field's
+  own header: `[Int32[]]`, the size of the field, that size plus four. A
+  version 0100 document writes no such header, which is why the fields of
+  the two flavours sit at different offsets.
 - Lead words: small words (1, 2, 5, 0, 6 ...) can stand before a named
   record; they are captured as 4 byte prefixes and re-emitted verbatim.
 

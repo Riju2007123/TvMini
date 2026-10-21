@@ -4447,7 +4447,10 @@ async function exportClip() {
   if (!data) return;
   setStatus(
     `Exported ${data.layers} layer${data.layers === 1 ? "" : "s"} at ${data.width}×${data.height} ` +
-      `to ${baseName(data.path)} (${data.bytes} bytes). Timeline frames are flattened to the current frame.`,
+      `to ${baseName(data.path)} (${data.bytes} bytes). ` +
+      (data.animation
+        ? `${data.animation} animation folder${data.animation === 1 ? "" : "s"} written as tracks.`
+        : "Timeline frames are flattened to the current frame."),
   );
   refreshTitle();
 }

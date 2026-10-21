@@ -39,6 +39,7 @@ import {
 } from "./clip-blocks.js";
 
 const TEMPLATE_URL = new URL("../assets/clip-template.clip", import.meta.url);
+const ANIMATION_TEMPLATE_URL = new URL("../assets/clip-animation-template.clip", import.meta.url);
 
 /**
  * How the blank CSP template is loaded.
@@ -54,12 +55,37 @@ let templateLoader = async () => {
   return Buffer.from(await response.arrayBuffer());
 };
 
+/**
+ * How the document with a real animation is loaded.
+ *
+ * It is the skeleton an animated export is built from: it holds a track of
+ * Clip Studio's own, the tree of that track and the tables the timeline
+ * lives in. The browser fetches it over HTTP; under Node the file is read
+ * from disk.
+ */
+let animationTemplateLoader = async () => {
+  const response = await fetch(ANIMATION_TEMPLATE_URL);
+  if (!response.ok) {
+    throw new ValidationError("the .clip animation template could not be read");
+  }
+  return Buffer.from(await response.arrayBuffer());
+};
+
 /** Replace the template loader. Returns a function that restores the old one. */
 export function setTemplateLoader(loader) {
   const previous = templateLoader;
   templateLoader = loader;
   return () => {
     templateLoader = previous;
+  };
+}
+
+/** Replace the animation template loader. Returns a function that restores it. */
+export function setAnimationTemplateLoader(loader) {
+  const previous = animationTemplateLoader;
+  animationTemplateLoader = loader;
+  return () => {
+    animationTemplateLoader = previous;
   };
 }
 
@@ -735,7 +761,11 @@ function linkTree(database, tree, floor, rootId) {
   const walk = (indexes) => {
     for (const index of indexes) {
       const node = tree.nodes[index];
-      const kids = [...node.children].reverse();
+      // The children of a folder are stacked the way the canvas stacks
+      // them: the first child is the lowest one. The cells of a row are
+      // the exception: Clip Studio keeps them in the order they play, so
+      // the first cell is the one that shows first.
+      const kids = node.row === true ? [...node.children] : [...node.children].reverse();
       linkSiblings(database, kids.map((child) => tree.nodes[child].layerId));
       database
         .prepare("UPDATE Layer SET LayerFirstChildIndex = ? WHERE MainId = ?")
@@ -747,21 +777,30 @@ function linkTree(database, tree, floor, rootId) {
 }
 
 /**
- * The folders of a project that are animation folders, and their cells.
+ * Whether a node of the tree is a folder in Clip Studio.
  *
- * The importer marks a cell `preBehavior: "none"`, because a cell only shows
- * on its own frame; an ordinary layer holds. That is the rule used here: a
- * folder whose direct children are cells is an animation folder. A cell that
- * is itself a folder is not looked into again, so its drawing layers are not
- * mistaken for cells of the folder above it.
+ * A group of the project is a folder, and so is a row of the timeline: the
+ * cells of a row live in a folder of their own.
  */
-function animationFolders(tree) {
-  const folders = [];
-  const seen = new Set();
+function isFolderNode(node) {
+  return node.layer.type === "group" || node.row === true;
+}
 
-  // The frame a cell sits on: its own drawing's, or the earliest of the
-  // drawings inside it, because a cell that is a folder holds its picture in
-  // layers of its own.
+/**
+ * The rows of the timeline a project turns into, and the cells on them.
+ *
+ * Clip Studio keeps the cells of a row inside an animation folder: a cell
+ * is a layer of its own, and the track of the folder says which cell shows
+ * when. A TVMini layer that holds drawings is such a row - every drawing
+ * becomes a cell of its folder. A group whose children are cells is a row
+ * as well: that is the shape a document that came from Clip Studio already
+ * has, and those cells are layers that are already there.
+ *
+ * The frame a cell sits on is its own drawing's, or the earliest of the
+ * drawings inside it, because a cell that is a folder holds its picture in
+ * layers of its own.
+ */
+function animationRows(tree) {
   const frameOf = (index, depth = 0) => {
     const layer = tree.nodes[index].layer;
     if (layer.drawings?.length) return layer.drawings[0].at;
@@ -772,26 +811,103 @@ function animationFolders(tree) {
     return frames.length ? Math.min(...frames) : null;
   };
 
+  // The parent of every node, so a node that sits inside a row can be found.
+  const parentOf = new Map();
+  tree.nodes.forEach((node, index) => {
+    for (const child of node.children) parentOf.set(child, index);
+  });
+
+  // A group whose children are all cells is a row of cells.
+  const candidates = [];
   for (let index = 0; index < tree.nodes.length; index += 1) {
-    if (seen.has(index)) continue;
     const node = tree.nodes[index];
     if (node.layer.type !== "group" || node.children.length === 0) continue;
-    const children = node.children.map((child) => tree.nodes[child].layer);
-    if (!children.some((child) => child.preBehavior === "none")) continue;
-
     const cells = [];
     for (const child of node.children) {
-      const layer = tree.nodes[child].layer;
+      const childLayer = tree.nodes[child].layer;
+      if (childLayer.preBehavior !== "none") {
+        cells.length = 0;
+        break;
+      }
       const at = frameOf(child);
       if (at === null) continue;
-      cells.push({ name: layer.name || String(cells.length + 1), at });
-      seen.add(child);
+      const drawing = childLayer.drawings?.[0] ?? null;
+      cells.push({ name: childLayer.name || String(cells.length + 1), at, drawing, child });
     }
     if (cells.length === 0) continue;
     cells.sort((one, two) => one.at - two.at);
-    folders.push({ node, cells });
+    candidates.push({ index, node, cells });
   }
-  return folders;
+
+  // A group that sits inside another group of cells is a cell of that one:
+  // the cells of an animation folder can be folders of their own, and the
+  // layers inside such a cell are not rows of their own.
+  const candidateNodes = new Set(candidates.map((one) => one.node));
+  const insideAny = (index, nodes) => {
+    let at = parentOf.get(index);
+    while (at !== undefined) {
+      if (nodes.has(tree.nodes[at])) return true;
+      at = parentOf.get(at);
+    }
+    return false;
+  };
+  const rows = candidates.filter((one) => !insideAny(one.index, candidateNodes));
+
+  // A layer with more than one cell is a row of cells as well, and the cells
+  // are made here: one layer for every drawing. A layer with a single
+  // drawing stays an ordinary layer, and a layer that sits inside a row is a
+  // cell of that row and not a row of its own.
+  const rowNodes = new Set(rows.map((row) => row.node));
+  for (let index = 0; index < tree.nodes.length; index += 1) {
+    const node = tree.nodes[index];
+    const drawings = node.layer.drawings ?? [];
+    if (node.layer.type === "group" || drawings.length < 2) continue;
+    if (insideAny(index, rowNodes)) continue;
+    const cells = drawings.map((drawing, order) => ({
+      name: drawing.name || String(order + 1),
+      at: drawing.at,
+      drawing,
+    }));
+    cells.sort((one, two) => one.at - two.at);
+    node.row = true;
+    rows.push({ node, cells });
+  }
+
+  rows.sort((one, two) => tree.nodes.indexOf(one.node) - tree.nodes.indexOf(two.node));
+  return rows;
+}
+
+/**
+ * Give every row the cell layers it needs.
+ *
+ * The cells of a row that came from a Clip Studio document are layers that
+ * are already there. The cells of a row that came from a layer with
+ * drawings are made here: each one is a layer of its own that holds the
+ * picture of its drawing.
+ */
+function expandRows(tree, rows) {
+  for (const row of rows) {
+    if (row.cells.some((cell) => cell.child !== undefined)) continue;
+    const indexes = [];
+    for (const cell of row.cells) {
+      indexes.push(tree.nodes.length);
+      tree.nodes.push({
+        layer: {
+          name: cell.name,
+          type: "anim",
+          visible: true,
+          locked: false,
+          opacity: 1,
+          drawings: cell.drawing ? [cell.drawing] : [],
+        },
+        layerId: 0,
+        children: [],
+        cel: cell,
+      });
+    }
+    row.node.children.push(...indexes);
+  }
+  return tree;
 }
 
 /** The types of the fields of a curve, so a rewrite keeps the document's own. */
@@ -810,6 +926,10 @@ function curveFieldTypes(curve) {
  * holds a cell track, so that track is used as the skeleton: its table
  * definitions are reused as they are, and its documents are copied with only
  * the cell curve replaced.
+ *
+ * The track of the paper is copied as well. It holds the range of the whole
+ * timeline - the start, the end and the rate - so the document says how long
+ * the animation runs.
  */
 function animationSkeleton(source, container) {
   const tables = {};
@@ -831,6 +951,7 @@ function animationSkeleton(source, container) {
   if (!timeline || !track) return null;
 
   const blobOf = (value) => {
+    if (!value) return null;
     const id = Buffer.from(value).toString("ascii");
     const chunk = container.chunks.find(
       (entry) => entry.name === "CHNKExta" && entry.payload.toString("ascii", 8, 48) === id,
@@ -844,7 +965,20 @@ function animationSkeleton(source, container) {
   const curve = readAnimationCurves(second).find((entry) => entry.kind === "ImageCelName");
   if (!curve) return null;
 
-  return { tables, timeline, track, first, second, types: curveFieldTypes(curve) };
+  // The paper's own track: it carries the range of the timeline.
+  const paperRow = readOne(
+    source,
+    "SELECT * FROM Track WHERE TrackKind = 2003 ORDER BY _PW_ID LIMIT 1",
+  );
+  const paper = paperRow
+    ? {
+        track: paperRow,
+        first: blobOf(paperRow.TrackActionMixer),
+        second: blobOf(paperRow.TrackActionMixer2),
+      }
+    : null;
+
+  return { tables, timeline, track, paper, first, second, types: curveFieldTypes(curve) };
 }
 
 /** The 16 bytes a layer uuid string stands for. */
@@ -870,18 +1004,20 @@ function insertRow(database, table, source, overrides) {
 }
 
 /**
- * Write the timeline of a project into a `.clip` under construction.
+ * Write the animation of a project into a `.clip` under construction.
  *
  * The mixer of a track is the action document described in `clip-mixer.js`.
- * Here only the cell curve is replaced: the names of the cells become the
- * `Tag` string values, their frames become the `Frame` times in 60 Hz ticks,
- * and the end of the track follows the end of the project.
+ * Here the cell curve is replaced: the names of the cells become the `Tag`
+ * string values, their frames become the `Frame` times in 60 Hz ticks, and
+ * the range of the track follows the range of the project. Both mixers of a
+ * track are written, the newer one and the older one, so that whichever of
+ * the two Clip Studio reads, it reads the same cells.
  *
- * `skeleton` comes from the document the project was imported from, so every
- * part of the tree the writer does not understand is copied rather than made
- * up. Returns the number of tracks that were written.
+ * `skeleton` comes from a real document, so every part of the tree the
+ * writer does not understand is copied rather than made up. Returns the
+ * number of tracks that were written.
  */
-function writeAnimation(database, tree, project, skeleton, pixels) {
+function writeAnimation(database, tree, project, skeleton, pixels, rows) {
   if (!columnsOf(database, "Layer").includes("AnimationFolder")) {
     database.exec("ALTER TABLE Layer ADD COLUMN AnimationFolder INTEGER DEFAULT NULL");
   }
@@ -889,15 +1025,7 @@ function writeAnimation(database, tree, project, skeleton, pixels) {
     const name = /CREATE TABLE\s+"?(\w+)/i.exec(sql)?.[1];
     if (name && columnsOf(database, name).length === 0) database.exec(sql);
   }
-
-  const folders = animationFolders(tree);
-  if (process.env.TVMINI_DEBUG) {
-    console.log(
-      "folders:",
-      JSON.stringify(folders.map((folder) => [folder.node.layer.name, folder.cells.map((cell) => `${cell.name}@${cell.at}`)])),
-    );
-  }
-  if (folders.length === 0) return 0;
+  if (!rows.length) return 0;
 
   const fps = Math.max(1, Number(project.fps) || 12);
   const startFrame = Number(project.startFrame) || 1;
@@ -908,44 +1036,79 @@ function writeAnimation(database, tree, project, skeleton, pixels) {
       end = Math.max(end, drawing.at + drawing.hold - 1);
     }
   }
-  const endTick = tickOf(Math.max(startFrame, end));
+  if (project.camera && Array.isArray(project.camera.keys)) {
+    for (const key of project.camera.keys) {
+      end = Math.max(end, key.frame);
+    }
+  }
+  // The range of the track runs from the first frame of the project to the
+  // frame behind the last one, which is the frame the timeline ends on.
+  const range = { start: tickOf(startFrame), end: tickOf(end + 1), rate: 60 };
 
-  // The tracks form a list, so their ids are handed out before the rows are
-  // written: each one has to name the next.
-  const trackIds = folders.map(() => nextId(database, "Track"));
-  for (let index = 0; index < folders.length; index += 1) {
-    const folder = folders[index];
-    const layerId = folder.node.layerId;
+  const trackIds = [];
+
+  // The paper's own track holds the range of the whole timeline. It comes
+  // first in the list of tracks, the way Clip Studio writes it.
+  if (skeleton.paper?.first && skeleton.paper?.second) {
+    const first = setTrackRange(parseActionDocument(skeleton.paper.first.raw), range);
+    const second = setTrackRange(parseActionDocument(skeleton.paper.second.raw), range);
+    const firstId = newMixerId();
+    const secondId = newMixerId();
+    pixels.set(firstId, Buffer.from(encodeMixerPayload(first, firstId)).subarray(56));
+    pixels.set(secondId, Buffer.from(encodeMixerPayload(second, secondId)).subarray(56));
+
+    const paper = readOne(
+      database,
+      "SELECT LayerUuid FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
+    );
+    const id = nextId(database, "Track");
+    trackIds.push(id);
+    insertRow(database, "Track", skeleton.paper.track, {
+      MainId: id,
+      TrackNextIndex: 0,
+      TrackActionMixerSize: mixerColumnSize(first),
+      TrackActionMixer: Buffer.from(firstId, "ascii"),
+      TrackActionMixer2Size: mixerColumnSize(second),
+      TrackActionMixer2: Buffer.from(secondId, "ascii"),
+      TrackUuid: uuidBytes(cryptoId()),
+      LayerUuidWithTrack: uuidBytes(paper?.LayerUuid ?? cryptoId()),
+      TrackOpen: 0,
+      TrackContentOpen: 0,
+      TrackKind: 2003,
+      TrackOptionFlag: 256,
+    });
+  }
+
+  for (const row of rows) {
     database
       .prepare("UPDATE Layer SET AnimationFolder = 1 WHERE MainId = ?")
-      .run(layerId);
-    const uuid = readOne(database, "SELECT LayerUuid FROM Layer WHERE MainId = ?", layerId);
+      .run(row.node.layerId);
+    const uuid = readOne(database, "SELECT LayerUuid FROM Layer WHERE MainId = ?", row.node.layerId);
 
-    const tags = folder.cells.map((cell) => cell.name);
-    const keys = folder.cells.map((cell, order) => ({
-      time: tickOf(cell.at),
-      value: order,
-      tag: cell.name,
-    }));
-    const pool = withStrings(skeleton.second.pool, tags);
-    const curve = replaceCurve(skeleton.second, {
-      kind: "ImageCelName",
-      fields: celCurveFields(keys, pool, skeleton.types),
-      pool,
-    });
-    const document = setTrackEnd(parseActionDocument(curve), endTick);
-
-    const secondId = newMixerId();
+    // The plan of the row: the cells it shows, and the frame each one
+    // starts on. The frames become ticks of the document's timebase.
+    const keys = row.cells.map((cell) => ({ frame: cell.at, tag: cell.name }));
+    const first = setTrackRange(
+      parseActionDocument(spliceCelPlan(skeleton.first, { keys, frameRate: fps })),
+      range,
+    );
+    const second = setTrackRange(
+      parseActionDocument(spliceCelPlan(skeleton.second, { keys, frameRate: fps })),
+      range,
+    );
     const firstId = newMixerId();
-    pixels.set(secondId, Buffer.from(encodeMixerPayload(document, secondId)).subarray(56));
-    pixels.set(firstId, Buffer.from(encodeMixerPayload(skeleton.first.raw, firstId)).subarray(56));
+    const secondId = newMixerId();
+    pixels.set(firstId, Buffer.from(encodeMixerPayload(first, firstId)).subarray(56));
+    pixels.set(secondId, Buffer.from(encodeMixerPayload(second, secondId)).subarray(56));
 
+    const id = nextId(database, "Track");
+    trackIds.push(id);
     insertRow(database, "Track", skeleton.track, {
-      MainId: trackIds[index],
-      TrackNextIndex: trackIds[index + 1] ?? 0,
-      TrackActionMixerSize: mixerColumnSize(skeleton.first.raw),
+      MainId: id,
+      TrackNextIndex: 0,
+      TrackActionMixerSize: mixerColumnSize(first),
       TrackActionMixer: Buffer.from(firstId, "ascii"),
-      TrackActionMixer2Size: mixerColumnSize(document),
+      TrackActionMixer2Size: mixerColumnSize(second),
       TrackActionMixer2: Buffer.from(secondId, "ascii"),
       TrackUuid: uuidBytes(cryptoId()),
       LayerUuidWithTrack: uuidBytes(uuid.LayerUuid),
@@ -956,21 +1119,33 @@ function writeAnimation(database, tree, project, skeleton, pixels) {
     });
   }
 
+  // The tracks form a list, so each one names the one behind it.
+  for (let index = 0; index < trackIds.length; index += 1) {
+    database
+      .prepare("UPDATE Track SET TrackNextIndex = ? WHERE MainId = ?")
+      .run(trackIds[index + 1] ?? 0, trackIds[index]);
+  }
+
+  const timelineId = nextId(database, "TimeLine");
   insertRow(database, "TimeLine", skeleton.timeline, {
-    MainId: nextId(database, "TimeLine"),
-    FirstTrack: trackIds[0],
+    MainId: timelineId,
+    FirstTrack: trackIds[0] ?? 0,
     TimeLineUuid: uuidBytes(cryptoId()),
     TimeLineName: skeleton.timeline.TimeLineName ?? "Timeline 1",
     FrameRate: fps,
-    StartFrame: 0,
-    EndFrame: Math.max(0, end - startFrame),
-    BiggestEndFrame: Math.max(0, end - startFrame),
+    // Clip Studio counts the frames of a timeline from zero, and the end
+    // frame is the number of frames the timeline holds.
+    StartFrame: Math.max(0, startFrame - 1),
+    EndFrame: Math.max(1, end - startFrame + 1),
     CurrentFrame: Math.max(0, (Number(project.currentFrame) || startFrame) - startFrame),
+    SmallestStartFrame: Math.max(0, startFrame - 1),
+    BiggestEndFrame: Math.max(1, end - startFrame + 1),
   });
   database
-    .prepare("UPDATE AnimationCutBank SET Enable = 1, FirstTimeLine = 1 WHERE MainId = 2")
-    .run();
-  return folders.length;
+    .prepare("UPDATE AnimationCutBank SET Enable = 1, FirstTimeLine = ?")
+    .run(timelineId);
+  // The tracks of the cells, without the paper's own track.
+  return rows.length;
 }
 
 /** A fresh 16 byte uuid, as the dashed text Clip Studio writes. */
@@ -1033,19 +1208,17 @@ async function loadTemplate() {
 /**
  * Build a CSP-openable .clip from a TVMini project.
  *
- * `animation` is off by default and has to stay off until the mixer of a
- * Clip Studio track can be written. The action data of a track is CSP's own
- * serialised document, and a malformed one is the single thing that could
- * make Clip Studio Paint reject a file that otherwise opens. A static file
- * that opens is worth more than an animated file that does not, so the
- * writer refuses to guess.
+ * `animation` says how the animation of the project is written. `true` uses
+ * the bundled document with a real animation in it as the skeleton, and the
+ * bytes of a `.clip` are used as the skeleton as they are. The skeleton
+ * holds a track of Clip Studio's own - the tree of it, the tables the
+ * timeline lives in and the range of the document - so that the parts of the
+ * format the writer does not understand are copied rather than made up.
+ *
+ * Without it the file is a static one: the layers of the project, one
+ * picture each.
  */
 export async function createClipBuffer(project, { name = "TVMini export", animation = null, validate = true } = {}) {
-  if (animation === true) {
-    throw new ValidationError(
-      "writing the animation of a .clip is not ready yet; the track it is copied from has to be given as `animation`",
-    );
-  }
   const template = parseContainer(await loadTemplate());
   let database;
   let source;
@@ -1053,9 +1226,21 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
 
   try {
     if (animation) {
+      let bytes;
+      if (animation === true) {
+        try {
+          bytes = await animationTemplateLoader();
+        } catch (error) {
+          throw new ValidationError(
+            `the .clip animation template could not be read: ${error.message}`,
+          );
+        }
+      } else {
+        bytes = Buffer.isBuffer(animation) ? animation : Buffer.from(animation);
+      }
       let container;
       try {
-        container = parseClipContainer(Buffer.isBuffer(animation) ? animation : Buffer.from(animation));
+        container = parseClipContainer(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
       } catch {
         throw new ValidationError("the .clip given as the animation skeleton is not a Clip Studio file");
       }
@@ -1097,19 +1282,25 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     // folder is a row with the folder flag set, and the layers inside it are
     // linked below it. The tree is built from each layer's `parent`.
     const tree = buildTree(projectLayers);
+    // The rows of the timeline are worked out before the layers are made,
+    // because the cells of a row are layers of their own. Without a skeleton
+    // there is no timeline to write, so the layers are left as they are.
+    const rows = skeleton ? animationRows(tree) : [];
+    expandRows(tree, rows);
     const created = [];
 
     for (let index = 0; index < tree.nodes.length; index += 1) {
       const node = tree.nodes[index];
+      const folder = isFolderNode(node);
       if (index === 0) {
         created.push({ ...templateLayer, layerId: templateLayer.MainId });
       } else {
-        const folder = node.layer.type === "group";
         created.push(
           cloneLayer(database, templateLayer.MainId, node.layer.name, {
             __width: project.width,
             __height: project.height,
-            ...(folder ? { LayerFolder: 1, LayerType: 0 } : {}),
+            LayerFolder: folder ? 1 : 0,
+            LayerType: folder ? 0 : 1,
           }),
         );
       }
@@ -1144,7 +1335,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     for (let index = 0; index < tree.nodes.length; index += 1) {
       const source = tree.nodes[index].layer;
       const target = created[index];
-      const folder = source.type === "group";
+      const folder = isFolderNode(tree.nodes[index]);
       const opacity = Math.max(0, Math.min(256, Math.round((source.opacity ?? 1) * 256)));
       database
         .prepare(
@@ -1167,7 +1358,16 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       // mipmap chain, but its block is not in the file, so no pixels are
       // written for it and none are expected.
       if (!folder) {
-        setLayerPixels(database, target.layerId, renderLayerRgba(project, source), pixels);
+        // A cell shows on its own frame, so the picture of the layer it
+        // holds is the picture of that cell's own drawing. A cell of a row
+        // that was made here knows its drawing; a cell that came from a
+        // Clip Studio document is a layer that holds one drawing.
+        const cel = tree.nodes[index].cel;
+        const drawing = cel?.drawing ?? (source.preBehavior === "none" ? source.drawings?.[0] : null);
+        const rgba = drawing
+          ? renderDrawingRgba(project, drawing)
+          : renderLayerRgba(project, source);
+        setLayerPixels(database, target.layerId, rgba, pixels);
         currentLayerId = target.layerId;
       }
     }
@@ -1175,7 +1375,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     // Every layer that was filled has to end up with its pixels in the file.
     if (imageLayer) assertLayerHasPixels(database, imageLayer.layerId, pixels);
     for (let index = 0; index < tree.nodes.length; index += 1) {
-      if (tree.nodes[index].layer.type === "group") continue;
+      if (isFolderNode(tree.nodes[index])) continue;
       assertLayerHasPixels(database, created[index].layerId, pixels);
     }
 
@@ -1214,7 +1414,9 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
 
     setTimeline(database, project);
 
-    if (skeleton) writeAnimation(database, tree, project, skeleton, pixels);
+    // The tracks that were written, so the caller can say whether the file
+    // carries a timeline.
+    const tracks = skeleton ? writeAnimation(database, tree, project, skeleton, pixels, rows) : 0;
 
     setPreview(database, project);
 
@@ -1246,6 +1448,8 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       width: project.width,
       height: project.height,
       layers: layerCount,
+      // The rows of the timeline that were written as tracks of cells.
+      tracks,
     };
   } finally {
     if (database) await database.close();

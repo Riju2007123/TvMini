@@ -328,6 +328,42 @@ pool the record was built with, so a curve whose cell names are not in the
 pool yet needs the longer pool handed to the writer too. Without it the tag
 values point past the end of the pool and the curve reads back empty.
 
-**next step: 8 - write the animation of a project that did not come from a .clip**
+## Step 8 - write the animation of a project that did not come from a .clip (done)
+
+A project that was made in TVMini has no `.clip` to copy a track from, so the
+program now ships one: `public/assets/clip-animation-template.clip`, a small
+document that holds a real animation. It is the skeleton of every export that
+has no imported file behind it, and it holds the parts of the format the
+writer does not understand: the definitions of the `TimeLine` and `Track`
+tables, the row of a cell track, the track of the paper and the two action
+documents of the track.
+
+A layer of the project that holds more than one drawing becomes a **row**: an
+animation folder with one child layer per drawing, and a track of kind 2000
+whose `ImageCelName` curve names the cells and gives the frame each one
+starts on. A layer with a single drawing stays an ordinary layer, so a
+project without an animation exports as a document without one.
+
+**Checked in Clip Studio Paint.** `tools/clip-export-cells.mjs` makes a
+project with three cells of its own and writes it. CSP opened the result and
+showed the folder `Dots : 3` in the layer panel, with the three cells under
+it, and the timeline
+
+```
+Dots : 3 cel            first second third   (frames 0, 2 and 4)
+```
+
+which are the frames the project holds. The canvas showed the first cell's
+stroke.
+
+**One rule worth keeping.** A cell can be a folder of its own: the cells of
+"Folder 1" in `Animation3.clip` each hold layers of their own, and those
+layers are cells of the cell and not rows of their own. So a folder inside
+another folder of cells is a cell, and a layer inside a row is a cell too -
+only the outermost folder of cells is a row. Without that rule every cell
+that holds layers became a track of its own, and the timeline showed nine
+rows where the document has three.
+
+**next step: 9 - the writer and the reader agree on every document of the corpus**
 
 

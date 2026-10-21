@@ -225,6 +225,11 @@ function createServerBackend(hooks) {
  * @param {{pickPath: (options: {mode: string, title: string, name?: string}) => Promise<string|null>}} hooks
  */
 function createBrowserBackend(hooks) {
+  // The bytes of the .clip that was imported. A browser cannot re-read a
+  // file by path, so they are kept: the writer needs them to copy the tracks
+  // of that file into the one it writes, and the timeline with them.
+  let clipSourceBytes = null;
+
   return {
     mode: "browser",
 
@@ -271,6 +276,7 @@ function createBrowserBackend(hooks) {
         readClipLayersFromBytes(picked.bytes, { includePaper: true }),
       ]);
       const project = clipToProject(document, layers);
+      clipSourceBytes = picked.bytes;
       return { name: picked.name, path: picked.name, project };
     },
 
@@ -320,7 +326,29 @@ function createBrowserBackend(hooks) {
       if (sourceName && sourceName.toLowerCase() === name.toLowerCase()) {
         throw new Error("refusing to overwrite the imported .clip file");
       }
-      const result = await createClipBuffer(project, { name: name.replace(/\.clip$/i, "") });
+      // The animation is written when there is one to write. The file the
+      // project was imported from is the skeleton of its tracks, and the
+      // bundled document with a real animation in it is the skeleton of
+      // everything else. A file that cannot be used as a skeleton is
+      // exported without the timeline.
+      const skeletons = [];
+      if (clipSourceBytes) skeletons.push(clipSourceBytes);
+      skeletons.push(true);
+      let result = null;
+      for (const skeleton of skeletons) {
+        try {
+          result = await createClipBuffer(project, {
+            name: name.replace(/\.clip$/i, ""),
+            animation: skeleton,
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+        }
+      }
+      if (!result) {
+        result = await createClipBuffer(project, { name: name.replace(/\.clip$/i, "") });
+      }
       const saved = await saveFile(name, new Uint8Array(result.buffer), "clip");
       if (!saved) return null;
       return {
@@ -329,6 +357,7 @@ function createBrowserBackend(hooks) {
         width: result.width,
         height: result.height,
         layers: result.layers,
+        animation: result.tracks ?? 0,
       };
     },
 

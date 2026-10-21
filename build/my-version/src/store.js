@@ -78,16 +78,16 @@ export async function exportPng(filePath, project) {
 }
 
 /**
- * Export the current frame as a layered Clip Studio Paint document.
+ * Export the project as a layered Clip Studio Paint document.
  *
  * The writer uses a blank CSP document as a structural template, then rebuilds
  * the canvas, layer rows, offscreen block tables, and external image chunks.
  *
- * When the project came from a `.clip`, that file is also handed over as the
- * animation skeleton: its tracks are copied and their cell curves are rebuilt
- * from the project's animation folders, so the exported timeline matches what
- * the editor shows. A file whose tracks cannot be read is exported statically
- * rather than not at all.
+ * The animation of the project is written as tracks of Clip Studio's own. The
+ * skeleton of those tracks is the `.clip` the project was imported from when
+ * there is one, and the small document with a real animation in it that ships
+ * with the program otherwise. A skeleton that cannot be read is not a reason
+ * to refuse the export: the file is written without a timeline then.
  */
 export async function exportClip(filePath, project, sourcePath = null) {
   if (typeof filePath !== "string" || filePath.trim() === "") {
@@ -102,12 +102,12 @@ export async function exportClip(filePath, project, sourcePath = null) {
   ) {
     throw new ValidationError("refusing to overwrite the imported .clip file");
   }
-  let animation = null;
+  let animation = true;
   if (typeof sourcePath === "string" && sourcePath.trim() !== "") {
     try {
       animation = await fsp.readFile(sourcePath);
     } catch {
-      animation = null;
+      animation = true;
     }
   }
   const name = path.basename(target, path.extname(target));
@@ -117,12 +117,19 @@ export async function exportClip(filePath, project, sourcePath = null) {
   } catch (error) {
     // The animation skeleton is a convenience: a `.clip` that cannot be read
     // back (or that holds no track) still exports, only without the timeline.
-    if (!animation || !(error instanceof ValidationError)) throw error;
+    if (!(error instanceof ValidationError)) throw error;
     written = await createClipBuffer(clean, { name });
   }
-  const { buffer, width, height, layers } = written;
+  const { buffer, width, height, layers, tracks } = written;
   await writeAtomic(target, buffer);
-  return { path: target, bytes: buffer.length, width, height, layers };
+  return {
+    path: target,
+    bytes: buffer.length,
+    width,
+    height,
+    layers,
+    animation: tracks ?? 0,
+  };
 }
 
 /**

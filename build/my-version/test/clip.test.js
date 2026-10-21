@@ -26,6 +26,7 @@ import {
   readClipLayersFromBytes,
 } from "../public/core/clip.js";
 import { parseActionDocument } from "../public/core/clip-animation.js";
+import { openDatabase } from "../public/core/sqlite.js";
 
 /** The blank Clip Studio document the writer starts from. */
 const TEMPLATE = new URL("../public/assets/clip-template.clip", import.meta.url);
@@ -337,12 +338,35 @@ test("a written .clip reads back with the same pixels", async () => {
   assert.ok(matching > 100, `only ${matching} pixels matched`);
 });
 
-test("writing an animation is refused until the mixer can be written", async () => {
+test("writing an animation uses the document with a real animation in it", async () => {
   const project = createProject(320, 240);
-  await assert.rejects(
-    () => createClipBuffer(project, { animation: true }),
-    /not ready yet/,
-  );
+  // Two drawings on a layer are two cells of an animation folder.
+  project.layers[0].drawings = [
+    {
+      at: 1,
+      hold: 1,
+      strokes: [{ color: "#ff0000", width: 8, points: [[10, 10], [40, 30]] }],
+    },
+    {
+      at: 3,
+      hold: 1,
+      strokes: [{ color: "#00ff00", width: 8, points: [[20, 20], [50, 40]] }],
+    },
+  ];
+  const written = await createClipBuffer(project, { name: "animated", animation: true });
+  assert.ok(written.buffer.length > 0);
+
+  const database = await openDatabase(new Buffer(findClipDatabase(written.buffer)));
+  try {
+    const tracks = database.prepare("SELECT * FROM Track ORDER BY MainId").all();
+    // The paper's own track and the track of the animation.
+    assert.ok(tracks.length >= 2);
+    const timeline = database.prepare("SELECT * FROM TimeLine").all();
+    assert.equal(timeline.length, 1);
+    assert.equal(Number(timeline[0].FirstTrack), Number(tracks[0].MainId));
+  } finally {
+    await database.close();
+  }
 });
 
 test("an action document is read and its properties are named", async () => {

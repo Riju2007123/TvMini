@@ -11,8 +11,10 @@ import {
   buildDocument,
   celCurveFields,
   encodeMixerPayload,
+  locateCurve,
   withStrings,
 } from "../public/core/clip-mixer.js";
+import { readClipLayersFromBytes } from "../public/core/clip.js";
 
 /**
  * The table definitions a Clip Studio document with a timeline carries.
@@ -260,12 +262,14 @@ test("an animation folder is written as a track with its cells", async () => {
   assert.deepEqual(curve.keys.map((key) => key.time), [0, 10, 20]);
   assert.deepEqual(curve.keys.map((key) => key.value), [0, 1, 2]);
 
-  // The track ends where the project ends, and the timeline says the same.
+  // The track runs to the frame behind the last one, so the last cell is
+  // held for a frame, and the timeline says the same.
   const range = readTrackRange(document);
-  assert.equal(range.end, 20);
+  assert.equal(range.end, 25);
   assert.equal(timeline.length, 1);
   assert.equal(Number(timeline[0].FrameRate), 12);
   assert.equal(Number(timeline[0].FirstTrack), Number(track.MainId));
+  assert.equal(Number(timeline[0].EndFrame), 5);
 });
 
 test("the layer of an animation folder is marked as one", async () => {
@@ -298,4 +302,125 @@ test("something that is not a .clip is refused as the skeleton", async () => {
     () => createClipBuffer(projectWithCells(), { name: "junk", animation: Buffer.from("hello") }),
     /not a Clip Studio file/,
   );
+});
+
+/** A project with one layer that holds two drawings. */
+function projectWithDrawings() {
+  const project = createProject(64, 48);
+  project.fps = 24;
+  project.layers = [
+    {
+      name: "Row",
+      type: "anim",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blend: "normal",
+      preBehavior: "hold",
+      postBehavior: "hold",
+      clip: false,
+      parent: -1,
+      drawings: [
+        {
+          at: 1,
+          hold: 2,
+          strokes: [{ color: "#ff0000", width: 6, points: [[10, 10], [40, 30]] }],
+        },
+        {
+          at: 4,
+          hold: 1,
+          strokes: [{ color: "#00ff00", width: 6, points: [[20, 20], [50, 40]] }],
+        },
+      ],
+    },
+  ];
+  return project;
+}
+
+test("the bundled document with a real animation is the skeleton of an export", async () => {
+  const written = await createClipBuffer(projectWithDrawings(), {
+    name: "animated",
+    animation: true,
+  });
+  assert.equal(written.tracks, 1, "the file carries a row of cells");
+
+  const { rows, timeline } = await tracksOf(written.buffer);
+  // The track of the paper and the track of the row of cells.
+  assert.equal(rows.length, 2);
+  assert.equal(Number(rows[0].TrackKind), 2003);
+  assert.equal(Number(rows[1].TrackKind), 2000);
+  // The tracks form a list, and the timeline points at the first one.
+  assert.equal(Number(rows[0].TrackNextIndex), Number(rows[1].MainId));
+  assert.equal(timeline.length, 1);
+  assert.equal(Number(timeline[0].FirstTrack), Number(rows[0].MainId));
+  assert.equal(Number(timeline[0].FrameRate), 24);
+
+  // The cells of the row are the two drawings, at the frames they start on.
+  const id = Buffer.from(rows[1].TrackActionMixer2).toString("ascii");
+  const document = readActionBlob(externalOf(written.buffer, id));
+  const curve = readCelCurve(document);
+  assert.deepEqual(curve.keys.map((key) => key.tag), ["1", "2"]);
+  // Twenty four frames a second, so a frame is 2.5 ticks.
+  assert.deepEqual(curve.keys.map((key) => key.time), [0, 7.5]);
+});
+
+test("both mixers of a track carry the same cells", async () => {
+  const written = await createClipBuffer(projectWithDrawings(), {
+    name: "animated",
+    animation: true,
+  });
+  const { rows } = await tracksOf(written.buffer);
+  const track = rows.find((row) => Number(row.TrackKind) === 2000);
+
+  for (const column of ["TrackActionMixer", "TrackActionMixer2"]) {
+    const id = Buffer.from(track[column]).toString("ascii");
+    const document = readActionBlob(externalOf(written.buffer, id));
+    assert.ok(document, `the ${column} is in the file`);
+
+    // The reader only understands the newer flavour, so the older one is
+    // read with the writer's own walk.
+    const curve = locateCurve(document, "ImageCelName");
+    assert.ok(curve, `the ${column} holds a cell curve`);
+    assert.deepEqual(
+      curve.fields.get("Tag").values.map((index) => document.pool[index]),
+      ["1", "2"],
+    );
+    assert.deepEqual(curve.fields.get("Frame").values, [0, 7.5]);
+  }
+});
+
+test("the cells of a row are layers that hold the drawings", async () => {
+  const written = await createClipBuffer(projectWithDrawings(), {
+    name: "animated",
+    animation: true,
+  });
+  const database = await openDatabase(new Buffer(databaseOf(written.buffer)));
+  const layers = database
+    .prepare("SELECT MainId, LayerName, LayerType, LayerFolder, AnimationFolder, LayerFirstChildIndex, LayerNextIndex FROM Layer ORDER BY MainId")
+    .all();
+  await database.close();
+
+  const byId = new Map(layers.map((layer) => [Number(layer.MainId), layer]));
+  const folder = layers.find((layer) => Number(layer.AnimationFolder ?? 0) === 1);
+  assert.ok(folder, "the row is an animation folder");
+  assert.equal(folder.LayerName, "Row");
+  assert.equal(Number(folder.LayerFolder), 1);
+  assert.equal(Number(folder.LayerType), 0);
+
+  // The cells of the row are layers of their own, in the order they play.
+  const cells = [];
+  let at = Number(folder.LayerFirstChildIndex);
+  while (at && byId.has(at)) {
+    cells.push(byId.get(at).LayerName);
+    at = Number(byId.get(at).LayerNextIndex);
+  }
+  assert.deepEqual(cells, ["1", "2"]);
+
+  // Each of them holds a picture.
+  const painted = await readClipLayersFromBytes(written.buffer);
+  for (const cell of painted) {
+    if (!["1", "2"].includes(cell.name)) continue;
+    const marked = cell.pixels.filter((value, index) => index % 4 !== 3 && value !== 0).length;
+    assert.ok(marked > 0, `the cell ${cell.name} holds a picture`);
+  }
 });
