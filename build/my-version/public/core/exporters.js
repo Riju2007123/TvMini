@@ -9,7 +9,7 @@ import { Buffer } from "./bytes.js";
 import { encodeGif } from "./gif.js";
 import { decodeImage, encodeTga } from "./imageio.js";
 import { createLayer, MIN_SIZE, normalizeProject } from "./model.js";
-import { encodePng, encodeRgbaPng, renderProject } from "./png.js";
+import { encodePng, encodeRgbaPng, renderProject, scaleRgb } from "./png.js";
 import { contentEnd } from "../timeline.js";
 
 /* ---------------------------------------------------------------- names */
@@ -53,16 +53,20 @@ export function frameRange(project, range = "all") {
 }
 
 /** Render frames; every one has to come out at the same size. */
-export function renderFrames(project, frames) {
+export function renderFrames(project, frames, scale = 100) {
   const out = [];
   let size = null;
+  const factor = Math.max(1, Math.min(400, Math.round(Number(scale) || 100))) / 100;
   for (const frame of frames) {
     const picture = renderProject(project, frame);
-    if (!size) size = { width: picture.width, height: picture.height };
-    else if (picture.width !== size.width || picture.height !== size.height) {
+    const width = Math.max(1, Math.round(picture.width * factor));
+    const height = Math.max(1, Math.round(picture.height * factor));
+    const data = scaleRgb(picture.data, picture.width, picture.height, width, height);
+    if (!size) size = { width, height };
+    else if (width !== size.width || height !== size.height) {
       throw new Error("the camera changes size during this range; export a range where it stays the same");
     }
-    out.push({ frame, ...picture });
+    out.push({ frame, width, height, data });
   }
   return { width: size.width, height: size.height, frames: out };
 }
@@ -70,8 +74,8 @@ export function renderFrames(project, frames) {
 /* ------------------------------------------------------------------ GIF */
 
 /** Animated GIF of a frame range at the project's frame rate. */
-export function createGifBuffer(project, { range = "all", loop = project.loop ? 0 : 1 } = {}) {
-  const { width, height, frames } = renderFrames(project, frameRange(project, range));
+export function createGifBuffer(project, { range = "all", loop = project.loop ? 0 : 1, scale = 100 } = {}) {
+  const { width, height, frames } = renderFrames(project, frameRange(project, range), scale);
   const delay = Math.max(2, Math.round(100 / project.fps));
   const buffer = encodeGif({ width, height, loop, frames: frames.map((f) => ({ rgb: f.data, delay })) });
   return { buffer, width, height, frames: frames.length };
@@ -83,8 +87,8 @@ export function createGifBuffer(project, { range = "all", loop = project.loop ? 
  * Every frame in a grid on one PNG, plus a JSON description of where each
  * frame sits (so a game can slice it).
  */
-export function createSpriteSheet(project, { range = "all", columns = 0, name = "sheet" } = {}) {
-  const { width, height, frames } = renderFrames(project, frameRange(project, range));
+export function createSpriteSheet(project, { range = "all", columns = 0, name = "sheet", scale = 100 } = {}) {
+  const { width, height, frames } = renderFrames(project, frameRange(project, range), scale);
   const cols = columns > 0 ? Math.min(columns, frames.length) : Math.ceil(Math.sqrt(frames.length));
   const rows = Math.ceil(frames.length / cols);
   const sheetWidth = cols * width;
@@ -217,9 +221,9 @@ export function readZip(input) {
 /** Image sequence: one picture per frame, zipped. */
 export function createSequenceZip(
   project,
-  { range = "all", pattern = "{name}_{frame:4}", name = "frame", format = "png" } = {},
+  { range = "all", pattern = "{name}_{frame:4}", name = "frame", format = "png", scale = 100 } = {},
 ) {
-  const { width, height, frames } = renderFrames(project, frameRange(project, range));
+  const { width, height, frames } = renderFrames(project, frameRange(project, range), scale);
   const used = new Set();
   const entries = frames.map((picture) => {
     let base = safeFileName(expandPattern(pattern, { name, frame: picture.frame }));

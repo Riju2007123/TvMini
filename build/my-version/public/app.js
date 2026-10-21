@@ -4591,6 +4591,7 @@ function openExportSettings() {
   const pattern = document.getElementById("exportPattern");
   const format = document.getElementById("exportFormat");
   const columns = document.getElementById("exportColumns");
+  const scale = document.getElementById("exportScale");
 
   const fill = (options) => {
     const isCustom = typeof options.range === "object";
@@ -4601,6 +4602,7 @@ function openExportSettings() {
     pattern.value = options.pattern;
     format.value = options.format;
     columns.value = options.columns;
+    scale.value = options.scale ?? 100;
   };
   const read = () =>
     cleanExportOptions({
@@ -4611,6 +4613,7 @@ function openExportSettings() {
       pattern: pattern.value,
       format: format.value,
       columns: Math.floor(Number(columns.value) || 0),
+      scale: Math.floor(Number(scale.value) || 100),
     });
   const refreshPresets = (selected = "") => {
     presetSelect.replaceChildren(new Option("Current settings", ""));
@@ -4631,13 +4634,27 @@ function openExportSettings() {
     modal.hidden = true;
     for (const [target, type, handler] of listeners) target.removeEventListener(type, handler);
   };
+  // The panel holds the settings *and* the commands, the way Umoupen's export
+  // panel does, so every way of writing a file is in one place.
+  const commands = document.getElementById("exportCommands");
+  const onCommand = (event) => {
+    const button = event.target.closest("[data-export-command]");
+    if (!button) return;
+    const command = button.dataset.exportCommand;
+    commit();
+    close();
+    handleAction(command);
+  };
+
   const listeners = [
+    [commands, "click", onCommand],
     [range, "change", () => { custom.hidden = range.value !== "custom"; commit(); }],
     [from, "change", commit],
     [to, "change", commit],
     [pattern, "change", commit],
     [format, "change", commit],
     [columns, "change", commit],
+    [scale, "change", commit],
     [presetSelect, "change", () => {
       const chosen = state.exportSettings.presets[presetSelect.value];
       if (chosen) { fill(chosen); commit(); }
@@ -4664,6 +4681,22 @@ function openExportSettings() {
 
 let picker = null;
 
+/**
+ * Write a line down on the server, so the steps of the program can be seen
+ * while it runs.
+ */
+function reportToServer(message) {
+  try {
+    fetch("api/client-log", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: String(message) }),
+    }).catch(() => {});
+  } catch {
+    // Reporting is a convenience; a failure to report is not an error.
+  }
+}
+
 function choosePath({ mode, title, name = "", start = null }) {
   picker = { mode, resolve: null, dir: null, suggested: name, named: false };
   modalTitle.textContent = title;
@@ -4676,6 +4709,7 @@ function choosePath({ mode, title, name = "", start = null }) {
     : null;
 
   loadDir(start || home || dirInput.value || state.homeDir || ".");
+  reportToServer(`the file dialog opened for ${title} with the name "${name}"`);
 
   return new Promise((resolve) => {
     picker.resolve = resolve;
@@ -4719,9 +4753,11 @@ async function loadDir(dir) {
           // export suggested is still the name the user wants.
           loadDir(entry.path);
           if (!picker?.named) nameInput.value = picker?.suggested ?? "";
+          reportToServer(`the folder ${entry.name} was opened; the name is now "${nameInput.value}"`);
         } else {
           nameInput.value = entry.path;
           picker.named = true;
+          reportToServer(`the file ${entry.name} was chosen`);
         }
       });
 
@@ -4760,6 +4796,7 @@ modal.addEventListener("click", (event) => {
 
 confirmButton.addEventListener("click", () => {
   const name = nameInput.value.trim();
+  reportToServer(`save was pressed with the name "${name}" in "${picker?.dir ?? "?"}"`);
   if (!name) {
     setStatus("Type a file name for the file, then press Save.", true);
     nameInput.focus();

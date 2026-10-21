@@ -23,6 +23,7 @@ export const DEFAULT_PRESET = Object.freeze({
   pattern: "{name}_{frame:4}",
   format: "png",
   columns: 0,
+  scale: 100,
 });
 
 /** Merge saved options over the defaults and drop what is not valid. */
@@ -37,6 +38,10 @@ export function cleanOptions(options = {}) {
   if (Number.isInteger(options.columns) && options.columns >= 0 && options.columns <= 256) {
     out.columns = options.columns;
   }
+  // The pictures can be written smaller or larger than the canvas, the way
+  // the resize field of Umoupen's export panel does.
+  const scale = Number(options.scale);
+  if (Number.isFinite(scale) && scale >= 1 && scale <= 400) out.scale = Math.round(scale);
   return out;
 }
 
@@ -64,7 +69,7 @@ export function buildExport(kind, project, stem, rawOptions = {}) {
     case "csv":
       return { ext: "csv", bytes: encode(createTimesheetCsv(project)), extra: [], summary: "timesheet" };
     case "gif": {
-      const gif = createGifBuffer(project, { range: options.range });
+      const gif = createGifBuffer(project, { range: options.range, scale: options.scale });
       return {
         ext: "gif",
         bytes: gif.buffer,
@@ -73,7 +78,7 @@ export function buildExport(kind, project, stem, rawOptions = {}) {
       };
     }
     case "sheet": {
-      const sheet = createSpriteSheet(project, { range: options.range, columns: options.columns, name });
+      const sheet = createSpriteSheet(project, { range: options.range, columns: options.columns, name, scale: options.scale });
       return {
         ext: "png",
         bytes: sheet.png,
@@ -82,7 +87,7 @@ export function buildExport(kind, project, stem, rawOptions = {}) {
       };
     }
     case "sequence": {
-      const zip = createSequenceZip(project, { range: options.range, pattern: options.pattern, name, format: options.format });
+      const zip = createSequenceZip(project, { range: options.range, pattern: options.pattern, name, format: options.format, scale: options.scale });
       return {
         ext: "zip",
         bytes: zip.buffer,

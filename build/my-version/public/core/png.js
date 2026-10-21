@@ -686,6 +686,43 @@ function chunk(type, payload) {
 }
 
 /** Encode an RGB buffer as a PNG (colour type 2, 8 bits per channel). */
+/**
+ * Scale an RGB picture.
+ *
+ * The export can write the frames smaller or larger than the canvas, the way
+ * the resize field of Umoupen's export panel does. The picture is sampled
+ * with a bilinear filter, so a smaller picture keeps the lines of the drawing.
+ */
+export function scaleRgb(rgb, width, height, outWidth, outHeight) {
+  if (outWidth === width && outHeight === height) return rgb;
+  const out = new Uint8Array(outWidth * outHeight * 3);
+  const stepX = width / outWidth;
+  const stepY = height / outHeight;
+  for (let y = 0; y < outHeight; y += 1) {
+    const sourceY = Math.min(height - 1, Math.max(0, (y + 0.5) * stepY - 0.5));
+    const y0 = Math.floor(sourceY);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const fy = sourceY - y0;
+    for (let x = 0; x < outWidth; x += 1) {
+      const sourceX = Math.min(width - 1, Math.max(0, (x + 0.5) * stepX - 0.5));
+      const x0 = Math.floor(sourceX);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const fx = sourceX - x0;
+      const to = (y * outWidth + x) * 3;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const top =
+          rgb[(y0 * width + x0) * 3 + channel] * (1 - fx) +
+          rgb[(y0 * width + x1) * 3 + channel] * fx;
+        const bottom =
+          rgb[(y1 * width + x0) * 3 + channel] * (1 - fx) +
+          rgb[(y1 * width + x1) * 3 + channel] * fx;
+        out[to + channel] = Math.round(top * (1 - fy) + bottom * fy);
+      }
+    }
+  }
+  return out;
+}
+
 export function encodePng(width, height, data) {
   if (data.length !== width * height * 3) {
     throw new Error("pixel buffer does not match the image size");

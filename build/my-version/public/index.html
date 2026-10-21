@@ -685,7 +685,25 @@
           <span>Sprite sheet columns (0 = auto)</span>
           <input id="exportColumns" type="number" min="0" max="256" step="1" />
         </label>
+        <label class="field">
+          <span>Resize (percent of the canvas)</span>
+          <input id="exportScale" type="number" min="1" max="400" step="1" />
+        </label>
         <p class="hint">In file names, {name} is the project name and {frame:4} the frame number padded to 4 digits.</p>
+        <div class="field">
+          <span>Write a file</span>
+          <div class="export-commands" id="exportCommands">
+            <button data-export-command="export">Current frame as PNG</button>
+            <button data-export-command="exportClip">Clip Studio .clip with the timeline</button>
+            <button data-export-command="exportTvpp">.tvpp (TVPaint)</button>
+            <button data-export-command="exportPsd">Layered .psd (current frame)</button>
+            <button data-export-command="exportGif">Animated GIF</button>
+            <button data-export-command="exportSheet">Sprite sheet</button>
+            <button data-export-command="exportSequence">Image sequence (ZIP)</button>
+            <button data-export-command="exportXdts">Timesheet .xdts</button>
+            <button data-export-command="exportCsv">Timesheet .csv</button>
+          </div>
+        </div>
         <div class="modal-actions">
           <button id="exportPresetSave">Save as preset…</button>
           <button id="exportPresetDelete">Delete preset</button>
