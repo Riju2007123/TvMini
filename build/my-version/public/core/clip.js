@@ -129,26 +129,26 @@ function pngDimensions(bytes) {
 }
 
 /**
- * Scale one RGBA buffer to another size with nearest neighbour.
+ * Put a layer's raster on the canvas.
  *
  * A Clip Studio layer keeps its raster at the size of its own canvas, which
- * is not always the size of the document, so a layer that does not match has
- * to be fitted before it can become a TVMini layer.
+ * is not always the size of the document. The raster is **not** scaled to
+ * fit: it is put where it is, and the part that falls outside the document
+ * is cut away, the way Clip Studio Paint draws it. Scaling it would move
+ * every stroke of the layer and squash it.
  */
-function scaleRgba(source, sourceWidth, sourceHeight, width, height) {
+function placeRgba(source, sourceWidth, sourceHeight, width, height) {
   if (sourceWidth === width && sourceHeight === height) return source;
   const output = Buffer.alloc(width * height * 4);
-  for (let y = 0; y < height; y += 1) {
-    const sourceY = Math.min(sourceHeight - 1, Math.floor((y * sourceHeight) / height));
-    for (let x = 0; x < width; x += 1) {
-      const sourceX = Math.min(sourceWidth - 1, Math.floor((x * sourceWidth) / width));
-      source.copy(
-        output,
-        (y * width + x) * 4,
-        (sourceY * sourceWidth + sourceX) * 4,
-        (sourceY * sourceWidth + sourceX) * 4 + 4,
-      );
-    }
+  const copyWidth = Math.min(sourceWidth, width);
+  const copyHeight = Math.min(sourceHeight, height);
+  for (let y = 0; y < copyHeight; y += 1) {
+    source.copy(
+      output,
+      y * width * 4,
+      y * sourceWidth * 4,
+      y * sourceWidth * 4 + copyWidth * 4,
+    );
   }
   return output;
 }
@@ -189,7 +189,7 @@ export function clipToProject(document, layers, fallback = {}) {
   const pictureOf = (node) => {
     const raster = rasterById.get(Number(node.id));
     if (!raster || !raster.pixels) return null;
-    const picture = scaleRgba(raster.pixels, raster.width, raster.height, width, height);
+    const picture = placeRgba(raster.pixels, raster.width, raster.height, width, height);
     return {
       data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
       width,
