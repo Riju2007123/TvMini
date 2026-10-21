@@ -471,6 +471,61 @@ TVMini reads the timeline, the tracks, the sizes and the property names, and
 reports them. It does not write animation: the bundled template is a static
 document with no `TimeLine` table at all, so an export carries no motion.
 
+### The body, read as a stream of four-byte integers
+
+Fresh measurement on the animation track of `Animation10.clip`
+(`extrnlid75507AEF65004DFE994FF502EF050F40`, 651 bytes on disk, 1,700
+inflated, 62 pool entries, body starting at byte 491):
+
+The pool ends at 491 and the remaining 1,209 bytes read as 302 little endian
+32-bit integers plus one spare byte. Reading each integer, and replacing it
+with the pool entry when it is one, gives the document's own outline back in
+document order:
+
+```
+  491  16            527  16 (Int32[])      555  16
+  495  20            531  20 (Quat[])       559  24 '1.0.0'
+  499  32 'Name'     535  24 '1.0.0'        563  28 'Version'
+  503  22 'celsysdocument'  539  25 'Version-Information'
+  507   0 'null'     543   0 'null'         571   9 (String)
+  511   1 (Byte)     547   0 'null'         575  27 'CLIP STUDIO'
+  515  23 'version'  551   2 (SByte)
+  519  24 '1.0.0'                            603   9 (String)
+  523   2 (SByte)                            607  29 '2.1.0'
+```
+
+Two things follow, and both are measured rather than assumed:
+
+1. **The integers are not all of the same kind.** Pool indices name the
+   document's parts, and the numbers 0 to 21 are the type codes, because they
+   index exactly the first twenty-two pool entries. The `9` at offset 571 is
+   followed by the string `CLIP STUDIO` at 575, which is a `String` value
+   carrying a pool index; the `8` that appears later in the body sits in front
+   of eight bytes, which is a `Double`.
+2. **A value therefore does not have a fixed width.** `null` takes no bytes,
+   `Byte` and `SByte` take one, `UInt16` and `Int16` two, `Single` four,
+   `Double` eight, and `String` four because it is a pool index. Reading the
+   body at a flat four-byte stride therefore drifts out of alignment after the
+   first short value, which is why the earlier reading of this body looked
+   irregular.
+
+The path that carries the timing is present literally as pool indices at
+byte 1,195 onwards:
+
+```
+ 1195  45 'Param'   1215  46 'ImageCelName'   1235  47 'Tag'
+ 1199   6 (Int32)  1219  47 'Tag'            1239  48 '6'
+```
+
+so `AnimInfo → Param → ImageCelName → Tag` with the value `"6"` is not an
+inference from the property names: the pool indices spell it out at a known
+offset.
+
+**What is still not known** is the width of an array (`Int32[]`, `Double[]`
+and the rest) and whether a record is terminated by a count or by a sentinel.
+Until those two are settled the body cannot be walked from end to end, and an
+animation cannot be written back.
+
 ### Writing an animation: what is known and what is missing
 
 An animation document needs three things: a `TimeLine` row, a chain of
