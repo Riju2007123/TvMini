@@ -421,8 +421,9 @@ function isAbsolute(value) {
 
 function joinPath(dir, name) {
   if (isAbsolute(name)) return name;
-  const separator = dir.includes("\\") ? "\\" : "/";
-  return `${dir.replace(/[\\/]+$/, "")}${separator}${name}`;
+  const base = dir || state.homeDir || ".";
+  const separator = base.includes("\\") ? "\\" : "/";
+  return `${base.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
 function withTvminiExtension(filePath) {
@@ -4197,7 +4198,9 @@ async function handleAction(action) {
     const kind = EXPORT_ACTIONS[action];
     if (kind) return exportKind(kind);
   } catch (error) {
-    setStatus(error.message, true);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[tvmini] ${action} failed`, error);
+    setStatus(message, true);
   }
 }
 
@@ -4454,8 +4457,10 @@ async function exportClip() {
   try {
     data = await backend.exportClip(state.project, stem, state.clipSourcePath);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[tvmini] the .clip export failed", error);
+    setStatus(message, true);
     clearInterval(tick);
-    setStatus(error instanceof Error ? error.message : String(error), true);
     return;
   }
   clearInterval(tick);

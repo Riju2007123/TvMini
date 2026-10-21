@@ -1,5 +1,6 @@
 import http from "node:http";
 import fsp from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -147,6 +148,11 @@ async function serveStatic(req, res, pathname) {
   res.end(body);
 }
 
+/** Where the calls of the server are written down. */
+function requestLogFile() {
+  return path.join(os.tmpdir(), "tvmini-server.log");
+}
+
 export async function startServer({ port = 4123, recentFile = defaultRecentFile() } = {}) {
   const recent = new RecentStore(recentFile);
   await recent.load();
@@ -158,7 +164,13 @@ export async function startServer({ port = 4123, recentFile = defaultRecentFile(
     // Every call is written down, so a request that did not do what it
     // should can be seen afterwards.
     if (route.startsWith("/api/")) {
-      console.log(`${new Date().toISOString()} ${route}`);
+      const line = `${new Date().toISOString()} ${route}\n`;
+      console.log(line.trimEnd());
+      try {
+        appendFileSync(requestLogFile(), line);
+      } catch {
+        // The log is a convenience; a failure to write it is not an error.
+      }
     }
 
     try {
