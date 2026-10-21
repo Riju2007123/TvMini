@@ -305,6 +305,55 @@ test("a cell that comes back later gets a drawing on every frame it shows", () =
   );
 });
 
+test("the camera of a document becomes the camera of the project", () => {
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 7 }),
+    node(7, "Paper", { kind: "paper", type: 1584 }),
+  ]);
+  // The numbers of the camera of Animation.clip: a frame of 1920 by 1080
+  // around the point (954.6, 2570), shown at 73.9 percent.
+  document.tracks = [{
+    mainId: 42,
+    kind: 2005,
+    action2: {
+      camera: {
+        keys: [
+          {
+            time: 0,
+            centreX: 960,
+            centreY: 540,
+            positionX: 954.637,
+            positionY: 2570.084,
+            rotation: 0,
+            scale: 73.921,
+          },
+        ],
+      },
+    },
+  }];
+
+  const project = clipToProject(document, []);
+  assert.equal(project.camera.keys.length, 1);
+  const key = project.camera.keys[0];
+  // The window the camera shows is the frame scaled by the zoom, with its
+  // middle where the position says.
+  assert.equal(key.frame, 1);
+  assert.ok(Math.abs(key.x - 244.9954) < 0.01, `x is ${key.x}`);
+  assert.ok(Math.abs(key.y - 2170.9106) < 0.01, `y is ${key.y}`);
+  assert.ok(Math.abs(key.width - 1419.2832) < 0.01, `width is ${key.width}`);
+  assert.ok(Math.abs(key.height - 798.3468) < 0.01, `height is ${key.height}`);
+  assert.equal(key.rotation, 0);
+});
+
+test("a document without a camera has no camera in the project", () => {
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 7 }),
+    node(7, "Paper", { kind: "paper", type: 1584 }),
+  ]);
+  const project = clipToProject(document, []);
+  assert.equal(project.camera, null);
+});
+
 test("the frame of a cell comes from the track when the name disagrees", () => {
   // Clip Studio can put 3a after 4, where its name would say frame 3.
   const document = documentWith([

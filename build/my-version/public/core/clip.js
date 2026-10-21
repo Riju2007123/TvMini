@@ -333,11 +333,16 @@ export function clipToProject(document, layers, fallback = {}) {
     // The curve of the track is better evidence than the name, because a
     // cell can be held over several frames; the name is only the fallback
     // for a document whose curve cannot be read.
+    //
+    // A cell the track does not name is not on screen at all: the track says
+    // which cells of the folder are shown and when, and a cell that is not in
+    // it stays in the folder without a frame. Giving it the frame its name
+    // gives would show a cell Clip Studio Paint keeps in the dark.
     const runs = insideAnimation && !insideCell ? placement?.get(ownName) : undefined;
     const cellFrame = insideCell
       ? inheritedFrame
       : insideAnimation
-        ? (runs?.[0]?.frame ?? frameOfCellName(ownName))
+        ? (runs?.[0]?.frame ?? (placement ? null : frameOfCellName(ownName)))
         : null;
     const isCel = cellFrame !== null;
 
@@ -378,11 +383,17 @@ export function clipToProject(document, layers, fallback = {}) {
       // than one drawing. Without a track, the name of the cell is the only
       // evidence there is, and it holds a single frame. A layer inside a cell
       // follows the cell it belongs to.
+      //
+      // A cell of an animation folder that the track does not name stays in
+      // the folder without a drawing: the track decides which cells are on
+      // screen, and this one is not one of them.
       const spots = insideCell
         ? [{ frame: cellFrame, hold: inheritedHold ?? 1 }]
         : isCel
           ? (runs ?? [{ frame: cellFrame, hold: 1 }])
-          : [{ frame, hold: span }];
+          : insideAnimation
+            ? []
+            : [{ frame, hold: span }];
       for (const spot of spots) {
         const drawing = {
           at: spot.frame,

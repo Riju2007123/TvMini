@@ -153,6 +153,27 @@ test("readClipDocument reports native container capabilities without claiming ed
   });
 });
 
+test("the size of the canvas is the size of the document, not the size of the page", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "canvas.clip");
+    const png = encodePng(32, 24, solid(32, 24, [40, 80, 120]));
+    await writeClipFixture(target, {
+      width: 32,
+      height: 24,
+      png,
+      // A document can have a page that is smaller than its canvas: the page
+      // is the sheet of paper, the canvas the whole area the layers live on,
+      // and that is the area the camera and the layers work in.
+      project: { name: "Page", width: 1920, height: 1080, canvasWidth: 2064, canvasHeight: 3080 },
+      layers: [{ id: 3, name: "Ink", type: 1, mipmap: 1 }],
+    });
+
+    const document = await readClipDocument(target);
+    assert.equal(document.width, 2064);
+    assert.equal(document.height, 3080);
+  });
+});
+
 test("readClipDocument reads the layer metadata and leaves the folder rows out", async () => {
   await withTempDir(async (dir) => {
     const target = path.join(dir, "layers.clip");

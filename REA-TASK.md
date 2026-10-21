@@ -392,4 +392,47 @@ all of them, checked in Clip Studio Paint itself.
 
 **next step: 10 - keep the writer and the reader in step with every change of the format**
 
+## Step 10 - the reader, checked against Umoupen (done)
+
+Umoupen is the oracle for the reader. `tools/umou-capture.ps1` opens a
+document in it and takes a picture of the window, and `tools/reader-frames.mjs`
+renders the frames the reader sees, so the two can be compared side by side.
+
+Comparing `Animation3.clip` and `Animation.clip` found four things the reader
+got wrong. All four are fixed, and each fix is checked by a test.
+
+1. **A hidden folder hid nothing.** The renderer looked at the visibility of a
+   layer alone, so the cells of a hidden animation folder were painted anyway.
+   The picture of `Animation3.clip` showed three sketches on top of each other
+   where the document shows one, because two of its three animation folders are
+   hidden. The rule the timeline already used - a layer is painted when it and
+   every folder above it are shown - is now used by the renderer as well, and
+   the opacity of the folders counts into it too.
+
+2. **The camera was not read at all.** A camera is a track of kind 2005 whose
+   curves hold the centre, the position, the rotation and the zoom of the
+   view. The reader now reads them and builds the keys of the camera. The
+   window it works out is the frame scaled by the zoom, with its middle where
+   the position says; CONFIRMED against the red rectangle Umoupen draws on the
+   page, and against the frames of its keyframes (1, 22, 41).
+
+3. **The document was read at the size of the page, not the size of the
+   canvas.** A document has two sizes, and the layers live on the canvas. Only
+   `Animation.clip` of the corpus has a page that is smaller than its canvas,
+   and there the reader cut 800 pixels off the picture.
+
+4. **A layer's picture was put at the top left of the canvas.** The layer's
+   own offset says where it sits, and the picture has to go with it.
+
+One more thing the comparison settled: a cell that the track of its folder
+does not name is not on screen, and the reader used to give it the frame its
+name stands for.
+
+After the fixes the corpus round trips its cells again - 10 of 10 documents -
+and the picture of every document of the corpus is the picture Clip Studio
+Paint and Umoupen show.
+
+**next step: 11 - the camera of a document, written back out**
+
+
 

@@ -4,6 +4,7 @@ import { Buffer } from "../public/core/bytes.js";
 import {
   celPlacement,
   celPlacementFromKeys,
+  parseActionDocument,
   readCameraCurves,
   readCelCurve,
   readCelSequence,
@@ -24,6 +25,63 @@ function bodyOf(values) {
 }
 
 const POOL = ["null", "Byte", "Int32", "Param", "ImageCelName", "Tag", "1", "2", "3"];
+
+/**
+ * The pool a camera document uses: the types, then the names of the curves.
+ */
+const CAMERA_POOL = [
+  "null", "Byte", "Int32", "Int32[]", "Double[]", "FCurve", "Type", "Axis",
+  "Frame", "Value", "ImageCenter", "ImagePosition", "ImageRotation", "ImageScale",
+  "X", "Y",
+];
+
+/** A camera curve: the time of every key and the value of every key. */
+function cameraCurve(pool, kind, axis, frames, values) {
+  return buildCurveRecord({
+    pool,
+    kind,
+    axis,
+    fields: [
+      { name: "Frame", type: "Double[]", values: frames },
+      { name: "Value", type: "Double[]", values },
+    ],
+  });
+}
+
+test("the curves of a camera are read", () => {
+  const pool = CAMERA_POOL;
+  const body = Buffer.concat([
+    cameraCurve(pool, "ImageCenter", "X", [0, 42], [960, 960]),
+    cameraCurve(pool, "ImageCenter", "Y", [0, 42], [540, 540]),
+    cameraCurve(pool, "ImagePosition", "X", [0, 42], [954.637, 949.501]),
+    cameraCurve(pool, "ImagePosition", "Y", [0, 42], [2570.084, 1773.095]),
+    cameraCurve(pool, "ImageRotation", null, [0, 42], [0, 0]),
+    cameraCurve(pool, "ImageScale", null, [0, 42], [73.921, 73.831]),
+  ]);
+  const document = parseActionDocument(buildDocument({ pool, body }));
+
+  const camera = readCameraCurves(document);
+  assert.equal(camera.keys.length, 2);
+  assert.deepEqual(camera.keys[0], {
+    time: 0,
+    centreX: 960,
+    centreY: 540,
+    positionX: 954.637,
+    positionY: 2570.084,
+    rotation: 0,
+    scale: 73.921,
+  });
+  assert.equal(camera.keys[1].positionY, 1773.095);
+  assert.equal(camera.keys[1].scale, 73.831);
+});
+
+test("a document without a camera has no camera curves", () => {
+  const document = parseActionDocument(buildDocument({
+    pool: CAMERA_POOL,
+    body: cameraCurve(CAMERA_POOL, "ImageScale", null, [0], [100]),
+  }));
+  assert.equal(readCameraCurves(document), null);
+});
 
 test("the cell sequence is read from the pool indices of the body", () => {
   // 3 is ImageCelName, 6 to 8 are the cells, and the run is what counts.

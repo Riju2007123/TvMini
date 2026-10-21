@@ -377,6 +377,79 @@ still writes a static document: the bundled template has no `TimeLine` table
 at all, so an export carries the timing of the template rather than the timing
 of the project.
 
+## The picture of a document
+
+These are the rules the reader follows, each one measured against a document
+and checked against what Clip Studio Paint and Umoupen show.
+
+**The canvas is the size of the document.** A document has two sizes: the
+canvas (`Canvas.CanvasWidth` and `Canvas.CanvasHeight`) and the page
+(`Project.DefaultPageWidth` and `Project.DefaultPageHeight`). The page is the
+sheet of paper, the canvas the whole area the layers live on. The pictures of
+the layers are the size of the canvas and the camera works in canvas
+coordinates, so the canvas is the size the document is read at. Only one
+document of the corpus has a page that is smaller than its canvas:
+`Animation.clip` is 2064 by 3080 with a page of 2064 by 2280.
+
+**A layer's picture sits where the layer sits.** `Layer.LayerOffsetX` and
+`Layer.LayerOffsetY` say where the layer is on the canvas, and the picture is
+put there at its own size. The part that falls outside the canvas is cut away.
+`LayerRenderOffscrOffsetX` and `LayerRenderOffscrOffsetY` say where the
+layer's own buffer was drawn from, not where its picture is: adding them moves
+the picture of `Animation.clip` 400 pixels too high.
+
+**A hidden folder hides the layers inside it.** `Layer.LayerVisibility` is
+read for every layer, and a layer inside a folder that is hidden is not
+painted. Without that rule the picture of `Animation3.clip` shows three
+sketches on top of each other where the document shows one: two of the three
+animation folders of that document are hidden.
+
+**The opacity of the folders above a layer counts into it.** The opacity of a
+layer is its own times the opacity of every folder above it.
+
+**A cell the track does not name is not on screen.** The track of an animation
+folder says which of its cells are shown and when. A cell that is in the folder
+but not in the track stays in the folder without a frame, and is not painted.
+
+### The camera
+
+A camera is a track of kind **2005**, and it hangs on the camera layer (a layer
+of type 512). Its mixer carries six curves:
+
+| Curve | Axis | What it says |
+|---|---|---|
+| `ImageCenter` | X and Y | the half width and the half height of the frame the camera looks through |
+| `ImagePosition` | X and Y | where the middle of that frame sits on the canvas |
+| `ImageRotation` | - | how far the camera is turned, in degrees |
+| `ImageScale` | - | how much of the frame is shown, in percent |
+
+Every curve carries the times of its keys (`Frame`) and the value of every key
+(`Value`), and the keys of the camera are the rows all of them share. The times
+are the 60 Hz ticks of the document, so they become frames with the frame rate
+of the document, the same way the cells do.
+
+The window the camera shows is the frame scaled by the zoom, with its middle
+where the position says:
+
+```
+x = positionX - centreX * scale
+y = positionY - centreY * scale
+width  = 2 * centreX * scale
+height = 2 * centreY * scale
+```
+
+CONFIRMED against `Animation.clip`: its camera says a frame of 1920 by 1080
+around the point (954.6, 2570) at 73.9 percent, which is the window 245.0,
+2170.9 of 1419.3 by 798.3. Umoupen draws that window as the red rectangle on
+the page, and the rectangle measured on its screen is 1415 by 804 canvas pixels
+with its top edge at 2161 - the same window to within a pixel. The keys of the
+camera are on frames 1, 22 and 41, and Umoupen shows its keyframes on frames
+1 and 22.
+
+The camera curves carry no easing of their own, so the camera travels at a
+constant speed between two keys (INFERRED: the easing of a camera lives in
+the blend records of the document, which are not read yet).
+
 ## The animation
 
 `TimeLine` holds the frame rate and the frame range. `Track` holds the

@@ -49,9 +49,11 @@ export async function writeClipFixture(
         project.height ?? 0,
       );
       db.exec("CREATE TABLE Canvas (CanvasWidth INTEGER, CanvasHeight INTEGER)");
+      // A document can have a canvas that is larger than its page: the page is
+      // the sheet of paper, the canvas the whole area the layers live on.
       db.prepare("INSERT INTO Canvas VALUES (?, ?)").run(
-        project.width ?? 0,
-        project.height ?? 0,
+        project.canvasWidth ?? project.width ?? 0,
+        project.canvasHeight ?? project.height ?? 0,
       );
     }
 

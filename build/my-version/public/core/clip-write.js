@@ -941,7 +941,9 @@ function animationRows(tree) {
     for (const child of node.children) parentOf.set(child, index);
   });
 
-  // A group whose children are all cells is a row of cells.
+  // A group whose children are cells is a row of cells. A folder may also
+  // hold layers that are not cells of it - a document can hold a cell that
+  // its track does not show - and those stay ordinary layers of the folder.
   const candidates = [];
   for (let index = 0; index < tree.nodes.length; index += 1) {
     const node = tree.nodes[index];
@@ -949,10 +951,7 @@ function animationRows(tree) {
     const cells = [];
     for (const child of node.children) {
       const childLayer = tree.nodes[child].layer;
-      if (childLayer.preBehavior !== "none") {
-        cells.length = 0;
-        break;
-      }
+      if (childLayer.preBehavior !== "none") continue;
       const at = frameOf(child);
       if (at === null) continue;
       const drawing = childLayer.drawings?.[0] ?? null;
