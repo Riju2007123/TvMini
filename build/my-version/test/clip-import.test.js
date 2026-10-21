@@ -149,6 +149,35 @@ test("a cell that holds other layers keeps the frame of the cell", () => {
   }
 });
 
+test("a layer inside a cell lasts as long as the cell, not the whole animation", () => {
+  // 17 frames, and the cell sits on frame 5. The layer inside the cell used to
+  // get the length of the whole animation, so its drawing reached frame 21,
+  // past the end of the timeline.
+  const document = documentWith([
+    node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
+    node(3, "Animation folder", {
+      kind: "folder",
+      folder: true,
+      animationFolder: true,
+      firstChildIndex: 4,
+    }),
+    node(4, "5", { kind: "folder", folder: true, firstChildIndex: 5, nextIndex: 0 }),
+    node(5, "Layer 1", { nextIndex: 0 }),
+  ], { endFrame: 16 });
+
+  const project = clipToProject(document, []);
+  const cell = project.layers.find((layer) => layer.name === "5");
+  const inner = project.layers.find((layer) => layer.name === "Layer 1");
+
+  assert.deepEqual(cell.drawings, [], "a cell folder holds no drawing of its own");
+  assert.equal(inner.drawings[0].at, 5);
+  assert.equal(inner.drawings[0].hold, 1, "the layer lasts as long as its cell");
+  assert.ok(
+    inner.drawings[0].at + inner.drawings[0].hold - 1 <= 17,
+    "the drawing stays inside the timeline",
+  );
+});
+
 test("a layer outside an animation folder shows the whole time", () => {
   const document = documentWith([
     node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),

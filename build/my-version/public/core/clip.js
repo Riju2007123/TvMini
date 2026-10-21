@@ -274,10 +274,17 @@ export function clipToProject(document, layers, fallback = {}) {
   /**
    * Build one layer of the document.
    *
-   * `inheritedFrame` and `inheritedName` belong to the cell the layer sits
-   * in, when the cell holds more than one layer.
+   * `inheritedFrame`, `inheritedName` and `inheritedHold` belong to the cell
+   * the layer sits in, when the cell holds more than one layer.
    */
-  const buildLayer = (node, insideAnimation, inheritedFrame, inheritedName, placement) => {
+  const buildLayer = (
+    node,
+    insideAnimation,
+    inheritedFrame,
+    inheritedName,
+    placement,
+    inheritedHold,
+  ) => {
     const folder = Boolean(node.folder);
     const ownName = node.name || `Layer ${node.id}`;
 
@@ -300,6 +307,12 @@ export function clipToProject(document, layers, fallback = {}) {
     // that is not a cell is on the first frame and shows from there on.
     const frame = isCel ? cellFrame : (inheritedFrame ?? startFrame);
     const cellName = inheritedName ?? (isCel ? ownName : null);
+
+    // A layer inside a cell only shows while the cell is on screen, so it
+    // lasts as long as the cell does. Giving it the length of the whole
+    // animation would push its drawing past the end of the timeline (a layer
+    // of the cell on frame 5 of a 17 frame file would end on frame 21).
+    const span = inheritedHold ?? hold;
 
     const layer = {
       // The id of the row in the Clip Studio document. It is used to find
@@ -328,7 +341,7 @@ export function clipToProject(document, layers, fallback = {}) {
       // evidence there is, and it holds a single frame.
       const spots = isCel
         ? (runs ?? [{ frame: cellFrame, hold: 1 }])
-        : [{ frame, hold }];
+        : [{ frame, hold: span }];
       for (const spot of spots) {
         const drawing = {
           at: spot.frame,
@@ -365,6 +378,7 @@ export function clipToProject(document, layers, fallback = {}) {
         isCel ? frame : inheritedFrame,
         isCel ? cellName : inheritedName,
         childPlacement,
+        isCel ? (runs?.[0]?.hold ?? 1) : inheritedHold,
       ),
     );
     if (folder) layer.children = children;
