@@ -558,6 +558,97 @@ looking at the canvas in Clip Studio Paint gave red `0x11`, green `0x00`
 and blue `0x00`, which says the top byte of each word is the channel and
 nothing else.
 
+## How another program reads all of this
+
+A commercial program that reads `.clip` and `.tvpp` was measured with the
+same method, and what it says about the format is written down here. The
+program is closed and its code is not used; what follows is the *shape* of
+the format as that program understands it, which is a fact about the format
+and not about the program.
+
+**The queries it runs** are the clearest statement of what a reader needs.
+It reads the layer list with one query that joins `Layer` to `Mipmap`,
+`MipmapInfo` and `Offscreen`, and takes:
+
+```
+MainId, LayerName, LayerOpacity, LayerComposite, LayerVisibility,
+LayerFolder, LayerNextIndex, LayerFirstChildIndex, LayerOffsetX,
+LayerOffsetY, LayerRenderOffscrOffsetX, LayerRenderOffscrOffsetY,
+the offscreen's Attribute, the external id, AnimationFolder, LayerUuid,
+LayerType, LayerRenderMipmap, LayerClip
+```
+
+The external id is taken as `substr(BlockData, 9, 32)`, which is the
+thirty-two hex digits that follow the eight-letter prefix — the same thing
+this application works out by hand.
+
+It reads the mask of a layer with a second query of the same shape, over
+`LayerLayerMaskMipmap`, together with `LayerMasking`, `LayerMaskOffsetX`,
+`LayerMaskOffsetY`, `LayerMaskOffscrOffsetX` and `LayerMaskOffscrOffsetY`.
+So a mask is an ordinary mipmap chain of its own, and it is **not** the
+chain the layer is painted with.
+
+It reads the animation with
+
+```
+SELECT MainId, FirstTrack, FrameRate, StartFrame, EndFrame, TimeLineName FROM TimeLine
+SELECT MainId, TrackNextIndex, TrackKind, TrackActionMixerSize,
+       the external id of the mixer, LayerUuidWithTrack FROM Track
+```
+
+so the mixer is reached by the same external-id mechanism as the pixels.
+
+**The model of an animation folder is not what the names suggest.** The
+program does not read a cell's name to learn its frame. It reads a
+*folder* that holds *strips*, and a strip is a range of time that holds
+*keys*, and a key is a frame with a tag. Its own words for these are
+"strip", "key" and "cel":
+
+| What it calls it | What it says about it |
+|---|---|
+| a **cel** | a row with a checksum and a size: `row=%d crc=%08x size=%dx%d` |
+| a **strip** | a range of time in a folder: `strip=%d time=%d..%d source=%.6g..%.6g keys=%d` |
+| a **key** | a frame and a tag: `key=%d frame=%d tag='%s'` |
+| a **component** | a part of a layer that is either raster or vector |
+
+So the cell names `1`, `1a`, `2` that appear in the layer table are the
+*names* of the cels, and the frame a cel sits on comes from the timing
+that goes with it, not from its name. This application reads the name
+instead, which is why its cells land on the wrong frame.
+
+**A layer has a canvas of its own.** The program calls it a "fixed
+canvas" and keeps an "origin" with it, and it *refuses* a layer whose
+origin is not zero:
+
+```
+raster layer '%s' has invalid fixed canvas %dx%d origin=%d,%d expected=%dx%d origin=0,0
+```
+
+and it says the same about the paper and the camera:
+
+```
+%s paper=%dx%d camera=%dx%d offset=%.0f,%.0f
+```
+
+The paper of the document and the window the camera frames are two
+different sizes, and there is an offset between them.
+
+**A cel of an animation may be raster or vector**, and a component that
+mixes the two is split:
+
+```
+folder='%s' split mixed component=%d into raster/vector
+```
+
+This matches what this application found the hard way: a vector layer
+keeps no raster at all, and the raster of a vector object is a separate
+offscreen that is reached by the layer rather than by the mipmap chain.
+
+**What is still not known.** The program does not say how the mixer body
+is laid out, so the part that is missing here is still missing. What it
+does say is that the answer is a tree of strips, keys and cels rather
+than a flat list of cells, and that a cel's frame comes from the timing.
+
 ## How CSP writes a file
 
 Putting it together, the method CSP uses is:
