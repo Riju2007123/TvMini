@@ -58,12 +58,24 @@ there is a **TAR archive** with five files in it:
 catalog.zip                 a small picture for the list of materials
 info.zip                    a small picture
 data/material_0.layer       the picture of the tip itself
-thumbnail/thumbnail.png     a small picture of the tip
+thumbnail/thumbnail.png     a plain picture of the tip
 icedata/layerData.xml       what the material is
 ```
 
 The names are a little odd (`catalog.zip` holds a picture, not a ZIP file),
 but this is what Clip Studio Paint writes.
+
+**The tip of the brush is the picture in `thumbnail/thumbnail.png`.** The
+picture in `data/material_0.layer` is written by Clip Studio Paint in a way
+that cannot be read: its data does not fit the checks of the PNG format, and
+decoding it gives a picture with nothing in it. The thumbnail is a plain
+picture of the same tip, and it is the one that is used.
+
+A brush can have more than one material: a brush that has a grain of paper
+as well keeps that in another material. The material that holds the tip is
+the one whose `icedata/layerData.xml` says `BrushPattern`; the others say
+`PaperTexture` or something of their own. The thumbnail with the most paint
+in it is the tip.
 
 The XML says what the material is. A brush material is marked like this:
 
@@ -80,9 +92,25 @@ The XML says what the material is. A brush material is marked like this:
 ## Reading a brush
 
 `public/core/sut.js` opens the database, asks for the name and the settings,
-and then looks for a picture: first in the material files, and then in the
-`TextureImage` column. The picture is found by looking for the PNG inside the
+and then looks for the picture: the thumbnail of the material that holds the
+shape of a brush. The picture is found by looking for the PNG inside the
 file, so a brush works even when the container around it is not understood.
+
+The settings of the brush are kept as well: its size, how strong it paints,
+how much paint one dab leaves, how hard the edge of the tip is and the rest.
+TVMini can use the size and the strength; the rest describe how Clip Studio
+Paint draws the brush, which a picture of a tip cannot say.
+
+## Drawing with a brush that has a picture
+
+A brush with a picture paints that picture along the stroke, the way Clip
+Studio Paint paints the shape of a brush. The picture is stamped a little
+apart along the path, and it keeps its own shape: it is as tall as the
+brush is wide, and its width follows from that, so a brush that is not round
+does not become round.
+
+The picture is only the shape of the tip, so the colour of the stroke is
+mixed into it before it is painted.
 
 ## Writing a brush
 

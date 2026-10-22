@@ -57,6 +57,7 @@ class Devtools {
   constructor(url) {
     this.next = 1;
     this.pending = new Map();
+    this.errors = [];
     this.socket = new WebSocket(url);
     this.ready = new Promise((resolve, reject) => {
       this.socket.addEventListener("open", resolve);
@@ -64,6 +65,14 @@ class Devtools {
     });
     this.socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
+      if (message.method === "Runtime.exceptionThrown") {
+        this.errors.push(
+          message.params.exceptionDetails.exception?.description ??
+            message.params.exceptionDetails.text ??
+            "something went wrong",
+        );
+        return;
+      }
       const entry = this.pending.get(message.id);
       if (!entry) return;
       this.pending.delete(message.id);
@@ -133,6 +142,54 @@ const box = await devtools.run(
   '(() => { const r = document.querySelector("#canvas").getBoundingClientRect();' +
     " return { x: r.left, y: r.top, w: r.width, h: r.height }; })()",
 );
+
+/** Draw a stroke on the stage and say how much ink it left. */
+async function drawStroke() {
+  const start = { x: box.x + 120, y: box.y + 120 };
+  await devtools.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  for (let step = 1; step <= 12; step += 1) {
+    await devtools.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: start.x + step * 12,
+      y: start.y + step * 3,
+      button: "left",
+      buttons: 1,
+    });
+  }
+  await devtools.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: start.x + 144,
+    y: start.y + 36,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(400);
+  return devtools.run(
+    '(() => { const canvas = document.querySelector("#canvas");' +
+      " const ctx = canvas.getContext(\"2d\");" +
+      " const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;" +
+      " let soft = 0, hard = 0;" +
+      " for (let index = 0; index < data.length; index += 4) {" +
+      "   const value = data[index];" +
+      "   if (value < 250 && value > 5) soft += 1;" +
+      "   if (value <= 5) hard += 1;" +
+      " }" +
+      ' return { soft, hard, status: document.querySelector("#status")?.textContent ?? "" }; })()',
+  );
+}
+
+// A stroke with the round tip, to see that the stage paints at all.
+await devtools.run('document.querySelector("#width").value = "20"; true');
+const round = await drawStroke();
+console.log(`a stroke with the round tip: ${JSON.stringify(round)}`);
 
 /** Where the shape of the brush is on the screen, and where the pointer is. */
 async function tipAt(x, y) {
@@ -249,12 +306,86 @@ const after = await devtools.run(
 );
 console.log(`after bringing a brush in: ${JSON.stringify(after)}`);
 
+/* ------------------------------------- a brush of Clip Studio Paint itself */
+
+// A brush that Clip Studio Paint wrote, so the shape of the tip and the
+// settings of the brush can be checked.
+const cspBrush = process.env.TVMINI_CSP_BRUSH ?? "C:\\Users\\MK\\Documents\\Real G-Pen 2.sut";
+if (fs.existsSync(cspBrush)) {
+  await devtools.send("DOM.setFileInputFiles", {
+    files: [cspBrush],
+    nodeId: inputNode.nodeId,
+  });
+  await sleep(400);
+  await devtools.run(
+    '(() => { const input = document.querySelector("#brushDropInput");' +
+      " input.dispatchEvent(new Event(\"change\", { bubbles: true })); return true; })()",
+  );
+  await sleep(900);
+
+  const csp = await devtools.run(
+    '(() => ({ names: [...document.querySelectorAll("#brushImported .brush-card-name")].map((n) => n.textContent),' +
+      ' sizes: [...document.querySelectorAll("#brushImported .brush-card-size")].map((n) => n.textContent),' +
+      ' width: document.querySelector("#width")?.value,' +
+      ' opacity: document.querySelector("#strokeOpacity")?.value }))()',
+  );
+  console.log(`a brush of Clip Studio Paint: ${JSON.stringify(csp)}`);
+
+  // A stroke made with it, and a look at the ink: the shape of the tip of a
+  // pen has a soft edge, where the round tip has a hard one. The panel is
+  // closed first, because it lies over the stage.
+  await devtools.run(
+    '(() => { const close = document.querySelector("#brushDialog .overlay-close");' +
+      " if (close) close.click(); return true; })()",
+  );
+  await sleep(300);
+  await devtools.run('document.querySelector("#width").value = "30"; true');
+  const ink = await drawStroke();
+  console.log(`the ink of the stroke: ${JSON.stringify(ink)}`);
+  console.log(
+    ink.soft > 0
+      ? "  the ink has a soft edge, so the shape of the tip of the brush was painted"
+      : "  the ink has a hard edge, so the shape of the tip was NOT painted",
+  );
+  const shot = await devtools.send("Page.captureScreenshot", { format: "png" });
+  fs.writeFileSync(path.join(OUT, "stage.png"), Buffer.from(shot.data, "base64"));
+  console.log(`a picture of the stage: ${path.join(OUT, "stage.png")}`);
+
+  // The tinting and the stamping on their own, so it is clear which part
+  // of the brush painting is at fault.
+  const probe = await devtools.run(
+    '(() => { const canvas = document.querySelector("#canvas");' +
+      " const ctx = canvas.getContext(\"2d\");" +
+      ' const p = document.createElement("canvas"); p.width = 8; p.height = 8;' +
+      ' const pc = p.getContext("2d"); pc.fillStyle = "#ff0000"; pc.fillRect(0, 0, 8, 8);' +
+      ' const t = document.createElement("canvas"); t.width = 8; t.height = 8;' +
+      ' const tc = t.getContext("2d"); tc.drawImage(p, 0, 0);' +
+      ' tc.globalCompositeOperation = "source-in"; tc.fillStyle = "#000000";' +
+      " tc.fillRect(0, 0, 8, 8);" +
+      " const tint = [...tc.getImageData(0, 0, 1, 1).data].join(\",\");" +
+      " ctx.drawImage(t, 200, 200, 30, 30);" +
+      ' const painted = [...ctx.getImageData(205, 205, 1, 1).data].join(",");' +
+      ' ctx.fillStyle = "#00ff00"; ctx.fillRect(210, 210, 20, 20);' +
+      ' const filled = [...ctx.getImageData(215, 215, 1, 1).data].join(",");' +
+      " const matrix = ctx.getTransform();" +
+      ' return { tint, painted, filled, alpha: ctx.globalAlpha,' +
+      ' mode: ctx.globalCompositeOperation, scale: matrix.a, offsetX: matrix.e }; })()',
+  );
+  console.log(`the tint and the stamp on their own: ${JSON.stringify(probe)}`);
+  console.log(
+    ink.soft > 0
+      ? "  the ink has a soft edge, so the shape of the tip of the brush was painted"
+      : "  the ink has a hard edge, so the shape of the tip was NOT painted",
+  );
+} else {
+  console.log(`no brush of Clip Studio Paint at ${cspBrush}`);
+}
+
 /* ------------------------------------------------------- writing a brush out */
 
 const folder = path.join(OUT, "files");
 fs.mkdirSync(folder, { recursive: true });
 const written = path.join(folder, "written-out.sut");
-
 const clicked = await devtools.run(
   '(() => { const button = document.querySelector("#brushImported .brush-card-item button[title*=\\"Clip Studio Paint brush\\"]");' +
     " if (!button) return false; button.click(); return true; })()",

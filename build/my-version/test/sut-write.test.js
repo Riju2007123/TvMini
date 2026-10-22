@@ -148,3 +148,57 @@ test("the project keeps the picture of a brush", () => {
   }];
   assert.equal(project.layers[0].drawings[0].brush.data, png.toString("base64"));
 });
+
+test("the tip of a brush is found in the material of the brush", async () => {
+  const png = stampPng(8);
+  // The material of a brush is a TAR archive, and the tip of the brush is
+  // the thumbnail in it.
+  const material = writeTar([
+    { name: "catalog.zip", data: png },
+    { name: "info.zip", data: png },
+    { name: "data/material_0.layer", data: Buffer.from("a picture that cannot be read") },
+    { name: "thumbnail/thumbnail.png", data: png },
+    {
+      name: "icedata/layerData.xml",
+      data: Buffer.from("<datalist key=\"systemtag\"><data>BrushPattern</data></datalist>"),
+    },
+  ]);
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const fs = await import("node:fs/promises");
+  const file = path.join(os.tmpdir(), `tvmini-sut-tip-${process.pid}.sut`);
+  const db = new DatabaseSync(file);
+  db.exec(
+    "CREATE TABLE Node (NodeName TEXT);" +
+      "CREATE TABLE Variant (VariantID INTEGER, BrushSize REAL, BrushSizeUnit INTEGER," +
+      " Opacity INTEGER, BrushFlow INTEGER, BrushHardness INTEGER, BrushThickness INTEGER," +
+      " BrushInterval INTEGER, TextureScale2 REAL, TextureRotate REAL, TextureImage BLOB);" +
+      "CREATE TABLE MaterialFile (_PW_ID INTEGER, InstallFolder INTEGER, OriginalPath TEXT," +
+      " OldMaterial INTEGER, FileData BLOB, CatalogPath TEXT, MaterialUuid TEXT);",
+  );
+  db.prepare("INSERT INTO Node VALUES (?)").run("a brush of Clip Studio Paint");
+  db.prepare(
+    "INSERT INTO Variant (VariantID, BrushSize, BrushSizeUnit, Opacity, BrushFlow," +
+      " BrushHardness, BrushThickness, BrushInterval, TextureScale2, TextureRotate)" +
+      " VALUES (1, 42, 0, 77, 60, 50, 90, 10, 100, 0)",
+  ).run();
+  db.prepare("INSERT INTO MaterialFile VALUES (1, 0, 'path', 0, ?, 'path', '')").run(material);
+  db.close();
+
+  try {
+    const brush = await readSutBrush(await fs.readFile(file));
+    assert.equal(brush.name, "a brush of Clip Studio Paint");
+    assert.equal(brush.texture.width, 8, "the tip of the brush should be found");
+    assert.equal(brush.texture.height, 8);
+    // The settings of the brush are kept, so that it does not lose them.
+    assert.equal(brush.size, 42);
+    assert.equal(brush.opacity, 77);
+    assert.equal(brush.flow, 60);
+    assert.equal(brush.hardness, 50);
+    assert.equal(brush.thickness, 90);
+  } finally {
+    await fs.rm(file, { force: true });
+  }
+});

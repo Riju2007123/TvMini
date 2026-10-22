@@ -72,3 +72,36 @@ export function brushImageFromBytes(input) {
   if (!png) return null;
   return { data: png.toString("base64"), bytes: png.length };
 }
+
+/**
+ * Every picture in a file, the biggest one first.
+ *
+ * A file can hold a small picture of the shape and the shape itself, so the
+ * biggest one is the one that is wanted.
+ */
+export function brushPngsFromBytes(input) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  const found = [];
+  // A file can hold more than one picture, and the signature can turn up
+  // inside compressed data, so every one of them is tried.
+  let index = findPngStart(bytes, 0);
+  while (index !== -1) {
+    if (bytes.toString("ascii", index + 12, index + 16) === "IHDR") {
+      const end = findPngEnd(bytes, index);
+      if (end > 0) {
+        found.push(bytes.subarray(index, end));
+        index = findPngStart(bytes, end);
+        continue;
+      }
+    }
+    index = findPngStart(bytes, index + 1);
+  }
+  return found.sort((a, b) => b.length - a.length);
+}
+
+/**
+ * The biggest picture in a file, or null when the file holds none.
+ */
+export function biggestBrushPngFromBytes(input) {
+  return brushPngsFromBytes(input)[0] ?? null;
+}

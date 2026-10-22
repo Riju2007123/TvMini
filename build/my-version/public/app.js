@@ -4,6 +4,7 @@ import { detectBackend } from "./core/platform.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint, strokePathGroups } from "./core/paint.js";
+import { smoothStroke, smoothTolerance } from "./core/smooth.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -101,6 +102,8 @@ const fillToolButton = document.getElementById("fillTool");
 const cameraToolButton = document.getElementById("cameraTool");
 const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
+const smoothInput = document.getElementById("smooth");
+const smoothValue = document.getElementById("smoothValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
 const strokeBlendSelect = document.getElementById("strokeBlend");
 const cameraAddButton = document.getElementById("cameraAdd");
@@ -234,6 +237,9 @@ const state = {
   // Line smoothing while drawing (0 = off, up to 10 = very smooth).
   stabilizer: 0,
   smoothedPoint: null,
+  // The smoothing of the line itself: the points that do not bend the line
+  // are taken away, the way the pencil of Flash does it (0 = off).
+  smooth: 20,
   homeDir: ".",
   playing: false,
   playTimer: null,
@@ -2107,15 +2113,16 @@ function drawBrushPreview(surface, brush) {
   if (picture && picture.complete && picture.naturalWidth > 0) {
     // The brush with a picture paints that picture along the stroke, and it
     // keeps its own shape.
+    const shape = tintedTip(brush, colorInput.value) ?? picture;
     const radius = size / 2;
     const height = radius * 2;
-    const width = height * (picture.naturalWidth / Math.max(1, picture.naturalHeight));
+    const width = height * (shape.width / Math.max(1, shape.height));
     for (let step = 0; step <= 40; step += 1) {
       const at = step / 40;
       const x = 8 + (width - 16) * at;
       const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
       context.globalAlpha = 0.85;
-      context.drawImage(picture, x - width / 2, y - height / 2, width, height);
+      context.drawImage(shape, x - width / 2, y - height / 2, width, height);
     }
     context.globalAlpha = 1;
     return;
@@ -2310,12 +2317,14 @@ function drawBrushTip(target = overlayCtx) {
   if (brush) {
     const image = tipImage(brush);
     if (image.complete && image.naturalWidth > 0) {
+      // The shape of the tip is shown in the colour the brush paints with.
+      const shape = tintedTip(brush, colorInput.value) ?? image;
       // The picture of the brush keeps its own shape: it is as tall as the
       // brush is wide, and its width follows from that.
       const height = radius * 2;
-      const width = height * (image.naturalWidth / Math.max(1, image.naturalHeight));
+      const width = height * (shape.width / Math.max(1, shape.height));
       target.globalAlpha = 0.55;
-      target.drawImage(image, x - width / 2, y - height / 2, width, height);
+      target.drawImage(shape, x - width / 2, y - height / 2, width, height);
     }
   } else {
     // A light ring under a dark one, so the shape of the brush is seen on
@@ -4541,6 +4550,10 @@ canvas.addEventListener("pointermove", (event) => {
     const last = state.drawing.points[state.drawing.points.length - 1];
     if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) continue;
     state.drawing.points.push(smoothed);
+    // The smoothing takes the tremble out of the line: the points that do
+    // not bend the line are taken away, the way the pencil of Flash does
+    // it. The line that is shown is then the line that will be left.
+    smoothStroke(state.drawing.points, smoothTolerance(state.smooth));
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
@@ -4752,6 +4765,9 @@ function loadSettings() {
         data.stabilizerScale === 100 ? data.stabilizer : data.stabilizer * 10;
       state.stabilizer = Math.max(0, Math.min(100, Math.round(remembered)));
     }
+    if (Number.isFinite(data.smooth)) {
+      state.smooth = Math.max(0, Math.min(100, Math.round(data.smooth)));
+    }
     state.compactTimeline = data.compactTimeline !== false;
   } catch {
     // A blocked or broken store only loses the remembered preferences.
@@ -4769,6 +4785,7 @@ function saveSettings() {
         playSpeed: state.playSpeed,
         stabilizer: state.stabilizer,
         stabilizerScale: 100,
+        smooth: state.smooth,
         compactTimeline: state.compactTimeline,
         onion: { ...state.onion },
       }),
@@ -4787,6 +4804,8 @@ function syncSettingsUI() {
   speedInput.value = String(state.playSpeed);
   stabilizerInput.value = String(state.stabilizer);
   stabilizerValue.textContent = String(state.stabilizer);
+  smoothInput.value = String(state.smooth);
+  smoothValue.textContent = String(state.smooth);
   onionInput.checked = state.onion.enabled;
   onionBeforeInput.value = String(state.onion.before);
   onionAfterInput.value = String(state.onion.after);
@@ -4828,6 +4847,18 @@ stabilizerInput.addEventListener("input", () => {
   setStatus(value === 0 ? "Stabiliser off" : `Stabiliser ${value} — new strokes get smoother`);
 });
 stabilizerInput.addEventListener("change", saveSettings);
+
+smoothInput.addEventListener("input", () => {
+  const value = Math.max(0, Math.min(100, Math.round(Number(smoothInput.value))));
+  state.smooth = value;
+  smoothValue.textContent = String(value);
+  setStatus(
+    value === 0
+      ? "Smoothing off — the line is the line the hand made"
+      : `Smoothing ${value} — the tremble is taken out of the line`,
+  );
+});
+smoothInput.addEventListener("change", saveSettings);
 
 clearButton.addEventListener("click", clearDrawing);
 undoButton.addEventListener("click", undo);

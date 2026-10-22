@@ -91,18 +91,21 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
  * Paint the brush image instead of a disc.
  *
  * The image is fitted to the size of the brush, the way Clip Studio Paint
- * fits a brush texture, and its alpha is the coverage of every pixel.
+ * fits a brush texture, and its alpha is the coverage of every pixel. The
+ * image keeps its own shape: it is as tall as the brush is wide, and its
+ * width follows from that.
  */
 function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
-  const size = Math.max(1, radius * 2);
-  const x0 = Math.max(0, Math.floor(cx - radius));
-  const x1 = Math.min(width - 1, Math.ceil(cx + radius));
-  const y0 = Math.max(0, Math.floor(cy - radius));
-  const y1 = Math.min(height - 1, Math.ceil(cy + radius));
-  const stepX = brush.width / size;
-  const stepY = brush.height / size;
-  const left = cx - radius;
-  const top = cy - radius;
+  const boxHeight = Math.max(1, radius * 2);
+  const boxWidth = boxHeight * (brush.width / Math.max(1, brush.height));
+  const x0 = Math.max(0, Math.floor(cx - boxWidth / 2));
+  const x1 = Math.min(width - 1, Math.ceil(cx + boxWidth / 2));
+  const y0 = Math.max(0, Math.floor(cy - boxHeight / 2));
+  const y1 = Math.min(height - 1, Math.ceil(cy + boxHeight / 2));
+  const stepX = brush.width / boxWidth;
+  const stepY = brush.height / boxHeight;
+  const left = cx - boxWidth / 2;
+  const top = cy - boxHeight / 2;
 
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
