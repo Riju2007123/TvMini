@@ -220,7 +220,10 @@ export function clipToProject(document, layers, fallback = {}) {
 
   const timeline = document.timeline ?? {};
   const startFrame = Math.max(1, Number(timeline.startFrame ?? 0) + 1);
-  const endFrame = Math.max(startFrame, Number(timeline.endFrame ?? 0) + 1);
+  // `EndFrame` is the number of frames after `StartFrame`, so with a start of
+  // 0 it is also the 1-based number of the last frame. Every real document
+  // checked agrees: the end of a track's clip, in frames, equals it.
+  const endFrame = Math.max(startFrame, Number(timeline.endFrame ?? 0));
   const hold = endFrame - startFrame + 1;
 
   const rasterById = new Map((layers ?? []).map((layer) => [Number(layer.id), layer]));

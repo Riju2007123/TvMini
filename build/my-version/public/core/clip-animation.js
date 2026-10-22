@@ -372,13 +372,22 @@ export function celPlacementFromKeys(
   const spots = [...byFrame].map(([frame, name]) => ({ frame, name })).sort((a, b) => a.frame - b.frame);
   if (!spots.length) return placement;
 
-  const last = Number.isFinite(endTick) ? frameOf(endTick) : Number(endFrame);
-  const stop = Math.max(spots[spots.length - 1].frame, Number.isFinite(last) ? last : endFrame);
+  // The end of a track is where it stops, not its last frame: a track that
+  // runs from tick 0 to tick 300 at 24 frames per second covers 120 frames,
+  // and the frame it ends on is the first one that is not shown. `endFrame`
+  // is the last frame that is shown, so one is added to make it a boundary.
+  //
+  // A track can also run on past the end of the timeline (a clip is often
+  // longer than the frames the document plays), and what lies beyond the last
+  // frame is never shown, so the hold stops at the timeline.
+  const timelineStop = Number(endFrame) + 1;
+  const boundary = Number.isFinite(endTick) ? Math.min(frameOf(endTick), timelineStop) : timelineStop;
+  const stop = Math.max(spots[spots.length - 1].frame + 1, boundary);
 
   for (let index = 0; index < spots.length; index += 1) {
     const spot = spots[index];
     const next = spots[index + 1];
-    const until = next ? next.frame : stop + 1;
+    const until = next ? next.frame : stop;
     const hold = Math.max(1, until - spot.frame);
     if (!placement.has(spot.name)) placement.set(spot.name, []);
     placement.get(spot.name).push({ frame: spot.frame, hold });

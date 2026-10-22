@@ -435,4 +435,60 @@ Paint and Umoupen show.
 **next step: 11 - the camera of a document, written back out**
 
 
+## Step 11 - the frames of a document: a track stops at a boundary (done)
+
+The exported animation opened in Clip Studio Paint but did not play the way
+the timeline said it would: the cell that was on screen was one frame early,
+and the last cell of every row ran one frame too long. Three numbers were
+wrong, and all three are now measured against the documents of the corpus
+(`H:\a`: `Animation2`, `Animation5`, `Animation15`, `bleach (2)`).
+
+1. **`TimeLine.EndFrame` is a count of frames.** With `StartFrame` 0 it is
+   also the 1-based number of the last frame: `Animation15` has 120 and its
+   track covers 120 frames, `Animation5` has 25, `bleach (2)` has 101 and
+   `Animation2` has 18. The reader added one to it, so every document came
+   in one frame too long.
+
+2. **The `End` of a track is a boundary, not a frame.** The frame a track
+   ends on is the first frame that is *not* shown. The reader held the last
+   cell up to that frame instead of up to the frame before it, and the
+   writer wrote the boundary one frame too early.
+
+3. **A track can run on past the end of the timeline.** `Animation5` has a
+   track that ends at frame 127 while its timeline holds 25 frames. What
+   lies beyond the last frame is never shown, so the hold of the last cell
+   stops at the timeline.
+
+With those fixed, a document of the corpus that is imported, written back
+and imported again comes back **the same**: the same canvas, the same
+timeline, the same layers in the same tree, and every cell on the same frame
+for the same number of frames - 0 differences on all four documents. The
+pictures of the cells are byte for byte the same, and the track of the cells
+holds the same keys at the same ticks as the document Clip Studio Paint
+wrote.
+
+Checked in Clip Studio Paint: the exported animation opens, it plays, and
+the cell on the screen is the cell the timeline says. The frame counter
+reads `1 / 1 / 25` at the first frame and the cell `1` is the one that is
+shown; at frame 22 the cell `8` is shown, which is where its key sits.
+
+Two more things came out of the comparison with Clip Studio Paint, and both
+are fixed:
+
+- **The writer started from the blank document, which is an illustration.**
+  A document with an animation says so (`DefaultPageSettingType` is
+  `Animation`, not `Illust`), it counts the frames of its timeline from 1
+  (`Canvas.TimeLineFrameDisplay`), and it has a crop frame and a paper
+  colour. Those settings are now taken from the document the animation is
+  written from - the file the project was imported from, or the document
+  with an animation in it that ships with the program.
+
+- **The write was slow.** Every statement of a document with a few hundred
+  layers was its own commit, and each of them waited for the disk. The write
+  is one transaction now, and `bleach (2)` is written in 25 seconds instead
+  of 50.
+
+**next step: 12 - the tracks of kind 2001, 4000 and 1000, and the camera**
+
+
 

@@ -358,8 +358,7 @@ function columnsOf(database, table) {
 }
 
 /**
- * Give the layer table of the file the columns a document with an animation
- * has.
+ * Give a table of the file the columns a document with an animation has.
  *
  * A blank Clip Studio document does not know about animation folders, the
  * cel a folder shows now, or the colour settings of a cel. A document with
@@ -368,15 +367,28 @@ function columnsOf(database, table) {
  * columns are added as they are, with the type and the default of the
  * skeleton, and the rows that are already there keep their values.
  */
-function alignLayerTable(database, source) {
-  const wanted = readAll(source, "PRAGMA table_info([Layer])");
-  const have = new Set(columnsOf(database, "Layer"));
+function alignTable(database, source, table) {
+  let wanted;
+  try {
+    wanted = readAll(source, `PRAGMA table_info([${table}])`);
+  } catch {
+    return;
+  }
+  const have = new Set(columnsOf(database, table));
   for (const column of wanted) {
     if (have.has(column.name) || column.name === "_PW_ID") continue;
     const type = column.type || "INTEGER";
-    const fallback = column.notnull ? " DEFAULT NULL" : "";
-    database.exec(`ALTER TABLE Layer ADD COLUMN [${column.name}] ${type}${fallback}`);
+    const fallback = column.notnull ? " DEFAULT 0" : "";
+    database.exec(`ALTER TABLE [${table}] ADD COLUMN [${column.name}] ${type}${fallback}`);
   }
+}
+
+/**
+ * Give the layer table of the file the columns a document with an animation
+ * has.
+ */
+function alignLayerTable(database, source) {
+  alignTable(database, source, "Layer");
 }
 
 /**
@@ -442,6 +454,87 @@ function mipmapChain(database, mipmapId) {
     infoId = info.NextIndex;
   }
   return chain;
+}
+
+/**
+ * Take the settings of the canvas and of the page from the document the
+ * animation is written from.
+ *
+ * The file is built from the blank template, and a blank document is an
+ * illustration: it counts the frames of a timeline from zero, it has no
+ * crop frame, and its page is the size of the canvas. A document with an
+ * animation is different, and Clip Studio Paint reads these settings when
+ * it opens the file, so they are taken from the document the animation
+ * comes from: the file the project was imported from, or the document with
+ * an animation in it that ships with the program.
+ *
+ * The size of the canvas is the writer's own. The crop frame is a rectangle
+ * inside the canvas, and the page can be bigger than the canvas, so both
+ * are only taken when the canvas is the size it was.
+ */
+function copyDocumentSettings(database, source, width, height) {
+  // A document does not have to have a canvas or a page row: a skeleton
+  // without them simply has nothing to copy.
+  const rowOf = (db, sql) => {
+    try {
+      return readOne(db, sql);
+    } catch {
+      return null;
+    }
+  };
+  // A blank document has no crop frame and no way of counting the frames of
+  // a timeline, so the tables are given the columns of the document the
+  // animation comes from first.
+  alignTable(database, source, "Canvas");
+  alignTable(database, source, "Project");
+  const canvasRow = rowOf(source, "SELECT * FROM Canvas ORDER BY MainId LIMIT 1");
+  const ownCanvas = rowOf(database, "SELECT * FROM Canvas ORDER BY MainId LIMIT 1");
+  if (canvasRow && ownCanvas) {
+    const sameSize =
+      Number(canvasRow.CanvasWidth) === width && Number(canvasRow.CanvasHeight) === height;
+    const skip = new Set([
+      "_PW_ID", "MainId", "CanvasRootFolder", "CanvasCurrentLayer", "CanvasWidth", "CanvasHeight",
+    ]);
+    const updates = [];
+    const values = [];
+    for (const column of columnsOf(database, "Canvas")) {
+      if (skip.has(column) || !(column in canvasRow) || canvasRow[column] === null) continue;
+      if (!sameSize && /^(CropFrame|SafeFrame)/.test(column)) continue;
+      updates.push(`[${column}] = ?`);
+      values.push(canvasRow[column]);
+    }
+    if (updates.length) {
+      database
+        .prepare(`UPDATE Canvas SET ${updates.join(", ")} WHERE MainId = ?`)
+        .run(...values, ownCanvas.MainId);
+    }
+  }
+
+  // The page is a row of the Project table, which is keyed by its own
+  // number and not by a MainId.
+  const projectRow = rowOf(source, "SELECT * FROM Project ORDER BY _PW_ID LIMIT 1");
+  const ownProject = rowOf(database, "SELECT * FROM Project ORDER BY _PW_ID LIMIT 1");
+  if (projectRow && ownProject) {
+    const sameSize =
+      Number(canvasRow?.CanvasWidth) === width && Number(canvasRow?.CanvasHeight) === height;
+    const skip = new Set(["_PW_ID", "MainId", "ProjectName"]);
+    const updates = [];
+    const values = [];
+    for (const column of columnsOf(database, "Project")) {
+      if (skip.has(column) || !(column in projectRow) || projectRow[column] === null) continue;
+      // The size of the page is the size of the canvas unless the document
+      // has a page of its own.
+      if (!sameSize && /^DefaultPage(Width|Height|Resolution)/.test(column)) continue;
+      if (!sameSize && /^DefaultPage(Crop|SafeMargin|UseCropFrame)/.test(column)) continue;
+      updates.push(`[${column}] = ?`);
+      values.push(projectRow[column]);
+    }
+    if (updates.length) {
+      database
+        .prepare(`UPDATE Project SET ${updates.join(", ")} WHERE _PW_ID = ?`)
+        .run(...values, ownProject._PW_ID);
+    }
+  }
 }
 
 function cloneLayer(database, copyFrom, name, overrides) {
@@ -889,7 +982,10 @@ function linkTree(database, tree, floor, rootId) {
       // them: the first child is the lowest one. The cells of a row are
       // the exception: Clip Studio keeps them in the order they play, so
       // the first cell is the one that shows first.
-      const kids = node.row === true ? [...node.children] : [...node.children].reverse();
+      const kids =
+        node.row === true || node.playOrder === true
+          ? [...node.children]
+          : [...node.children].reverse();
       linkSiblings(database, kids.map((child) => tree.nodes[child].layerId));
       database
         .prepare("UPDATE Layer SET LayerFirstChildIndex = ? WHERE MainId = ?")
@@ -908,6 +1004,19 @@ function linkTree(database, tree, floor, rootId) {
  */
 function isFolderNode(node) {
   return node.layer.type === "group" || node.row === true;
+}
+
+/**
+ * How the cells of a row are ordered: by number, a letter after its number.
+ *
+ * Clip Studio names the cells of a row with the numbers of the frames they
+ * show, so "5" comes before "5a" and both come before "6".
+ */
+function cellOrderKey(name) {
+  const match = /^(\d+)(.*)$/.exec(String(name ?? "").trim());
+  return match
+    ? { number: Number(match[1]), suffix: match[2] }
+    : { number: Infinity, suffix: String(name ?? "") };
 }
 
 /**
@@ -997,6 +1106,26 @@ function animationRows(tree) {
     return false;
   };
   const rows = candidates.filter((one) => !insideAny(one.index, candidateNodes));
+
+  // The cells of a row that came from a Clip Studio document are stored in
+  // the order they play: 1, 2, 3, 5, 5a, 6. The project keeps them in the
+  // order the timeline shows them, which is not the order of the document
+  // (a cell that is not on the timeline sorts by its name, among the ones
+  // that are), so the chain is written the way Clip Studio writes it: by
+  // cell name, numbers first, a letter after its number.
+  for (const row of rows) {
+    const order = new Map(row.node.children.map((child, position) => [child, position]));
+    row.node.children = [...row.node.children].sort((one, two) => {
+      const a = cellOrderKey(tree.nodes[one].layer.name);
+      const b = cellOrderKey(tree.nodes[two].layer.name);
+      return (
+        a.number - b.number ||
+        (a.suffix < b.suffix ? -1 : a.suffix > b.suffix ? 1 : 0) ||
+        order.get(one) - order.get(two)
+      );
+    });
+    row.node.playOrder = true;
+  }
 
   // A layer with more than one cell is a row of cells as well, and the cells
   // are made here: one layer for every drawing. A layer with a single
@@ -1145,6 +1274,10 @@ function animationSkeleton(source, container) {
         folderRow.MainId,
       )
     : null;
+  // The paper: the layer the background of the document is drawn on.
+  const paperLayerRow = layerRow(
+    "SELECT * FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
+  );
 
   return {
     tables,
@@ -1156,6 +1289,7 @@ function animationSkeleton(source, container) {
     types: curveFieldTypes(curve),
     folderRow,
     celRow,
+    paperLayerRow,
   };
 }
 
@@ -1223,8 +1357,11 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
     }
   }
   // The range of the track runs from the first frame of the project to the
-  // last one, which is the frame the timeline ends on.
-  const range = { start: tickOf(startFrame), end: tickOf(end), rate: 60 };
+  // end of the last one. The end of a range is a boundary, not a frame: a
+  // timeline of 120 frames at 24 fps ends on tick 300 in every document
+  // Clip Studio wrote, so the boundary is the start of the frame after the
+  // last one.
+  const range = { start: tickOf(startFrame), end: tickOf(end + 1), rate: 60 };
 
   const trackIds = [];
 
@@ -1240,8 +1377,14 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
 
     const paper = readOne(
       database,
-      "SELECT LayerUuid FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
+      "SELECT MainId, LayerUuid FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
     );
+    // The paper takes the settings of the paper of the skeleton, so that the
+    // background of the written document is the one of the document the
+    // animation comes from.
+    if (source && skeleton.paperLayerRow && paper) {
+      copyLayerSettings(database, source, skeleton.paperLayerRow, paper.MainId);
+    }
     const id = nextId(database, "Track");
     trackIds.push(id);
     insertRow(database, "Track", skeleton.paper.track, {
@@ -1289,7 +1432,9 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
     const lastFrame = lastCell.at + (lastCell.hold ?? 1) - 1;
     const rowRange = {
       start: tickOf(firstCell.at),
-      end: tickOf(Math.max(lastFrame, firstCell.at)),
+      // The end is the boundary after the last cell, the way Clip Studio
+      // writes it: the cell shows up to that boundary and no longer.
+      end: tickOf(Math.max(lastFrame, firstCell.at) + 1),
       rate: 60,
     };
     const first = setTrackRange(
@@ -1481,6 +1626,11 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     database = await openDatabase(template.database);
     database.exec("PRAGMA journal_mode = DELETE");
     database.exec("PRAGMA synchronous = FULL");
+    // Everything below is one transaction. Without it every statement is its
+    // own commit, and with `synchronous = FULL` each of them waits for the
+    // disk: a document with a few hundred layers spent most of its time
+    // there. The file is the same either way.
+    database.exec("BEGIN");
 
     const canvas = readOne(database, "SELECT MainId, CanvasRootFolder, CanvasCurrentLayer FROM Canvas");
     const templateLayer = readOne(
@@ -1635,6 +1785,12 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       )
       .run(String(name).slice(0, 200), project.width, project.height);
 
+    // The settings of the canvas and of the page come from the document the
+    // animation is written from: a document with an animation counts its
+    // frames the way Clip Studio Paint does, and has a crop frame and a
+    // page of its own.
+    if (source) copyDocumentSettings(database, source, project.width, project.height);
+
     setTimeline(database, project);
 
     // The tracks that were written, so the caller can say whether the file
@@ -1649,6 +1805,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
 
     // The SQLite file is finalised differently by each backend: the Node
     // build writes it to disk, the browser build keeps it in memory.
+    database.exec("COMMIT");
     const bytes = database.export ? await database.export() : null;
     await database.close();
     database = null;

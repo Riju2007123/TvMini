@@ -180,8 +180,8 @@ test("a layer inside a cell lasts as long as the cell, not the whole animation",
 
 test("cells follow the times of the track, not the order of their names", () => {
   // Three cells, keyed at 0, 4 and 8 ticks of a 30 fps document: frames 1, 3
-  // and 5. The track ends on tick 12, which is frame 7, so the last cell is
-  // held for frames 5, 6 and 7.
+  // and 5. The track ends on tick 12, which is frame 7: the first frame that
+  // is not shown, so the last cell is held for frames 5 and 6.
   const document = documentWith([
     node(2, "", { kind: "root-folder", type: 256, folder: true, firstChildIndex: 3 }),
     node(3, "Animation folder", {
@@ -221,7 +221,7 @@ test("cells follow the times of the track, not the order of their names", () => 
   );
   assert.deepEqual(
     byName("3").drawings.map((drawing) => [drawing.at, drawing.hold]),
-    [[5, 3]],
+    [[5, 2]],
   );
 });
 
@@ -250,10 +250,10 @@ test("a layer inside a cell follows the cell even when its name is a number", ()
 
   const project = clipToProject(document, []);
   const inner = project.layers.find((layer) => layer.name === "2");
-  // The layer is inside the cell "1a", which lasts frames 1 to 5. Its own
+  // The layer is inside the cell "1a", which lasts frames 1 to 4. Its own
   // name, "2", must not move it to frame 2 or cut it down to one frame.
   assert.equal(inner.drawings[0].at, 1);
-  assert.equal(inner.drawings[0].hold, 5);
+  assert.equal(inner.drawings[0].hold, 4);
   assert.equal(inner.drawings[0].name, "1a");
 });
 
@@ -266,7 +266,8 @@ test("a layer outside an animation folder shows the whole time", () => {
   const project = clipToProject(document, []);
   const layer = project.layers[0];
   assert.equal(layer.drawings[0].at, project.startFrame);
-  assert.equal(layer.drawings[0].hold, 21);
+  // The timeline holds 20 frames, 1 to 20.
+  assert.equal(layer.drawings[0].hold, 20);
   assert.equal(layer.drawings[0].name, undefined);
 });
 

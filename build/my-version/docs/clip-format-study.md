@@ -738,6 +738,72 @@ So the rule for a reader is: a cell starts on `round(Frame * fps / 60)`
 frames after the first frame of the document, and lasts until the next key;
 the last cell lasts until `End`.
 
+### The frames of a document: where a track stops
+
+Three numbers decide when a cell is on screen, and all three were measured
+against the documents of the corpus (`H:\a`: `Animation2`, `Animation5`,
+`Animation15`, `bleach (2)`).
+
+**`TimeLine.EndFrame` is a count of frames, not the last frame.** With
+`StartFrame = 0` it is also the 1-based number of the last frame of the
+timeline:
+
+| document | fps | `StartFrame` | `EndFrame` | the track of the cells |
+|---|---|---|---|---|
+| `Animation15` | 24 | 0 | 120 | 0..300 ticks = 120 frames |
+| `Animation5` | 30 | 0 | 25 | 0..254 ticks = 127 frames |
+| `Animation2` | 30 | 0 | 18 | 0..36 ticks = 18 frames |
+| `bleach (2)` | 24 | 0 | 101 | 0..252.5 ticks = 101 frames |
+
+`TimeLine.BiggestEndFrame` is a different number: it is the largest end of
+any track of the document (`Animation5` has `EndFrame` 25 and
+`BiggestEndFrame` 127, because its track runs on past the timeline).
+
+**The `End` of a track is a boundary, not a frame.** The `TimeClip` of a
+track holds `Start`, `End` and `Rate` as plain doubles, and `End` is where
+the track stops: the frame it ends on is the first frame that is *not*
+shown. `Animation15` runs from tick 0 to tick 300 at 24 fps, which is 120
+frames of 2.5 ticks, and the last cell it shows is frame 120 - the frame
+that starts at tick 300 is not shown.
+
+**The cells of a track are keys, and a key can sit on any frame.** The
+`ImageCelName` curve of `Animation15` holds keys at ticks 7.5, 15 and 22.5,
+which are frames 3, 6 and 9 at 24 fps - not frames 1, 2 and 3. The name of
+a cell says nothing about the frame it shows, and a cell whose name is a
+number is not the frame it shows.
+
+Together these three facts fix the timing of a document:
+
+- a cell shows from the frame of its key until the next key starts;
+- the last cell of a track shows until the track stops, and the track stops
+  at the end of the timeline if it runs on past it;
+- the frame of a key is `1 + round(tick * fps / 60)`, the ticks being 60 Hz.
+
+The writer writes the same numbers back: the range of a track ends on the
+boundary after the last frame it shows, and the cells of a row are written
+in the order Clip Studio writes them (by number, a letter after its number),
+which is the order they play in.
+
+### What else a document with an animation carries
+
+A blank document is an illustration. A document with an animation is
+different, and Clip Studio Paint reads these settings when it opens the
+file, so they are taken from the document the animation is written from:
+
+| where | what | in a blank document | in a document with an animation |
+|---|---|---|---|
+| `Canvas` | `TimeLineFrameDisplay` | missing (0) | 1 - the timeline counts its frames from 1 |
+| `Canvas` | `TimeLineEditMode` | missing | 1 |
+| `Canvas` | `CropFrame*` | missing | the rectangle of the page inside the canvas |
+| `Project` | `DefaultPageSettingType` | `Illust` | `Animation` |
+| `Project` | `DefaultPageUseCropFrame` | 0 | 1 |
+| `Project` | `DefaultPagePaper*` | black | the colour of the paper |
+
+`TimeLineFrameDisplay` is what makes the frame counter of Clip Studio Paint
+read `21 / 1 / 25` rather than `20 / 0 / 25`: without it the same document
+shows the frames from zero, and the current frame of the document is read
+as it is stored.
+
 ### Writing an animation: what is known and what is missing
 
 An animation document needs three things: a `TimeLine` row, a chain of

@@ -214,8 +214,9 @@ test("key times are 60 Hz ticks, so a 30 fps document halves them", () => {
   const placement = celPlacementFromKeys(keys, { frameRate: 30, startFrame: 1, endFrame: 17, endTick: 16 });
   assert.deepEqual(placement.get("1"), [{ frame: 1, hold: 2 }]);
   assert.deepEqual(placement.get("2"), [{ frame: 3, hold: 2 }]);
-  // The last cell is held to the end of the track, frame 1 + 16/2 = 9.
-  assert.deepEqual(placement.get("3"), [{ frame: 5, hold: 5 }]);
+  // The track ends on tick 16 = frame 9, the first frame that is not shown,
+  // so the last cell is held for frames 5 to 8.
+  assert.deepEqual(placement.get("3"), [{ frame: 5, hold: 4 }]);
 });
 
 test("a 24 fps document turns 2.5 tick steps into whole frames", () => {
@@ -224,7 +225,8 @@ test("a 24 fps document turns 2.5 tick steps into whole frames", () => {
   assert.deepEqual(placement.get("1"), [{ frame: 1, hold: 1 }]);
   assert.deepEqual(placement.get("2"), [{ frame: 2, hold: 1 }]);
   assert.deepEqual(placement.get("3"), [{ frame: 3, hold: 1 }]);
-  assert.deepEqual(placement.get("4"), [{ frame: 4, hold: 2 }]);
+  // Tick 10 is frame 5, where the track stops.
+  assert.deepEqual(placement.get("4"), [{ frame: 4, hold: 1 }]);
 });
 
 test("the track range is read from the TimeClip doubles", () => {
