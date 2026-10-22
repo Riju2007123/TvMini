@@ -1145,9 +1145,14 @@ function renderCanvas(frame = state.project.currentFrame) {
     const base = drawingImageElement(resolved.drawing);
     // The stroke that is in the hand is drawn on the sheet on top of the
     // stage, so it is left out here: it would otherwise be painted twice.
-    const strokes = state.drawing
-      ? resolved.drawing.strokes.filter((stroke) => stroke !== state.drawing)
-      : resolved.drawing.strokes;
+    // An eraser is the exception: a sheet on top of the stage cannot take
+    // ink away from the document below it, so the eraser is drawn here and
+    // the paper is erased while the eraser moves.
+    const inHand = state.drawing;
+    const strokes =
+      inHand && !inHand.eraser
+        ? resolved.drawing.strokes.filter((stroke) => stroke !== inHand)
+        : resolved.drawing.strokes;
     if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
       ctx.drawImage(base, 0, 0, width, height);
@@ -1157,8 +1162,10 @@ function renderCanvas(frame = state.project.currentFrame) {
 
     // The same goes for a layer with strokes on it, as long as it is drawn
     // at full strength: the picture and the strokes can go onto the canvas
-    // as they are, without the round trip through a scratch canvas.
-    if (opacity === 1 && base) {
+    // as they are, without the round trip through a scratch canvas. An
+    // eraser is the exception: it has to take ink away from its own layer
+    // only, and that is the work of the scratch canvas.
+    if (opacity === 1 && base && !strokes.some((stroke) => stroke.eraser)) {
       ctx.drawImage(base, 0, 0, width, height);
       drawStrokesInto(ctx, strokes);
       continue;
@@ -1880,9 +1887,11 @@ function drawOverlay() {
   // The sheet is the size of the screen, so the stroke on it is drawn in the
   // pixels of the document.
   const { view } = useStageSpace(overlayCtx);
-  if (state.drawing && !state.drawing.kind) {
+  if (state.drawing && !state.drawing.kind && !state.drawing.eraser) {
     // The stroke in the hand: the document underneath is not drawn again while
-    // the pointer moves, so the stroke is shown here instead.
+    // the pointer moves, so the stroke is shown here instead. An eraser is
+    // not shown here: a sheet on top of the stage cannot take ink away, so
+    // the eraser works on the document itself.
     drawStrokesInto(overlayCtx, [state.drawing]);
   }
   drawBrushTip();
@@ -3870,8 +3879,12 @@ canvas.addEventListener("pointermove", (event) => {
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
-  // underneath is drawn when the stroke is finished.
-  drawOverlay();
+  // underneath is drawn when the stroke is finished. An eraser is the
+  // exception: it takes ink away from the document, and a sheet on top of
+  // the stage cannot do that, so the document itself is drawn again for
+  // every move of the pointer.
+  if (state.drawing?.eraser) renderCanvas();
+  else drawOverlay();
 });
 
 function endStroke() {
