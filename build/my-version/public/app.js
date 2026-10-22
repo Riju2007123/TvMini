@@ -4,7 +4,7 @@ import { detectBackend } from "./core/platform.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { decodeSound, soundPeaks } from "./audio.js";
 import { floodFillRgba, parseHexColor, smoothPoint, strokePathGroups } from "./core/paint.js";
-import { smoothStroke, smoothTolerance } from "./core/smooth.js";
+import { smoothRadius, smoothStroke } from "./core/smooth.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -93,6 +93,7 @@ const clearButton = document.getElementById("clearButton");
 const undoButton = document.getElementById("undoButton");
 const redoButton = document.getElementById("redoButton");
 const brushButton = document.getElementById("brushButton");
+const pencilButton = document.getElementById("pencilButton");
 const eraserButton = document.getElementById("eraserButton");
 const pickButton = document.getElementById("pickButton");
 const lineToolButton = document.getElementById("lineTool");
@@ -240,6 +241,8 @@ const state = {
   // The smoothing of the line itself: the points that do not bend the line
   // are taken away, the way the pencil of Flash does it (0 = off).
   smooth: 50,
+  // The raw points of the stroke in hand, before the smoothing.
+  rawPoints: [],
   homeDir: ".",
   playing: false,
   playTimer: null,
@@ -1101,6 +1104,10 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null) 
   ctx.globalCompositeOperation = stroke.eraser === true ? "destination-out" : "source-over";
   ctx.strokeStyle = stroke.color;
   ctx.fillStyle = stroke.color;
+  // A hard stroke, the way the pencil of Flash draws it: the ends are cut
+  // square and the corners are sharp. Every other stroke is round.
+  ctx.lineCap = stroke.hard ? "butt" : "round";
+  ctx.lineJoin = stroke.hard ? "miter" : "round";
   const radii = stroke.points.map((point) => strokeRadius(stroke, point));
 
   if (brush?.data) {
@@ -2297,7 +2304,7 @@ function tipImage(brush) {
  */
 function drawBrushTip(target = overlayCtx) {
   if (!tipPoint || state.playing) return;
-  if (state.tool !== "brush" && state.tool !== "eraser") return;
+  if (state.tool !== "brush" && state.tool !== "pencil" && state.tool !== "eraser") return;
 
   const base = Math.max(0.5, (Number(widthInput.value) || 1) / 2);
   // A pen that is pressed harder draws a wider line, and the shape under
@@ -4490,6 +4497,12 @@ canvas.addEventListener("pointerdown", (event) => {
     points: [drawPoint(event)],
   };
   if (state.tool === "eraser") stroke.eraser = true;
+  if (state.tool === "pencil") {
+    // The pencil of Flash draws a thin line with a hard edge: the ends are
+    // cut square and the corners are sharp, and there is no round brush
+    // under the pointer.
+    stroke.hard = true;
+  }
   if (state.tool === "line" || state.tool === "rect" || state.tool === "ellipse") {
     // Shapes are a drag from the first point to this one; the second point
     // follows the pointer until release.
@@ -4505,6 +4518,9 @@ canvas.addEventListener("pointerdown", (event) => {
     if (strokeBlendSelect.value !== "normal") stroke.blend = strokeBlendSelect.value;
   }
   state.smoothedPoint = stroke.points[stroke.points.length - 1];
+  // The raw points of the stroke in hand, so the smoothing can be laid
+  // over them again for every move of the pointer.
+  state.rawPoints = stroke.kind ? [] : [...stroke.points];
 
   drawing.strokes.push(stroke);
   state.strokeBefore = before;
@@ -4549,11 +4565,15 @@ canvas.addEventListener("pointermove", (event) => {
 
     const last = state.drawing.points[state.drawing.points.length - 1];
     if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) continue;
-    state.drawing.points.push(smoothed);
-    // The smoothing takes the tremble out of the line: the points that do
-    // not bend the line are taken away, the way the pencil of Flash does
-    // it. The line that is shown is then the line that will be left.
-    smoothStroke(state.drawing.points, smoothTolerance(state.smooth));
+    // The raw points are kept aside, so the smoothing can be laid over them
+    // again and again while the stroke is drawn. A filter that was laid
+    // over its own result would melt the line away.
+    state.rawPoints.push(smoothed);
+    // The smoothing takes the tremble out of the line, the way the pencil
+    // of Flash does it: the shape of the line stays, only the trembling of
+    // the hand is gone. The line that is shown is the line that will be
+    // left behind.
+    state.drawing.points = smoothStroke(state.rawPoints, smoothRadius(state.smooth));
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
@@ -4572,6 +4592,7 @@ function endStroke() {
   }
   if (!state.drawing) return;
   state.drawing = null;
+  state.rawPoints = [];
 
   const before = state.strokeBefore;
   const wasNew = state.strokeWasNew;
@@ -4614,6 +4635,7 @@ pressureInput.addEventListener("change", () => {
 
 const TOOL_BUTTONS = {
   brush: () => brushButton,
+  pencil: () => pencilButton,
   eraser: () => eraserButton,
   pick: () => pickButton,
   line: () => lineToolButton,
@@ -4625,6 +4647,7 @@ const TOOL_BUTTONS = {
 
 const TOOL_STATUS = {
   brush: "Brush — paint with the selected colour",
+  pencil: "Pencil — a thin line with a hard edge, the way the pencil of Flash draws it",
   eraser: "Eraser — removes paint and reveals lower layers or the canvas",
   pick: "Pick — click the canvas to sample a colour",
   line: "Line — drag from one point to another (L)",
@@ -4653,6 +4676,7 @@ function selectTool(tool) {
 }
 
 brushButton.addEventListener("click", () => selectTool("brush"));
+pencilButton.addEventListener("click", () => selectTool("pencil"));
 eraserButton.addEventListener("click", () => selectTool("eraser"));
 pickButton.addEventListener("click", () => selectTool("pick"));
 lineToolButton.addEventListener("click", () => selectTool("line"));
@@ -6626,6 +6650,11 @@ document.addEventListener("keydown", (event) => {
     if (key === "b") {
       event.preventDefault();
       selectTool("brush");
+      return;
+    }
+    if (key === "p") {
+      event.preventDefault();
+      selectTool("pencil");
       return;
     }
     if (key === "e") {

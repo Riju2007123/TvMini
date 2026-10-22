@@ -180,14 +180,53 @@ shows in its own properties panel.
 ### What the two settings mean
 
 **Smoothing** is the setting that takes the tremble out of a line. The
-line that is left behind is not the line the hand made: the points that do
-not bend the line are taken away, so the line is the same shape without
-the shaking. The pencil leaves it at 0 and the brush at 20, so the brush
-draws the calmer line of the two.
+line that is left behind is not the line the hand made: the trembling of
+the hand is gone, but the shape of the line is the shape the hand made.
+The pencil leaves it at 0 and the brush at 20, so the brush draws the
+calmer line of the two.
 
 **Stroke hinting** and **Scales** are about the stroke of a shape, not
 about the hand: with hinting on, the outline of a stroke keeps its shape
 when it is made bigger, and the stroke is scaled with the shape.
+
+### What the smoothing does, measured
+
+The same line was drawn in Flash 8 with the brush, once with the
+smoothing at 0 and once with it at 100 (`tools/flash8-draw.ps1` starts
+the program, chooses the tool with its key, types the smoothing into the
+panel and draws the line with the mouse).
+
+| The line drawn | Smoothing 0 | Smoothing 100 |
+|---|---|---|
+| A wave, 380 pixels wide and 45 high | a wave | **the same wave** |
+| A tremble, a quick up and down of 4 pixels every 14 pixels | **a wavy, scalloped line** | **a straight line** |
+
+So the smoothing does two things, and only two:
+
+1. **The quick changes of the hand are gone.** A tremble is a change that
+   is over in a few pixels, and the middle of a quick change is the line
+   through it.
+2. **The slow changes, the shape of the line, are not touched.** A wave is
+   a change that is over in a hundred pixels or more, and the middle of a
+   slow change is the change itself.
+
+That is what a **moving average** does, and nothing else does it: the
+middle of the points around a point. It is **not** a taking away of the
+points that bend nothing (a Ramer–Douglas–Peucker simplification), for
+that flattens every gentle curve: the points of a wave sit within a
+fraction of a pixel of the straight line through their neighbours, so
+every wave is a straight line once the points are taken away.
+
+**TVMini status.** The smoothing of TVMini is in `public/core/smooth.js`:
+every point of the stroke is replaced by the middle of the points around
+it, the points that are near enough being the ones that are counted. The
+first and the last point of the stroke stay where they are, so the stroke
+starts and ends where the hand did, and the pressure of a point is the
+pressure the pen said. The raw points are kept aside while the stroke is
+drawn, so the average can be taken again and again over the same points
+without the line melting away. It is set with the **Smooth** slider in
+the tool property panel, from 0 to 100, and 50 is the setting it starts
+at.
 
 ### Why a line in Flash stays clean at any zoom
 
@@ -200,10 +239,9 @@ because there is no picture of the line to make bigger.
 **TVMini status.** The strokes of TVMini are points and a width as well,
 and they are drawn on the stage in the pixels of the screen
 (`public/app.js`, the drawing of a layer), so a line stays clean at any
-zoom. The smoothing of Flash is in `public/core/smooth.js`: the points
-that do not bend the line are taken away, the first step of the
-Ramer–Douglas–Peucker algorithm, done as the stroke is drawn so the line
-that is shown is the line that will be left behind. It is set with the
-**Smooth** slider in the tool property panel, from 0 to 100, and 50 is the
-setting it starts at.
+zoom. The **pencil** of TVMini draws a thin line with a hard edge, the
+way the pencil of Flash does: the ends are cut square and the corners are
+sharp (`stroke.hard` in the project, `lineCap` and `lineJoin` in the
+drawing).
+
 

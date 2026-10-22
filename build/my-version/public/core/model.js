@@ -129,6 +129,13 @@ function normalizeStrokes(value, label) {
       if (stroke.eraser) clean.eraser = true;
     }
 
+    if (stroke.hard !== undefined) {
+      if (typeof stroke.hard !== "boolean") {
+        throw new ValidationError(`${label}[${index}].hard must be a boolean`);
+      }
+      if (stroke.hard) clean.hard = true;
+    }
+
     if (stroke.kind !== undefined) {
       if (!STROKE_KINDS.includes(stroke.kind)) {
         throw new ValidationError(

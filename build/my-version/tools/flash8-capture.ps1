@@ -88,6 +88,16 @@ Start-Sleep -Milliseconds 1200
 [void][Flash8]::SetForegroundWindow($win)
 Start-Sleep -Milliseconds 800
 
+# A key, to choose a tool for instance: the pencil is Y and the brush is B.
+if ($Key -ne "") {
+  $shell = New-Object -ComObject WScript.Shell
+  [void]$shell.AppActivate([Flash8]::Title($win))
+  Start-Sleep -Milliseconds 400
+  $shell.SendKeys($Key)
+  Start-Sleep -Milliseconds $WaitAfterClick
+  Write-Output "sent the key $Key"
+}
+
 # A click in the window, to choose a tool for instance.
 if ($ClickX -ge 0) {
   $r0 = New-Object Flash8+RECT
@@ -108,16 +118,6 @@ public class Click8 {
   [Click8]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)
   Start-Sleep -Milliseconds $WaitAfterClick
   Write-Output "clicked at $sx,$sy"
-}
-
-# A key, to choose a tool for instance: the pencil is P and the brush is B.
-if ($Key -ne "") {
-  $shell = New-Object -ComObject WScript.Shell
-  [void]$shell.AppActivate([Flash8]::Title($win))
-  Start-Sleep -Milliseconds 400
-  $shell.SendKeys($Key)
-  Start-Sleep -Milliseconds $WaitAfterClick
-  Write-Output "sent the key $Key"
 }
 
 $r = New-Object Flash8+RECT

@@ -129,25 +129,28 @@ const mouse = (type, x, y, buttons = 0) =>
     clickCount: 1,
   });
 
-/** The ink on the paper, and how thick the band of it is. */
+/** The ink on the paper, and how far the line wanders up and down. */
 const measure = async () =>
   JSON.parse(
     await devtools.run(
       `(() => {
          const c = document.querySelector("#canvas");
          const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-         let count = 0, top = c.height, bottom = -1;
-         for (let y = 0; y < c.height; y += 1) {
-           for (let x = 0; x < c.width; x += 1) {
+         let count = 0;
+         const centres = [];
+         for (let x = 0; x < c.width; x += 1) {
+           let sum = 0, n = 0;
+           for (let y = 0; y < c.height; y += 1) {
              const i = (y * c.width + x) * 4;
              if (data[i] + data[i + 1] + data[i + 2] < 600) {
-               count += 1;
-               if (y < top) top = y;
-               if (y > bottom) bottom = y;
+               count += 1; sum += y; n += 1;
              }
            }
+           if (n) centres.push(sum / n);
          }
-         return JSON.stringify({ count, height: bottom - top + 1 });
+         const wander = centres.length
+           ? Math.max(...centres) - Math.min(...centres) : 0;
+         return JSON.stringify({ count, wander });
        })()`,
     ),
   );
@@ -157,11 +160,12 @@ const shaky = async () => {
   const startX = box.x + box.w * 0.2;
   const y = box.y + box.h * 0.5;
   await mouse("mousePressed", startX, y, 1);
-  for (let step = 1; step <= 24; step += 1) {
-    const tremble = step % 2 === 0 ? 0.8 : -0.8;
-    await mouse("mouseMoved", startX + step * 18, y + tremble, 1);
+  // The points are near each other, the way the samples of a pen are.
+  for (let step = 1; step <= 120; step += 1) {
+    const tremble = step % 2 === 0 ? 1.2 : -1.2;
+    await mouse("mouseMoved", startX + step * 3, y + tremble, 1);
   }
-  await mouse("mouseReleased", startX + 24 * 18, y, 0);
+  await mouse("mouseReleased", startX + 120 * 3, y, 0);
   await sleep(300);
 };
 
@@ -197,7 +201,7 @@ for (const level of [0, 20, 50, 100]) {
   await shaky();
   const ink = await measure();
   console.log(
-    `the smoothing at ${level}: the line is ${ink.height} pixels thick,` +
+    `the smoothing at ${level}: the line wanders ${ink.wander.toFixed(2)} pixels,` +
       ` ${ink.count} pixels of ink`,
   );
   await undo();
