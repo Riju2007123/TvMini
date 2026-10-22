@@ -3870,7 +3870,9 @@ canvas.addEventListener("pointermove", (event) => {
 
     // Freehand with stabiliser: ease each raw sample toward the running
     // point so shaky input becomes a smoother path (higher = smoother).
-    const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer);
+    // The slider runs from 0 to 100; the strength of the easing runs from
+    // 0 to 10, so the slider has a tenth of the steps of the old one.
+    const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer / 10);
     state.smoothedPoint = smoothed;
 
     const last = state.drawing.points[state.drawing.points.length - 1];
@@ -4067,8 +4069,13 @@ function loadSettings() {
       state.onion.after = clampOnion(data.onion.after, 1);
     }
     if (Number.isFinite(data.stabilizer)) {
-      state.stabilizer = Math.max(0, Math.min(10, Math.round(data.stabilizer)));
+      // The slider used to run from 0 to 10 and now runs from 0 to 100, so
+      // the number that was remembered is put ten times further along.
+      const remembered =
+        data.stabilizerScale === 100 ? data.stabilizer : data.stabilizer * 10;
+      state.stabilizer = Math.max(0, Math.min(100, Math.round(remembered)));
     }
+    state.compactTimeline = data.compactTimeline !== false;
   } catch {
     // A blocked or broken store only loses the remembered preferences.
   }
@@ -4084,6 +4091,8 @@ function saveSettings() {
         showStart: state.showStart,
         playSpeed: state.playSpeed,
         stabilizer: state.stabilizer,
+        stabilizerScale: 100,
+        compactTimeline: state.compactTimeline,
         onion: { ...state.onion },
       }),
     );
@@ -4136,7 +4145,7 @@ showStartInput.addEventListener("change", () => {
 });
 
 stabilizerInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(10, Math.round(Number(stabilizerInput.value))));
+  const value = Math.max(0, Math.min(100, Math.round(Number(stabilizerInput.value))));
   state.stabilizer = value;
   stabilizerValue.textContent = String(value);
   setStatus(value === 0 ? "Stabiliser off" : `Stabiliser ${value} — new strokes get smoother`);
