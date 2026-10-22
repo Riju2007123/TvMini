@@ -12,10 +12,13 @@ import {
   holdDrawing,
   insertDrawing,
   layerBounds,
+  layerIsVisible,
   resolveDrawing,
   setExposure,
   shiftStartFrame,
+  showLayer,
   timelineColumns,
+  trimToFrame,
 } from "../public/timeline.js";
 
 function drawing(at, hold = 1, color = "#000000") {
@@ -164,4 +167,55 @@ test("shiftStartFrame moves drawings and the playhead together", () => {
   assert.equal(project.currentFrame, 13);
   assert.deepEqual(project.layers[0].drawings.map((item) => item.at), [10, 13]);
   assert.equal(shiftStartFrame(project, 0), false);
+});
+
+test("trimToFrame cuts the drawings short and takes the late ones away", () => {
+  const project = createProject(20, 20);
+  project.layers[0].drawings = [drawing(1, 2), drawing(5, 10), drawing(20, 1)];
+  project.layers.push({ ...createLayer("Second"), drawings: [drawing(3, 1)] });
+
+  // Two drawings are taken away: the one at 20 and nothing else.
+  const removed = trimToFrame(project, 12);
+  assert.equal(removed, 1);
+  assert.deepEqual(project.layers[0].drawings.map((item) => [item.at, item.hold]), [
+    [1, 2],
+    [5, 8],
+  ]);
+  assert.deepEqual(project.layers[1].drawings.map((item) => item.at), [3]);
+  assert.equal(contentEnd(project), 12);
+
+  // A frame that is not a whole number changes nothing.
+  assert.equal(trimToFrame(project, 12.5), 0);
+  assert.equal(trimToFrame(project, 0), 0);
+});
+
+test("trimToFrame takes the camera keys past the last frame away", () => {
+  const project = createProject(20, 20);
+  project.camera = { keys: [{ frame: 2 }, { frame: 9 }, { frame: 30 }] };
+
+  trimToFrame(project, 10);
+  assert.deepEqual(project.camera.keys.map((key) => key.frame), [2, 9]);
+  assert.equal(contentEnd(project), 9);
+});
+
+test("showLayer turns on the layer and the folders above it", () => {
+  const project = createProject(20, 20);
+  const folder = { ...createLayer("Folder"), type: "group", visible: false };
+  const layer = { ...createLayer("Cell"), visible: true };
+  project.layers = [folder, layer, { ...createLayer("Hidden"), visible: false }];
+  layer.parent = 0;
+
+  // A layer inside a hidden folder cannot be seen either.
+  assert.equal(layerIsVisible(project, 1), false);
+  assert.equal(showLayer(project, 1), true);
+  assert.equal(folder.visible, true);
+  assert.equal(layerIsVisible(project, 1), true);
+
+  // A layer that is hidden itself is turned on as well.
+  assert.equal(showLayer(project, 2), true);
+  assert.equal(layerIsVisible(project, 2), true);
+
+  // Nothing to turn on.
+  assert.equal(showLayer(project, 1), false);
+  assert.equal(showLayer(project, 9), false);
 });

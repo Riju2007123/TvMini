@@ -58,7 +58,9 @@ import {
   setCameraKey,
   setExposure,
   shiftStartFrame,
+  showLayer,
   timelineColumns,
+  trimToFrame,
   blockSize,
 } from "./timeline.js";
 
@@ -175,6 +177,7 @@ const playButton = document.getElementById("playButton");
 const loopInput = document.getElementById("loop");
 const fpsInput = document.getElementById("fps");
 const startFrameInput = document.getElementById("startFrame");
+const frameCountInput = document.getElementById("frameCount");
 const frameLabel = document.getElementById("frameLabel");
 const addLayerButton = document.getElementById("addLayerButton");
 const addGroupButton = document.getElementById("addGroupButton");
@@ -3631,6 +3634,8 @@ function syncLayerControls() {
   postBehaviorInput.value = layer.postBehavior;
   fpsInput.value = String(project.fps);
   startFrameInput.value = String(project.startFrame);
+  // The length of the document is the frame its last drawing reaches.
+  frameCountInput.value = String(Math.max(project.startFrame, contentEnd(project)));
   loopInput.checked = project.loop;
 
   const folder = isGroup(layer);
@@ -4341,6 +4346,73 @@ function changeFps() {
   setStatus(`Playback speed: ${value} fps`);
 }
 
+/**
+ * Make the document shorter or longer.
+ *
+ * The length of a document is the frame its last drawing reaches, so a
+ * shorter document means the drawings at the end are cut short there. The
+ * drawings that start after the last frame are taken away, because nothing
+ * can show them any more.
+ */
+function changeFrameCount() {
+  const project = state.project;
+  const last = Math.max(project.startFrame, contentEnd(project));
+  const value = Number(frameCountInput.value);
+  if (!Number.isInteger(value) || value < project.startFrame || value > MAX_FRAME) {
+    frameCountInput.value = String(last);
+    setStatus(`The document has ${last} frames`, true);
+    return;
+  }
+  if (value === last) {
+    frameCountInput.value = String(last);
+    return;
+  }
+
+  const longer = value > last;
+  if (longer) {
+    // The length of a document is the frame its last drawing reaches, so a
+    // document cannot be made longer on its own: it grows when there is
+    // something to show on a later frame.
+    frameCountInput.value = String(last);
+    setStatus(`The document has ${last} frames — it grows when you draw on a later frame`);
+    return;
+  }
+  if (
+    !confirm(
+      `Shorten the document to ${value} frames?\n\n` +
+        `${countDrawingsAfter(project, value)} drawing(s) after frame ${value} will be taken away, ` +
+        "and the drawings that reach past it will be cut short there.",
+    )
+  ) {
+    frameCountInput.value = String(last);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const removed = trimToFrame(project, value);
+  if (project.currentFrame > value) project.currentFrame = value;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  frameCountInput.value = String(Math.max(project.startFrame, contentEnd(project)));
+  setStatus(
+    `The document now has ${value} frames` +
+      (removed ? ` (${removed} drawing(s) taken away)` : ""),
+  );
+}
+
+/** How many drawings start after `frame`. */
+function countDrawingsAfter(project, frame) {
+  let count = 0;
+  for (const layer of project.layers) {
+    for (const drawing of layer.drawings ?? []) {
+      if (drawing.at > frame) count += 1;
+    }
+  }
+  return count;
+}
+
 function toggleLoop() {
   const project = state.project;
   if (loopInput.checked === project.loop) return;
@@ -4364,6 +4436,14 @@ function clearDrawing() {
   stopPlayback();
   const before = snapshot();
   info.drawing.strokes = [];
+  // A drawing that has nothing left in it is taken out of the layer, so that
+  // the document gets shorter with it. A drawing that still holds a picture
+  // keeps its place, because the picture is still there to be seen.
+  if (!info.drawing.image) {
+    const drawings = layer.drawings ?? [];
+    const index = drawings.indexOf(info.drawing);
+    if (index !== -1) drawings.splice(index, 1);
+  }
   recordHistory(before);
   markDirty();
   afterChange();
@@ -4627,9 +4707,14 @@ function layerForDrawing() {
     setStatus("A folder holds other layers — select a layer inside it to draw", true);
     return null;
   }
-  if (!layer.visible) {
-    setStatus("This layer is hidden — show it before drawing", true);
-    return null;
+  // A layer that is hidden, or that sits in a folder that is hidden, cannot
+  // be seen. Ink on such a layer would vanish in front of the person who
+  // made it, so the layer is turned on and the drawing is made where it can
+  // be seen.
+  if (!layerIsVisible(state.project, state.project.currentLayer)) {
+    showLayer(state.project, state.project.currentLayer);
+    markDirty();
+    setStatus(`${layer.name} is now shown — it was hidden`);
   }
   if (layer.locked) {
     setStatus("This layer is locked — unlock it before drawing", true);
@@ -4677,6 +4762,9 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
 
+  // The state of the document is taken before the layer is looked at, so
+  // that turning a hidden layer on can be taken back with the stroke.
+  const before = snapshot();
   const layer = layerForDrawing();
   if (!layer) return;
 
@@ -4686,7 +4774,6 @@ canvas.addEventListener("pointerdown", (event) => {
     // Synthetic or already-released pointers have nothing to capture.
   }
 
-  const before = snapshot();
   const existing = drawingAt(layer, state.project.currentFrame);
   const drawing = existing || ensureDrawing(layer, state.project.currentFrame);
   // The speed of the hand is measured from the first point of the stroke, so
@@ -5347,6 +5434,7 @@ lastFrameButton.addEventListener("click", gotoLastFrame);
 loopInput.addEventListener("change", toggleLoop);
 fpsInput.addEventListener("change", changeFps);
 startFrameInput.addEventListener("change", changeStartFrame);
+frameCountInput.addEventListener("change", changeFrameCount);
 addLayerButton.addEventListener("click", addLayer);
 addGroupButton.addEventListener("click", addGroup);
 removeGroupButton.addEventListener("click", removeGroup);
@@ -5471,6 +5559,9 @@ exposureInput.addEventListener("keydown", (event) => {
 });
 startFrameInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") startFrameInput.blur();
+});
+frameCountInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") frameCountInput.blur();
 });
 fpsInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") fpsInput.blur();

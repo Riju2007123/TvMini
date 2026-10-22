@@ -105,6 +105,30 @@ export function layerIsVisible(project, index) {
 }
 
 /**
+ * Turn on a layer and every folder above it.
+ *
+ * A layer inside a hidden folder cannot be seen either, so the folders have
+ * to be turned on as well. Returns true when something was turned on.
+ */
+export function showLayer(project, index) {
+  const layers = project?.layers ?? [];
+  const layer = layers[index];
+  if (!layer) return false;
+  let shown = false;
+  if (layer.visible === false) {
+    layer.visible = true;
+    shown = true;
+  }
+  for (const parent of ancestorsOf(project, index)) {
+    if (layers[parent]?.visible === false) {
+      layers[parent].visible = true;
+      shown = true;
+    }
+  }
+  return shown;
+}
+
+/**
  * The layer a clipped layer is cut by: the drawing layer right below it,
  * the way Clip Studio Paint clips to the layer underneath.
  *
@@ -602,6 +626,39 @@ export function contentEnd(project) {
 /** Number of frames that contain content, measured from startFrame. */
 export function contentLength(project) {
   return Math.max(0, contentEnd(project) - project.startFrame + 1);
+}
+
+/**
+ * Cut the document to `last` frames.
+ *
+ * The length of a document is the frame its last drawing reaches, so a
+ * shorter document means shorter drawings: a drawing that reaches past the
+ * last frame is cut short there, and a drawing that starts after it is
+ * taken away. The camera keys past the last frame go as well. Returns the
+ * number of drawings that were taken away.
+ */
+export function trimToFrame(project, last) {
+  if (!project || !Number.isInteger(last) || last < 1) return 0;
+  let removed = 0;
+  for (const layer of project.layers ?? []) {
+    const drawings = drawingsOf(layer);
+    const kept = drawings.filter((drawing) => {
+      if (drawing.at > last) {
+        removed += 1;
+        return false;
+      }
+      if (drawing.at + drawing.hold - 1 > last) {
+        drawing.hold = last - drawing.at + 1;
+      }
+      return true;
+    });
+    if (kept.length !== drawings.length) layer.drawings = kept;
+  }
+  const keys = project.camera?.keys;
+  if (Array.isArray(keys)) {
+    project.camera.keys = keys.filter((key) => key.frame <= last);
+  }
+  return removed;
 }
 
 /**

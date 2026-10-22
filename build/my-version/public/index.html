@@ -652,6 +652,9 @@
         <label class="field inline" title="First frame number">
           <span class="chip-label">Start</span> <input id="startFrame" type="number" min="1" max="100000" step="1" value="1" />
         </label>
+        <label class="field inline" title="The number of frames the document has. A smaller number cuts the drawings at the end short.">
+          <span class="chip-label">Frames</span> <input id="frameCount" type="number" min="1" max="100000" step="1" value="1" />
+        </label>
         <button id="compactViewButton" class="toggle on" title="Small rows in the timeline. Turn this off for rows with room for a name." aria-pressed="true">Compact view</button>
         <span class="pane-header-spacer"></span>
         <span class="frame-readout" id="frameReadout" title="The current frame, the first frame and the last frame">1 / 1 / 1</span>
