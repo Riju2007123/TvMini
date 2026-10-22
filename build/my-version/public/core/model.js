@@ -262,6 +262,26 @@ export function createProject(width = 960, height = 600, background = "#ffffff")
   };
 }
 
+/**
+ * The transform of a cell: where its picture sits, how big it is and how far
+ * it is turned.
+ *
+ * The scale is a factor: 1 is the size the picture was drawn at. The turn
+ * is in degrees, and the position is in the pixels of the canvas, measured
+ * from the middle of it.
+ */
+function normalizeTransform(value, label = "transform") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  const x = finiteNumber(value.x ?? 0, `${label}.x`);
+  const y = finiteNumber(value.y ?? 0, `${label}.y`);
+  const scale = finiteNumber(value.scale ?? 1, `${label}.scale`);
+  if (scale <= 0) throw new ValidationError(`${label}.scale must be more than 0`);
+  const rotation = finiteNumber(value.rotation ?? 0, `${label}.rotation`);
+  return { x, y, scale, rotation };
+}
+
 function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "image") {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -488,6 +508,15 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
         `${dLabel}.image`,
       );
       if (image) clean.image = image;
+    }
+    // A drawing may carry a transform of its own: where its picture sits on
+    // the canvas, how big it is and how far it is turned. This is what Clip
+    // Studio Paint keeps in the curves of a cell's track - ImagePosition,
+    // ImageScale and ImageRotation - and a part of a puppet animation is
+    // moved with it from one frame to the next.
+    if (drawing.transform !== undefined) {
+      const transform = normalizeTransform(drawing.transform, `${dLabel}.transform`);
+      if (transform) clean.transform = transform;
     }
     // A drawing may carry a brush image, the way a Clip Studio Paint brush
     // does. Its alpha is the shape of the brush.

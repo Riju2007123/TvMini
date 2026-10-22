@@ -271,6 +271,21 @@ way now (`closeCellGaps` in `public/timeline.js`): a cell that is made on a
 later frame reaches the cell before it, and the cell that is made reaches the
 cell after it.
 
+**A cell can sit somewhere else than it was drawn.** The track of an
+animation folder carries more curves than the names of the cells:
+`ImagePosition.X/Y`, `ImageScale.X/Y`, `ImageCenter.X/Y` and
+`ImageRotation` say where the picture of a cell is, how big it is and how far
+it is turned. `bleach (2)` has them: the parts of its puppets move from one
+frame to the next, and the curves say how. A layer of Clip Studio Paint has
+only an offset (`LayerOffsetX/Y`) — the place of its picture — so a scale or
+a turn belongs to the cell, not to the layer.
+
+TVMini keeps the same thing: a cell may carry a transform
+(`{ x, y, scale, rotation }`, `public/core/transform.js`). The picture turns
+and grows around the middle of the canvas, the brush is put back into the
+picture before the ink is put down, and the export writes the picture where
+the transform says — a `.clip` has no layer-level scale or turn of its own.
+
 ### How a blob is found
 
 Three pieces fit together:

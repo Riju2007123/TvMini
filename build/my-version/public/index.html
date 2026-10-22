@@ -591,6 +591,25 @@
             <input id="exposure" type="number" min="1" max="10000" step="1" value="1" />
           </label>
 
+          <div class="panel-title">Transform of this cell</div>
+          <label class="field">
+            <span>Move X</span>
+            <input id="transformX" type="number" step="1" value="0" />
+          </label>
+          <label class="field">
+            <span>Move Y</span>
+            <input id="transformY" type="number" step="1" value="0" />
+          </label>
+          <label class="field">
+            <span>Size <output id="transformScaleValue">100%</output></span>
+            <input id="transformScale" type="range" min="10" max="400" step="1" value="100" />
+          </label>
+          <label class="field">
+            <span>Turn</span>
+            <input id="transformRotation" type="number" min="-180" max="180" step="1" value="0" />
+          </label>
+          <button id="transformReset" class="wide">Put the cell back</button>
+
           <div class="panel-title">Camera</div>
           <div class="camera-presets">
             <button id="cameraAdd" type="button" title="Add a camera key on the current frame">Add key</button>

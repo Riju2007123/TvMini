@@ -1765,9 +1765,13 @@ function renderCanvas(frame = state.project.currentFrame) {
         drawDrawingToPaint(project, sourceResolved.drawing, sourceOpacity, maskCtx, maskCanvas);
         fitScratch(clipCanvas, clipCtx, width, height);
         clipCtx.globalCompositeOperation = "source-over";
-        clipCtx.drawImage(maskCanvas, 0, 0);
+        withCellTransform(clipCtx, sourceTransform, width, height, () => {
+          clipCtx.drawImage(maskCanvas, 0, 0);
+        });
         clipCtx.globalCompositeOperation = "destination-in";
-        clipCtx.drawImage(paintCanvas, 0, 0);
+        withCellTransform(clipCtx, transform, width, height, () => {
+          clipCtx.drawImage(paintCanvas, 0, 0);
+        });
         clipCtx.globalCompositeOperation = "source-over";
         ctx.globalAlpha = opacity;
         ctx.drawImage(clipCanvas, 0, 0);
@@ -1794,7 +1798,9 @@ function renderCanvas(frame = state.project.currentFrame) {
         : resolved.drawing.strokes;
     if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
-      ctx.drawImage(base, 0, 0, width, height);
+      withCellTransform(ctx, transform, width, height, () => {
+        ctx.drawImage(base, 0, 0, width, height);
+      });
       ctx.globalAlpha = 1;
       continue;
     }
@@ -1809,8 +1815,10 @@ function renderCanvas(frame = state.project.currentFrame) {
     // away from its own layer only, and that is the work of the scratch
     // canvas.
     if (opacity === 1 && !strokes.some((stroke) => stroke.eraser)) {
-      if (base) ctx.drawImage(base, 0, 0, width, height);
-      drawStrokesInto(ctx, strokes, resolved.drawing.brush);
+      withCellTransform(ctx, transform, width, height, () => {
+        if (base) ctx.drawImage(base, 0, 0, width, height);
+        drawStrokesInto(ctx, strokes, resolved.drawing.brush);
+      });
       continue;
     }
 
@@ -1823,7 +1831,9 @@ function renderCanvas(frame = state.project.currentFrame) {
     layerCtx.setTransform(1, 0, 0, 1, 0, 0);
 
     ctx.globalAlpha = opacity;
-    ctx.drawImage(layerCanvas, 0, 0);
+    withCellTransform(ctx, transform, width, height, () => {
+      ctx.drawImage(layerCanvas, 0, 0);
+    });
     ctx.globalAlpha = 1;
   }
 
@@ -1971,6 +1981,28 @@ function cameraFromLocal(local, window) {
     x: centreX + local.x * Math.cos(angle) - local.y * Math.sin(angle),
     y: centreY + local.x * Math.sin(angle) + local.y * Math.cos(angle),
   };
+}
+
+/**
+ * Draw something that belongs to a cell where the cell's transform says.
+ *
+ * The transform is a part of the cell, so the picture of the cell goes on
+ * the stage with it: moved, made bigger or smaller, and turned around the
+ * middle of the canvas.
+ */
+function withCellTransform(context, transform, width, height, draw) {
+  if (!transform || isPlain(transform)) {
+    draw();
+    return;
+  }
+  const matrix = transformMatrix(transform, width, height);
+  context.save();
+  context.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+  try {
+    draw();
+  } finally {
+    context.restore();
+  }
 }
 
 /** How many canvas units one screen pixel is worth. */
@@ -5143,6 +5175,27 @@ function drawPoint(event) {
   return [x, y, pressure];
 }
 
+/**
+ * Where the pointer is, in the space of the picture of the cell.
+ *
+ * A cell may sit somewhere else than it was drawn, so a point under the
+ * pointer has to be put back into the picture before the ink is put down.
+ * The brush then works in the space of the picture, and the picture is put
+ * where the transform says when it is shown.
+ */
+function drawPointIn(event, drawing) {
+  const point = drawPoint(event);
+  const transform = transformOf(drawing);
+  if (isPlain(transform)) return point;
+  const picture = pointToPicture(
+    { x: point[0], y: point[1] },
+    transform,
+    state.project.width,
+    state.project.height,
+  );
+  return [picture.x, picture.y, ...point.slice(2)];
+}
+
 /** Where the pointer was the last time, and when. */
 let lastPointer = null;
 
@@ -5240,14 +5293,11 @@ canvas.addEventListener("pointerdown", (event) => {
 
   const existing = drawingAt(layer, state.project.currentFrame);
   const drawing = existing || ensureDrawing(layer, state.project.currentFrame);
-  // The speed of the hand is measured from the first point of the stroke, so
-  // that the last move of the stroke before is not counted.
-  lastPointer = null;
   const settings = toolSettings();
   const stroke = {
     color: colorInput.value,
     width: settings.width,
-    points: [drawPoint(event)],
+    points: [drawPointIn(event, drawing)],
   };
   if (state.tool === "eraser") stroke.eraser = true;
   if (state.tool === "pencil") {
@@ -5260,7 +5310,7 @@ canvas.addEventListener("pointerdown", (event) => {
     // Shapes are a drag from the first point to this one; the second point
     // follows the pointer until release.
     stroke.kind = state.tool;
-    stroke.points.push(drawPoint(event));
+    stroke.points.push(drawPointIn(event, drawing));
   } else if (state.tool === "fill") {
     stroke.kind = "fill";
   }
@@ -5313,7 +5363,7 @@ canvas.addEventListener("pointermove", (event) => {
   const list = samples && samples.length ? samples : [event];
 
   for (const sample of list) {
-    const point = drawPoint(sample);
+    const point = drawPointIn(sample, state.drawingCell);
 
     if (state.drawing.kind && state.drawing.kind !== "fill") {
       // Shapes: the second point tracks the pointer for a live preview.
@@ -6280,6 +6330,75 @@ opacityInput.addEventListener("change", () => {
 
 preBehaviorInput.addEventListener("change", () => changeBehavior("pre"));
 postBehaviorInput.addEventListener("change", () => changeBehavior("post"));
+
+/**
+ * Put the transform of the cell that is on the frame.
+ *
+ * The transform says where the picture of the cell sits on the canvas, how
+ * big it is and how far it is turned. It is a part of the cell, so it is
+ * kept with it in the project file and written with it to a `.clip`.
+ */
+function changeTransform() {
+  const layer = currentLayer();
+  if (!layer || isGroup(layer)) return null;
+  const resolved = resolveDrawing(layer, state.project.currentFrame);
+  if (!resolved) return null;
+
+  const scale = Number(transformScaleInput.value) / 100;
+  const rotation = Number(transformRotationInput.value);
+  const x = Number(transformXInput.value);
+  const y = Number(transformYInput.value);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  if (!Number.isFinite(rotation) || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+  const drawing = resolved.drawing;
+  const before = snapshot();
+  drawing.transform = { x, y, scale, rotation };
+  recordHistory(before);
+  markDirty();
+  renderCanvas();
+  syncLayerControls();
+  return drawing;
+}
+
+transformXInput.addEventListener("change", changeTransform);
+transformYInput.addEventListener("change", changeTransform);
+transformRotationInput.addEventListener("change", changeTransform);
+transformScaleInput.addEventListener("pointerdown", () => {
+  state.transformBefore = snapshot();
+});
+transformScaleInput.addEventListener("input", () => {
+  const layer = currentLayer();
+  if (!layer || isGroup(layer)) return;
+  const resolved = resolveDrawing(layer, state.project.currentFrame);
+  if (!resolved) return;
+  const scale = Number(transformScaleInput.value) / 100;
+  if (!Number.isFinite(scale) || scale <= 0) return;
+  const transform = transformOf(resolved.drawing);
+  resolved.drawing.transform = { ...transform, scale };
+  transformScaleValue.textContent = `${Math.round(scale * 100)}%`;
+  renderCanvas();
+  markDirty();
+});
+transformScaleInput.addEventListener("change", () => {
+  const before = state.transformBefore;
+  state.transformBefore = null;
+  if (before) recordHistory(before);
+  markDirty();
+});
+transformResetButton.addEventListener("click", () => {
+  const layer = currentLayer();
+  if (!layer || isGroup(layer)) return;
+  const resolved = resolveDrawing(layer, state.project.currentFrame);
+  if (!resolved) return;
+  const before = snapshot();
+  delete resolved.drawing.transform;
+  recordHistory(before);
+  markDirty();
+  renderCanvas();
+  syncLayerControls();
+  setStatus("The cell is back where it was drawn");
+});
 
 playButton.addEventListener("click", togglePlayback);
 firstFrameButton.addEventListener("click", gotoFirstFrame);

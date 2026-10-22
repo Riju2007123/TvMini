@@ -1,5 +1,6 @@
 import { cameraAt, effectiveOpacity, layerIsVisible, resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
+import { transformOf, transformRgba } from "./transform.js";
 import {
   blendStrokeOver,
   eraseStrokeFrom,
@@ -537,7 +538,11 @@ function paintDrawing(width, height, drawing) {
   // paints nothing rather than failing.
   drawingBrush = drawing ? drawing.brush ?? null : null;
   try {
-    return paintDrawingInner(width, height, drawing);
+    const paint = paintDrawingInner(width, height, drawing);
+    // A cell may sit somewhere else than it was drawn: moved, made bigger or
+    // smaller, and turned. There is no canvas to draw on here, so the
+    // picture is put where the transform says in pixels.
+    return transformRgba(paint, width, height, transformOf(drawing));
   } finally {
     drawingBrush = null;
     brushStamp = null;

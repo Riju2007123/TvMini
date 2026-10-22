@@ -16,6 +16,7 @@ const files = [];
 for (let index = 0; index < args.length; index += 2) files.push([args[index], args[index + 1]]);
 
 const chunks = [];
+const byFile = new Map();
 for (const [file, marker] of files) {
   const diff = execFileSync("git", ["diff", "-U2", "--", file], { encoding: "utf8" });
   const lines = diff.split("\n");
@@ -39,13 +40,25 @@ for (const [file, marker] of files) {
     console.log(`${file}: nothing matched ${marker}`);
     continue;
   }
-  console.log(`${file}: ${kept.length} of ${hunks.length} hunk(s) kept`);
-  chunks.push([...header, ...kept.flat()].join("\n"));
+  const entry = byFile.get(file) ?? { header, hunks: [] };
+  entry.hunks.push(...kept);
+  byFile.set(file, entry);
+  console.log(`${file}: ${kept.length} hunk(s) kept for ${marker}`);
+}
+
+// One patch for a file: the hunks of a file belong together, or the second
+// patch would look for lines the first one has already moved.
+for (const [file, entry] of byFile) {
+  chunks.push([...entry.header, ...entry.hunks.flat()].join("\n"));
 }
 
 const patch = chunks.join("\n");
 const file = process.env.TMPDIR ? process.env.TMPDIR + "/hunks.patch" : "hunks.patch";
-fs.writeFileSync(file, patch);
+fs.writeFileSync(file, patch.endsWith("\n") ? patch : `${patch}\n`);
 console.log(`patch written to ${file}`);
+if (process.argv.includes("--patch-only")) {
+  console.log("the patch was not applied");
+  process.exit(0);
+}
 execFileSync("git", ["apply", "--cached", "--whitespace=nowarn", file], { stdio: "inherit" });
 console.log("staged");
