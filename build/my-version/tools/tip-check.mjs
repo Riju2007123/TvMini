@@ -118,6 +118,13 @@ await sleep(400);
 
 // The brush, and a width that is easy to measure.
 await devtools.run('document.querySelector("#brushButton")?.click(); true');
+// The start screen may still be there, and the panel comes back with the
+// page, so the width is waited for.
+for (let attempt = 0; attempt < 40; attempt += 1) {
+  const there = await devtools.run('!!document.querySelector("#width")');
+  if (there) break;
+  await sleep(250);
+}
 await devtools.run(
   '(() => { const w = document.querySelector("#width"); w.value = "20";' +
     ' w.dispatchEvent(new Event("input", { bubbles: true })); return true; })()',
@@ -231,7 +238,9 @@ console.log(
   `after the drag: ${await devtools.run(
     '(() => { const c = document.querySelector("#canvas");' +
       " return JSON.stringify({ transform: c.style.transform," +
-      ' overlay: document.querySelector("#overlay").style.transform }); })()',
+      ' overlay: document.querySelector("#overlay").style.transform,' +
+      ' scroll: Math.round(document.querySelector(".canvas-scroll").scrollLeft) + " by " +' +
+      ' Math.round(document.querySelector(".canvas-scroll").scrollTop) }); })()',
   )}`,
 );
 

@@ -1416,17 +1416,48 @@ body.hide-inspector.hide-stage .workspace {
 .canvas-wrap {
   position: relative;
   display: flex;
-  /* The stage scrolls in both directions, the way Clip Studio Paint does, so
-     a document that is larger than the pane can be moved around. */
-  overflow: scroll;
-  /* The classic bars, always there: the thin ones of the standard property
-     are drawn over the content and take no room. */
-  scrollbar-width: auto;
-  scrollbar-color: var(--surface-3) transparent;
-  padding: 18px;
+  /* The stage itself is not scrolled: the box inside it is, so the bars of
+     the timeline and the zoom of the stage stay where they are. */
+  overflow: hidden;
+  padding: 0;
   /* The pasteboard of Flash is a flat grey, and the page sits on it. */
   background-color: var(--ground);
   background-image: none;
+}
+
+/* The stage scrolls in both directions, the way Clip Studio Paint does, so
+   a document that is larger than the pane can be moved around. The bars are
+   the slim ones of the timeline. */
+.canvas-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: scroll;
+  padding: 18px;
+  scrollbar-width: auto;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+.canvas-scroll::-webkit-scrollbar {
+  height: 9px;
+  width: 9px;
+}
+
+.canvas-scroll::-webkit-scrollbar-track {
+  background: var(--ground);
+}
+
+.canvas-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-3);
+  background-clip: content-box;
+}
+
+.canvas-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
 }
 
 canvas {
@@ -1457,6 +1488,9 @@ canvas.picking {
   line-height: 0;
   max-width: none;
   max-height: none;
+  /* The stage is not made smaller to fit the pane: it is as big as the
+     zoom says, and the pane scrolls. */
+  flex: 0 0 auto;
   /* Centred in the pane, and still reachable on both sides when the
      document is larger than the pane. */
   margin: auto;
@@ -2794,8 +2828,9 @@ input[type="range"] {
 
 .zoom-label {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
+  /* Clear of the bars of the stage, which are in the corner of the pane. */
+  right: 24px;
+  bottom: 24px;
   z-index: 3;
   padding: 3px 10px;
   border: 1px solid var(--edge);

@@ -66,6 +66,9 @@ const ctx = canvas.getContext("2d");
 // document underneath is only drawn when the document itself changes.
 const overlay = document.getElementById("overlay");
 const overlayCtx = overlay.getContext("2d");
+// The box the stage is in. It scrolls when the document is larger than the
+// pane, and the bars of it show where the document is.
+const canvasScroll = document.querySelector(".canvas-scroll");
 const statusEl = document.getElementById("status");
 const statusBar = document.querySelector(".statusbar");
 const pathLabel = document.getElementById("pathLabel");
@@ -1937,28 +1940,20 @@ function showZoom() {
  * on the canvas element and the camera is untouched by it.
  */
 let viewZoom = 1;
-let viewPanX = 0;
-let viewPanY = 0;
 
 /**
- * Put the zoom and the pan on the canvas element.
+ * Put the zoom on the canvas element.
  *
  * The element is the size the document is shown at, and the buffer behind it
  * holds the dots of the screen, so the picture is drawn one to one. The pane
  * scrolls when the document is larger than the pane, the way Clip Studio
- * Paint does.
+ * Paint does, and the bars of the pane show where the document is.
  */
 function applyView() {
   const project = state.project;
   const zoom = viewZoom || 1;
   canvas.style.width = `${Math.round(project.width * zoom)}px`;
   canvas.style.height = `${Math.round(project.height * zoom)}px`;
-  canvas.style.transformOrigin = "0 0";
-  canvas.style.transform = `translate(${viewPanX}px, ${viewPanY}px)`;
-  // The sheet on top of the stage moves with the stage, so the shape of the
-  // brush stays under the pointer.
-  overlay.style.transformOrigin = "0 0";
-  overlay.style.transform = `translate(${viewPanX}px, ${viewPanY}px)`;
   // The buffer holds the dots of the screen, so it follows the zoom.
   const buffer = stageBuffer();
   if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
@@ -1977,37 +1972,38 @@ function zoomStage(factor, clientX, clientY) {
   const local = (clientX - rect.left) / viewZoom;
   const next = Math.max(0.1, Math.min(16, viewZoom * factor));
   if (next === viewZoom) return;
-  // The element grows with the zoom, so the pan has to move so that the
-  // same point of the document stays under the pointer.
-  viewPanX += clientX - rect.left - local * next;
   viewZoom = next;
   applyView();
+  // The element grows with the zoom, so the pane is scrolled so that the
+  // same point of the document stays under the pointer.
+  const after = canvas.getBoundingClientRect();
+  canvasScroll.scrollLeft += after.left - (clientX - local * next);
+  canvasScroll.scrollTop += after.top - (clientY - local * next);
 }
 
 /** The zoom that shows the whole document in the pane. */
 function fitStage() {
   const project = state.project;
-  const wrap = document.querySelector(".canvas-wrap");
-  const box = wrap?.getBoundingClientRect();
+  const box = canvasScroll.getBoundingClientRect();
   if (!box || !box.width || !box.height) return;
   const zoom = Math.min(box.width / project.width, box.height / project.height);
   viewZoom = Math.max(0.1, Math.min(16, zoom));
-  viewPanX = 0;
-  viewPanY = 0;
   applyView();
+  // The document is in the middle of the pane again.
+  canvasScroll.scrollLeft = 0;
+  canvasScroll.scrollTop = 0;
 }
 
-/** Drag the stage with the middle mouse button. */
+/** Drag the stage with the middle mouse button: the pane is scrolled. */
 function panStage(event) {
   const startX = event.clientX;
   const startY = event.clientY;
-  const panX = viewPanX;
-  const panY = viewPanY;
+  const scrollX = canvasScroll.scrollLeft;
+  const scrollY = canvasScroll.scrollTop;
 
   const move = (moveEvent) => {
-    viewPanX = panX + (moveEvent.clientX - startX);
-    viewPanY = panY + (moveEvent.clientY - startY);
-    applyView();
+    canvasScroll.scrollLeft = scrollX - (moveEvent.clientX - startX);
+    canvasScroll.scrollTop = scrollY - (moveEvent.clientY - startY);
   };
   const stop = () => {
     window.removeEventListener("pointermove", move);
