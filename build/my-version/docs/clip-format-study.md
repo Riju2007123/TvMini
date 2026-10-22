@@ -245,6 +245,15 @@ A cell whose name does not appear in the curve — a layer inside a cell that
 is not a cell itself, for instance — keeps the frame and the hold of the
 cell it sits in.
 
+**A cell holds until the next cell starts.** An animation folder has no
+holes in it: the cells of a row follow each other, and the last one holds
+until the end of the track. That is why a document of the corpus has a cell
+on every frame of its row, and why the hold of a cell is not a number of its
+own but the distance to the cell after it. TVMini holds its cells the same
+way now (`closeCellGaps` in `public/timeline.js`): a cell that is made on a
+later frame reaches the cell before it, and the cell that is made reaches the
+cell after it.
+
 ### How a blob is found
 
 Three pieces fit together:

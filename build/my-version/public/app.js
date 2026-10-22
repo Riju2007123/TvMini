@@ -33,6 +33,7 @@ import {
   cellName,
   childrenOf,
   clipSourceOf,
+  closeCellGaps,
   contentEnd,
   deleteCameraKey,
   deleteDrawing,
@@ -5195,6 +5196,9 @@ function ensureDrawing(layer, frame) {
   drawing.name = cellName(layer, frame);
   layer.drawings.push(drawing);
   layer.drawings.sort((a, b) => a.at - b.at);
+  // The cell before this one keeps the screen until this one starts, so
+  // that the frames in between show the last picture and not nothing.
+  closeCellGaps(layer, frame);
   return drawing;
 }
 

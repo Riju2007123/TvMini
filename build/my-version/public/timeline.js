@@ -506,6 +506,39 @@ export function drawingAt(layer, frame) {
   return index === -1 ? null : drawingsOf(layer)[index];
 }
 
+/**
+ * The cells of a layer follow each other.
+ *
+ * A cell holds until the next cell of the same layer starts, the way a cel
+ * of an animation folder holds in Clip Studio Paint. A cell that is made on
+ * a later frame therefore has to reach the cell before it, or the frames in
+ * between would show nothing at all, and the cell that is made reaches the
+ * cell after it, so that the layer has no hole in it.
+ *
+ * @param {object} layer The layer the cell is in.
+ * @param {number} frame The frame the cell sits on.
+ * @returns {object|null} The cell, or null when there is none on that frame.
+ */
+export function closeCellGaps(layer, frame) {
+  const drawings = drawingsOf(layer);
+  const drawing = drawings.find((entry) => entry.at === frame);
+  if (!drawing) return null;
+
+  let before = null;
+  let after = null;
+  for (const entry of drawings) {
+    if (entry === drawing) continue;
+    if (entry.at < frame && (!before || entry.at > before.at)) before = entry;
+    if (entry.at > frame && (!after || entry.at < after.at)) after = entry;
+  }
+
+  // The cell before this one keeps the screen until this one starts.
+  if (before && before.at + before.hold < frame) before.hold = frame - before.at;
+  // This one holds until the cell after it starts.
+  if (after && drawing.hold < after.at - drawing.at) drawing.hold = after.at - drawing.at;
+  return drawing;
+}
+
 /** First and last exposed frame of a layer, or null for an empty layer. */
 export function layerBounds(layer) {
   const drawings = drawingsOf(layer);
@@ -701,6 +734,9 @@ export function insertDrawing(layer, frame) {
     const drawing = { at: frame, hold: 1, strokes: [] };
     drawings.push(drawing);
     sortDrawings(layer);
+    // The cell before this one keeps the screen until this one starts, so
+    // that the frames in between show the last picture and not nothing.
+    closeCellGaps(layer, frame);
     return drawing;
   }
 

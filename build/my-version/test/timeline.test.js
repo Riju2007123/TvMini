@@ -157,6 +157,33 @@ test("contentEnd and timelineColumns include content and the playhead", () => {
   assert.equal(contentLength(project), 6);
 });
 
+test("a cell that is made on a later frame fills the gap before it", () => {
+  // A cell holds until the next cell of the same layer starts, the way a cel
+  // of an animation folder holds in Clip Studio Paint. A cell that is made
+  // on frame 8 therefore has to reach the cell before it, or the frames in
+  // between would show nothing at all.
+  const layer = layerWith([]);
+  insertDrawing(layer, 1);
+  insertDrawing(layer, 3);
+  insertDrawing(layer, 8);
+  assert.deepEqual(layer.drawings.map((item) => [item.at, item.hold]), [
+    [1, 2],
+    [3, 5],
+    [8, 1],
+  ]);
+});
+
+test("the cell that is made reaches the cell after it", () => {
+  const layer = layerWith([drawing(1, 1), drawing(8, 1)]);
+  const made = insertDrawing(layer, 3);
+  assert.equal(made.at, 3);
+  assert.deepEqual(layer.drawings.map((item) => [item.at, item.hold]), [
+    [1, 2],
+    [3, 5],
+    [8, 1],
+  ]);
+});
+
 test("shiftStartFrame moves drawings and the playhead together", () => {
   const project = createProject(20, 20);
   project.layers[0].drawings = [drawing(1, 1), drawing(4, 1)];
