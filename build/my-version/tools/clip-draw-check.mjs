@@ -350,6 +350,28 @@ console.log(
   `   the status line says: ${await devtools.run('document.querySelector("#status")?.textContent ?? ""')}`,
 );
 
+// The trim has to be taken back with the undo.
+await devtools.send("Input.dispatchKeyEvent", {
+  type: "rawKeyDown",
+  key: "z",
+  code: "KeyZ",
+  windowsVirtualKeyCode: 90,
+  modifiers: 2,
+});
+await devtools.send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "z",
+  code: "KeyZ",
+  windowsVirtualKeyCode: 90,
+  modifiers: 2,
+});
+await sleep(900);
+console.log(
+  `   after the undo: the readout says ${await devtools.run(
+    'document.querySelector("#frameReadout")?.textContent ?? ""',
+  )}`,
+);
+
 if (devtools.errors.length) {
   console.log("\nwhat the program said:");
   for (const line of devtools.errors.slice(0, 10)) console.log(`   ${line}`);
