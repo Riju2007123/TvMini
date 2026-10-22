@@ -148,3 +148,62 @@ Not taken: any artwork. The 126 icons in the program are Macromedia's, and
 the icons in TVMini are drawn from scratch. The menu bar of TVMini keeps
 its own menus, because the commands of Flash are not the commands of
 TVMini.
+
+## The pencil and the brush
+
+The program was started again and the two tools that draw were looked at,
+the same way as the window: the tool was chosen with its key (**Y** is the
+pencil, **B** is the brush, **P** is the bezier pen) and the picture of the
+window was taken afterwards. The measurements are the ones the program
+shows in its own properties panel.
+
+### The pencil
+
+| Part of the panel | |
+|---|---|
+| The stroke | a colour and a size, 1 by default |
+| The shape | Solid, or Custom |
+| **Stroke hinting** | a checkbox, off by default |
+| **Scales** | Normal (Horizontal, Vertical and None are there as well) |
+| **Miter** | 3 |
+| **Join** | a curve |
+| **Smoothing** | 0, greyed out until the shape is Custom |
+
+### The brush
+
+| Part of the panel | |
+|---|---|
+| The shape | a picture, chosen in the options part of the tool bar |
+| The colour | chosen in the options part of the tool bar |
+| **Smoothing** | **20** |
+
+### What the two settings mean
+
+**Smoothing** is the setting that takes the tremble out of a line. The
+line that is left behind is not the line the hand made: the points that do
+not bend the line are taken away, so the line is the same shape without
+the shaking. The pencil leaves it at 0 and the brush at 20, so the brush
+draws the calmer line of the two.
+
+**Stroke hinting** and **Scales** are about the stroke of a shape, not
+about the hand: with hinting on, the outline of a stroke keeps its shape
+when it is made bigger, and the stroke is scaled with the shape.
+
+### Why a line in Flash stays clean at any zoom
+
+A line in Flash is not a picture of a line. It is a **path**: a list of
+points and a width, kept as numbers. The program draws that path again
+for the size the stage is shown at, so the line is drawn in the pixels of
+the screen however far the stage is magnified. There is nothing to blur,
+because there is no picture of the line to make bigger.
+
+**TVMini status.** The strokes of TVMini are points and a width as well,
+and they are drawn on the stage in the pixels of the screen
+(`public/app.js`, the drawing of a layer), so a line stays clean at any
+zoom. The smoothing of Flash is in `public/core/smooth.js`: the points
+that do not bend the line are taken away, the first step of the
+Ramer–Douglas–Peucker algorithm, done as the stroke is drawn so the line
+that is shown is the line that will be left behind. It is set with the
+**Smooth** slider in the tool property panel, from 0 to 100, and 50 is the
+setting it starts at.
+

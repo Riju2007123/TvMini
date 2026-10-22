@@ -239,7 +239,7 @@ const state = {
   smoothedPoint: null,
   // The smoothing of the line itself: the points that do not bend the line
   // are taken away, the way the pencil of Flash does it (0 = off).
-  smooth: 20,
+  smooth: 50,
   homeDir: ".",
   playing: false,
   playTimer: null,
