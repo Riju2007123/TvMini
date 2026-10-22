@@ -829,6 +829,12 @@ function projectImage() {
 
 const paintCanvas = document.createElement("canvas");
 const paintCtx = paintCanvas.getContext("2d", { willReadFrequently: true });
+// Scratch canvas for a layer that is drawn through one: an eraser has to
+// take ink away from its own layer only. It is the size of the screen, so
+// the strokes in it are drawn in the pixels of the screen and a line that
+// is magnified stays sharp.
+const layerCanvas = document.createElement("canvas");
+const layerCtx = layerCanvas.getContext("2d", { willReadFrequently: true });
 // Scratch canvas for transparent/blending strokes: the stroke is painted
 // opaque here first, then applied to the paint canvas in a single pass.
 const blendCanvas = document.createElement("canvas");
@@ -1165,19 +1171,29 @@ function renderCanvas(frame = state.project.currentFrame) {
 
     // The same goes for a layer with strokes on it, as long as it is drawn
     // at full strength: the picture and the strokes can go onto the canvas
-    // as they are, without the round trip through a scratch canvas. An
-    // eraser is the exception: it has to take ink away from its own layer
-    // only, and that is the work of the scratch canvas.
-    if (opacity === 1 && base && !strokes.some((stroke) => stroke.eraser)) {
-      ctx.drawImage(base, 0, 0, width, height);
-      drawStrokesInto(ctx, strokes);
+    // as they are, without the round trip through a scratch canvas. The
+    // strokes are then drawn in the pixels of the screen, so a line that is
+    // magnified stays sharp; through a scratch canvas they would be drawn
+    // in the pixels of the document and then made bigger, and a magnified
+    // line would be soft. An eraser is the exception: it has to take ink
+    // away from its own layer only, and that is the work of the scratch
+    // canvas.
+    if (opacity === 1 && !strokes.some((stroke) => stroke.eraser)) {
+      if (base) ctx.drawImage(base, 0, 0, width, height);
+      drawStrokesInto(ctx, strokes, resolved.drawing.brush);
       continue;
     }
 
-    drawDrawingToPaint(project, resolved.drawing);
+    // The layer is drawn through the scratch canvas, in the pixels of the
+    // screen, so that a magnified line is sharp there as well.
+    layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+    fitScratch(layerCanvas, layerCtx, canvas.width, canvas.height);
+    useDocumentSpace(layerCtx);
+    drawDrawingToPaint(project, resolved.drawing, 1, layerCtx, layerCanvas);
+    layerCtx.setTransform(1, 0, 0, 1, 0, 0);
 
     ctx.globalAlpha = opacity;
-    ctx.drawImage(paintCanvas, 0, 0);
+    ctx.drawImage(layerCanvas, 0, 0);
     ctx.globalAlpha = 1;
   }
 
