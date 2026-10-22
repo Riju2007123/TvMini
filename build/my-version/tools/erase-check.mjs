@@ -235,6 +235,23 @@ console.log(`the ink when the eraser is let go: ${await inkAt()}`);
 console.log(
   `the status: ${await devtools.run('document.querySelector("#status")?.textContent ?? ""')}`,
 );
+
+// How long a move of the eraser takes, and how long a move of the brush
+// takes, so the two can be compared.
+const timeMoves = async (tool) => {
+  await devtools.run(`document.querySelector("#${tool}Button").click(); true`);
+  await sleep(150);
+  const start = Date.now();
+  await mouse("mousePressed", box.x + box.w * 0.3, y, 1);
+  for (let step = 0; step < 30; step += 1) {
+    await mouse("mouseMoved", box.x + box.w * (0.3 + step * 0.01), y, 1);
+  }
+  await mouse("mouseReleased", box.x + box.w * 0.6, y, 0);
+  return (Date.now() - start) / 30;
+};
+console.log(`a move of the brush takes ${(await timeMoves("brush")).toFixed(1)} milliseconds`);
+console.log(`a move of the eraser takes ${(await timeMoves("eraser")).toFixed(1)} milliseconds`);
+
 console.log(await picture());
 
 edge.kill();
