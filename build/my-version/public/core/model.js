@@ -171,6 +171,13 @@ function normalizeStrokes(value, label) {
       clean.brush = brush;
     }
 
+    // The ends of a stroke are thin, the way the brush of Clip Studio Paint
+    // tapers in and out. It is a share of the line, from 0 to half of it.
+    if (stroke.taper !== undefined) {
+      const taper = numberInRange(stroke.taper, `${label}[${index}].taper`, 0, 0.5);
+      if (taper > 0) clean.taper = taper;
+    }
+
     return clean;
   });
 

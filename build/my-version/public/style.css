@@ -755,6 +755,9 @@ body.hide-inspector.hide-stage .workspace {
   min-width: 0;
   background: var(--seam-strong);
   overflow: hidden;
+  /* The grips between the panels sit on the seams of the workspace, so it
+     has to be the box they are measured against. */
+  position: relative;
 }
 
 .pane {
@@ -782,6 +785,8 @@ body.hide-inspector.hide-stage .workspace {
 
 .right-column > .layers-pane {
   flex: 0 0 auto;
+  /* The grip between the layers and the inspector sets how tall they are. */
+  height: var(--layers-h, auto);
   max-height: 58%;
 }
 
@@ -1136,6 +1141,16 @@ body.hide-inspector.hide-stage .workspace {
   flex-direction: column;
   gap: 7px;
   padding: 4px 8px 10px;
+}
+
+/* The shape of the brush, shown in the property panel. */
+.brush-shape-preview {
+  display: block;
+  width: 100%;
+  height: 44px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: #f4f4f6;
 }
 
 /* The note under the settings of the tool in the hand. */
@@ -1573,6 +1588,147 @@ canvas.picking {
 .pane-grip.dragging {
   background: var(--accent);
   box-shadow: none;
+}
+
+/* The grips between the panels ------------------------------------------ */
+
+/* The grip on a vertical seam: it makes the column beside it wider. */
+.pane-grip-v {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 4;
+}
+
+#leftGrip {
+  left: calc(var(--left-w) - 3px);
+}
+
+#rightGrip {
+  right: calc(var(--right-w) - 3px);
+}
+
+/* The grip on a horizontal seam: it makes the panel above it taller. */
+.pane-grip-h {
+  flex: 0 0 5px;
+  height: 5px;
+}
+
+/* panels that float ------------------------------------------------------ */
+
+/* The layer the handles of the panels that float live in: a fixed box over
+   the whole window, so a panel can be put anywhere in it. It sits above the
+   panels and below the windows that are opened over the app. */
+#floatLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  pointer-events: none;
+}
+
+/* The frame of a panel that floats holds its handles. The panel itself is
+   put over the window, and keeps its place in the window all the same. */
+.pane-float {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* A panel that floats is a window of its own. */
+.pane.floating {
+  border: 1px solid var(--seam-strong);
+  box-shadow: var(--elev-dialog);
+}
+
+/* The handles of a panel that floats: the edges and the corners. */
+.pane-handle {
+  position: absolute;
+  z-index: 6;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.pane-handle-n {
+  top: -3px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.pane-handle-s {
+  bottom: -3px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.pane-handle-e {
+  right: -3px;
+  top: 12px;
+  bottom: 12px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.pane-handle-w {
+  left: -3px;
+  top: 12px;
+  bottom: 12px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.pane-handle-ne {
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.pane-handle-se {
+  bottom: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+.pane-handle-sw {
+  bottom: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.pane-handle-nw {
+  top: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* The head of a panel is the handle that moves it. */
+.pane-header {
+  cursor: grab;
+  touch-action: none;
+}
+
+.pane-header button,
+.pane-header input,
+.pane-header a {
+  cursor: pointer;
+}
+
+body.pane-dragging,
+body.pane-dragging .pane-header {
+  cursor: grabbing;
 }
 
 .timeline-pane {

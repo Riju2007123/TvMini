@@ -3,7 +3,14 @@ import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { decodeSound, soundPeaks } from "./audio.js";
-import { floodFillRgba, parseHexColor, smoothPoint, strokeOutline, strokePathGroups } from "./core/paint.js";
+import {
+  floodFillRgba,
+  parseHexColor,
+  smoothPoint,
+  strokeOutline,
+  strokePathGroups,
+  strokeRadii as sharedStrokeRadii,
+} from "./core/paint.js";
 import { smoothRadius, smoothStroke } from "./core/smooth.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
@@ -112,7 +119,11 @@ const cameraToolButton = document.getElementById("cameraTool");
 const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
 const smoothInput = document.getElementById("smooth");
+const velocityInput = document.getElementById("velocity");
+const taperInput = document.getElementById("taper");
 const smoothValue = document.getElementById("smoothValue");
+const velocityValue = document.getElementById("velocityValue");
+const taperValue = document.getElementById("taperValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
 const strokeBlendSelect = document.getElementById("strokeBlend");
 const cameraAddButton = document.getElementById("cameraAdd");
@@ -249,15 +260,41 @@ const state = {
   rawPoints: [],
   // The settings of each tool, so that one tool does not change the other:
   // how wide it draws, how steady the line is, how strong it paints and how
-  // it mixes with the paint under it.
+  // it mixes with the paint under it. The velocity is how much the width of
+  // the line follows the speed of the hand, and the taper is how much of
+  // each end of the line is thin.
   toolSettings: {
-    brush: { width: 6, stabilizer: 0, smooth: 50, opacity: 100, blend: "normal" },
-    pencil: { width: 3, stabilizer: 0, smooth: 70, opacity: 100, blend: "normal" },
-    eraser: { width: 30, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
-    line: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
-    rect: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
-    ellipse: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
-    fill: { width: 6, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+    brush: {
+      width: 6,
+      stabilizer: 0,
+      smooth: 50,
+      opacity: 100,
+      blend: "normal",
+      velocity: 45,
+      taper: 20,
+    },
+    pencil: {
+      width: 3,
+      stabilizer: 0,
+      smooth: 70,
+      opacity: 100,
+      blend: "normal",
+      velocity: 0,
+      taper: 0,
+    },
+    eraser: {
+      width: 30,
+      stabilizer: 0,
+      smooth: 0,
+      opacity: 100,
+      blend: "normal",
+      velocity: 0,
+      taper: 0,
+    },
+    line: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
+    rect: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
+    ellipse: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
+    fill: { width: 6, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
   },
   homeDir: ".",
   playing: false,
@@ -883,6 +920,15 @@ if (typeof window !== "undefined") {
       sizeWorld(Math.round(project.width * zoom), Math.round(project.height * zoom));
     }
   });
+
+  // The panels of the window can be pulled out of it and made bigger, so
+  // the world of the stage follows the panel it sits in.
+  window.addEventListener("tvmini:layout", () => {
+    const project = state.project;
+    if (!project) return;
+    const zoom = viewZoom || 1;
+    sizeWorld(Math.round(project.width * zoom), Math.round(project.height * zoom));
+  });
 }
 
 function resizeCanvas() {
@@ -968,7 +1014,67 @@ function strokeRadius(stroke, point) {
 }
 
 /**
- * The brush of a stroke.
+ * The width of a stroke at every one of its points.
+ *
+ * The ends of the stroke are thinner, the way the brush of Clip Studio Paint
+ * tapers in and out.
+ */
+function strokeRadii(stroke) {
+  return sharedStrokeRadii(stroke, stroke.taper ?? 0);
+}
+
+/**
+ * Show the shape of the brush that is in the hand.
+ *
+ * The panel shows the brush itself, the way MoArt does, so that the shape
+ * of the tip can be seen without drawing with it.
+ */
+function drawBrushShape() {
+  const surface = document.getElementById("brushShapePreview");
+  if (!surface) return;
+  const context = surface.getContext("2d");
+  const width = surface.width;
+  const height = surface.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#f4f4f6";
+  context.fillRect(0, 0, width, height);
+
+  const brush = currentBrush();
+  const size = Math.max(2, Math.min(30, toolSettings().width));
+  const picture = brush?.data ? tipImage(brush) : null;
+
+  if (picture && picture.complete && picture.naturalWidth > 0) {
+    const shape = tintedTip(brush, colorInput.value) ?? picture;
+    const boxHeight = size;
+    const boxWidth = boxHeight * (shape.width / Math.max(1, shape.height));
+    for (let step = 0; step <= 40; step += 1) {
+      const at = step / 40;
+      const x = 8 + (width - 16) * at;
+      const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
+      context.globalAlpha = 0.85;
+      context.drawImage(shape, x - boxWidth / 2, y - boxHeight / 2, boxWidth, boxHeight);
+    }
+    context.globalAlpha = 1;
+    return;
+  }
+
+  // No picture: the round tip, thin at the ends the way the brush tapers.
+  context.fillStyle = colorInput.value;
+  const radius = size / 2;
+  const steps = 60;
+  for (let step = 0; step <= steps; step += 1) {
+    const at = step / steps;
+    const x = 6 + (width - 12) * at;
+    const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
+    // The ends of the line are thin, the way the brush tapers in and out.
+    const factor = Math.max(0, Math.min(1, at / 0.12, (1 - at) / 0.12));
+    context.beginPath();
+    context.arc(x, y, Math.max(0.4, radius * (0.2 + 0.8 * factor)), 0, Math.PI * 2);
+    context.fill();
+  }
+}
+
+/** The brush of a stroke.
  *
  * A stroke remembers the brush it was made with, so that changing the brush
  * does not change the strokes that are already on the paper. A stroke that
@@ -1079,7 +1185,7 @@ function brushShapeBox(picture, radius) {
  * Paint stamps the shape of a brush.
  */
 function drawStrokeWithPicture(ctx, stroke, picture) {
-  const radii = stroke.points.map((point) => strokeRadius(stroke, point));
+  const radii = strokeRadii(stroke);
   const stamp = (x, y, radius) => {
     const box = brushShapeBox(picture, radius);
     ctx.drawImage(picture, x - box.width / 2, y - box.height / 2, box.width, box.height);
@@ -1138,7 +1244,7 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null) 
   // square and the corners are sharp. Every other stroke is round.
   ctx.lineCap = stroke.hard ? "butt" : "round";
   ctx.lineJoin = stroke.hard ? "miter" : "round";
-  const radii = stroke.points.map((point) => strokeRadius(stroke, point));
+  const radii = strokeRadii(stroke);
 
   if (brush?.data) {
     // The picture of the brush is only the shape of the tip, so it is
@@ -2022,6 +2128,8 @@ function useBrush(brush, name) {
   afterChange();
   brushImageName.textContent = name;
   if (brush) applyBrushSettings(brush);
+  // The shape of the brush in the panel is drawn again.
+  drawBrushShape();
   return true;
 }
 
@@ -4480,10 +4588,36 @@ function forgetPressure() {
 
 function drawPoint(event) {
   const [x, y] = canvasPoint(event);
+  // The speed of the hand is measured on every move, so that the line can be
+  // thinner where the hand moved quickly.
+  const speed = pointerSpeed(event);
   const pressure = pressureFor(event);
-  if (pressure === null) return [x, y];
+  if (pressure === null) {
+    // Without a stylus the speed of the hand is used: a brush that is moved
+    // quickly leaves a thinner line, the way it does in Clip Studio Paint.
+    const strength = (toolSettings().velocity ?? 0) / 100;
+    return [x, y, 1 - speed * strength];
+  }
   pressureValue.textContent = pressure.toFixed(2);
   return [x, y, pressure];
+}
+
+/** Where the pointer was the last time, and when. */
+let lastPointer = null;
+
+/**
+ * How fast the hand is moving, as a number from 0 (still) to 1 (quick).
+ *
+ * The speed is measured in the pixels of the screen: the hand is quick at
+ * two pixels a millisecond.
+ */
+function pointerSpeed(event) {
+  const previous = lastPointer;
+  lastPointer = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+  if (!previous) return 0;
+  const time = Math.max(1, event.timeStamp - previous.time);
+  const distance = Math.hypot(event.clientX - previous.x, event.clientY - previous.y);
+  return Math.min(1, distance / time / 2);
 }
 
 function layerForDrawing() {
@@ -4555,6 +4689,9 @@ canvas.addEventListener("pointerdown", (event) => {
   const before = snapshot();
   const existing = drawingAt(layer, state.project.currentFrame);
   const drawing = existing || ensureDrawing(layer, state.project.currentFrame);
+  // The speed of the hand is measured from the first point of the stroke, so
+  // that the last move of the stroke before is not counted.
+  lastPointer = null;
   const settings = toolSettings();
   const stroke = {
     color: colorInput.value,
@@ -4589,6 +4726,9 @@ canvas.addEventListener("pointerdown", (event) => {
           opacity: brush.opacity ?? null,
         }
       : null;
+    // The ends of the stroke are thin, the way the brush of Clip Studio
+    // Paint tapers in and out.
+    if (settings.taper > 0) stroke.taper = Math.min(0.5, settings.taper / 200);
   }
   // The opacity and the blend belong to every tool that paints, and not to
   // the fill, which floods the region with the colour as it is.
@@ -4699,6 +4839,7 @@ widthInput.addEventListener("input", () => {
   syncQuickBar();
   // The shape of the brush under the pointer grows and shrinks with the
   // width, so it is drawn again at once.
+  drawBrushShape();
   drawOverlay();
 });
 
@@ -4754,7 +4895,7 @@ const TOOL_STATUS = {
 const TOOL_PROPS = {
   brush: {
     title: "Brush",
-    rows: ["brush", "width", "stabilizer", "smooth", "opacity", "blend"],
+    rows: ["brush", "width", "stabilizer", "smooth", "velocity", "taper", "opacity", "blend"],
     note: "",
   },
   pencil: {
@@ -4808,6 +4949,8 @@ const toolPropRows = {
   width: document.getElementById("toolWidthRow"),
   stabilizer: document.getElementById("toolStabilizerRow"),
   smooth: document.getElementById("toolSmoothRow"),
+  velocity: document.getElementById("toolVelocityRow"),
+  taper: document.getElementById("toolTaperRow"),
   opacity: document.getElementById("toolOpacityRow"),
   blend: document.getElementById("toolBlendRow"),
 };
@@ -4834,6 +4977,10 @@ function showToolProps() {
   stabilizerValue.textContent = String(settings.stabilizer);
   smoothInput.value = String(settings.smooth);
   smoothValue.textContent = String(settings.smooth);
+  velocityInput.value = String(settings.velocity ?? 0);
+  velocityValue.textContent = String(settings.velocity ?? 0);
+  taperInput.value = String(settings.taper ?? 0);
+  taperValue.textContent = String(settings.taper ?? 0);
   strokeOpacityInput.value = String(settings.opacity);
   strokeBlendSelect.value = settings.blend;
 
@@ -4849,6 +4996,12 @@ function showToolProps() {
   const draws = state.tool !== "pick" && state.tool !== "camera" && state.tool !== "fill";
   penSectionTitle.hidden = !draws;
   penSection.hidden = !draws;
+  // The shape of the brush is shown in the panel, the way MoArt shows it.
+  const preview = document.getElementById("brushShapePreview");
+  if (preview) {
+    preview.hidden = state.tool !== "brush";
+    if (!preview.hidden) drawBrushShape();
+  }
   syncQuickBar();
 }
 
@@ -4858,6 +5011,8 @@ function saveToolProps() {
   settings.width = Math.max(1, Math.min(300, Number(widthInput.value) || settings.width));
   settings.stabilizer = Math.max(0, Math.min(100, Number(stabilizerInput.value) || 0));
   settings.smooth = Math.max(0, Math.min(100, Number(smoothInput.value) || 0));
+  settings.velocity = Math.max(0, Math.min(100, Number(velocityInput.value) || 0));
+  settings.taper = Math.max(0, Math.min(100, Number(taperInput.value) || 0));
   settings.opacity = Math.max(1, Math.min(100, Number(strokeOpacityInput.value) || 100));
   settings.blend = strokeBlendSelect.value;
 }
@@ -5024,6 +5179,12 @@ function loadSettings() {
         if (Number.isFinite(settings.opacity)) {
           known.opacity = Math.max(1, Math.min(100, Math.round(settings.opacity)));
         }
+        if (Number.isFinite(settings.velocity)) {
+          known.velocity = Math.max(0, Math.min(100, Math.round(settings.velocity)));
+        }
+        if (Number.isFinite(settings.taper)) {
+          known.taper = Math.max(0, Math.min(100, Math.round(settings.taper)));
+        }
         if (typeof settings.blend === "string") known.blend = settings.blend;
       }
     }
@@ -5120,6 +5281,30 @@ smoothInput.addEventListener("input", () => {
   );
 });
 smoothInput.addEventListener("change", saveSettings);
+
+velocityInput.addEventListener("input", () => {
+  const value = Math.max(0, Math.min(100, Math.round(Number(velocityInput.value))));
+  toolSettings().velocity = value;
+  velocityValue.textContent = String(value);
+  setStatus(
+    value === 0
+      ? "Velocity off — the line keeps the same width"
+      : `Velocity ${value} — a quick hand leaves a thinner line`,
+  );
+});
+velocityInput.addEventListener("change", saveSettings);
+
+taperInput.addEventListener("input", () => {
+  const value = Math.max(0, Math.min(100, Math.round(Number(taperInput.value))));
+  toolSettings().taper = value;
+  taperValue.textContent = String(value);
+  setStatus(
+    value === 0
+      ? "Taper off — the line is as thick at the ends as in the middle"
+      : `Taper ${value} — the ends of the line are thin`,
+  );
+});
+taperInput.addEventListener("change", saveSettings);
 
 clearButton.addEventListener("click", clearDrawing);
 undoButton.addEventListener("click", undo);

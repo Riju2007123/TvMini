@@ -1,6 +1,12 @@
 import { cameraAt, effectiveOpacity, layerIsVisible, resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
-import { blendStrokeOver, eraseStrokeFrom, floodFillRgba, sampleEllipse } from "./paint.js";
+import {
+  blendStrokeOver,
+  eraseStrokeFrom,
+  floodFillRgba,
+  sampleEllipse,
+  strokeRadii as sharedStrokeRadii,
+} from "./paint.js";
 import { deflateSync, inflateSync } from "./zlib.js";
 
 function parseHex(hex) {
@@ -151,14 +157,14 @@ function disc(layer, width, height, cx, cy, radius, rgb, erase) {
 /** Smallest fraction of the brush width used at zero pressure. */
 export const MIN_PRESSURE_SCALE = 0.2;
 
-/** Radius of one point: constant, or tapered by the optional pressure value. */
-function pointRadius(stroke, point) {
-  const base = stroke.width / 2;
-  const radius =
-    point.length === 3
-      ? base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * point[2])
-      : base;
-  return Math.max(0.5, radius);
+/**
+ * The width of a stroke at every one of its points.
+ *
+ * The ends of the stroke are thin, the way the brush of Clip Studio Paint
+ * tapers in and out.
+ */
+function strokeRadii(stroke) {
+  return sharedStrokeRadii(stroke, stroke.taper ?? 0);
 }
 
 /** Paint or erase a segment by sampling discs with linearly interpolated radius. */
@@ -345,7 +351,7 @@ function directPicture(drawing, width, height) {
 /** Paint or erase one stroke's shape into a straight-alpha RGBA buffer. */
 function paintStrokeInto(target, width, height, stroke, rgb) {
   const erase = stroke.eraser === true;
-  const radii = stroke.points.map((point) => pointRadius(stroke, point));
+  const radii = strokeRadii(stroke);
   // The brush of the stroke itself, or the brush of the drawing for strokes
   // that were made before a stroke remembered its brush.
   brushStamp = stampFor("brush" in stroke ? stroke.brush ?? null : drawingBrush);

@@ -151,6 +151,59 @@ export function smoothPoint(previous, raw, level) {
 }
 
 /**
+ * The width of a stroke at every one of its points.
+ *
+ * The points carry how hard the hand pressed, or how fast it moved: a pen
+ * that is moved quickly leaves a thinner line, the way it does in Clip Studio
+ * Paint. The ends of the stroke are thinner as well, the way the brush of
+ * Clip Studio Paint tapers in and out.
+ *
+ * `taper` is how much of the line is used for the taper at each end, from 0
+ * (no taper) to 0.5 (the whole line).
+ */
+export const MIN_PRESSURE_SCALE = 0.2;
+
+export function strokeRadii(stroke, taper = 0) {
+  const base = stroke.width / 2;
+  const points = stroke.points;
+  const radii = points.map((point) => {
+    const pressure = point.length === 3 ? point[2] : 1;
+    return Math.max(
+      0.5,
+      base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * pressure),
+    );
+  });
+  if (!taper || points.length < 2) return radii;
+
+  // How far each point is along the line, and how long the line is.
+  const lengths = [0];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    total += Math.hypot(
+      points[index][0] - points[index - 1][0],
+      points[index][1] - points[index - 1][1],
+    );
+    lengths.push(total);
+  }
+  if (total <= 0) return radii;
+
+  // The taper is a share of the line, so that a short line is not all taper.
+  const reach = Math.min(total * 0.5, total * taper);
+  if (reach <= 0) return radii;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const at = lengths[index];
+    const factor = Math.max(0, Math.min(1, at / reach, (total - at) / reach));
+    radii[index] = Math.max(
+      0.5,
+      radii[index] *
+        (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * factor),
+    );
+  }
+  return radii;
+}
+
+/**
  * The groups a freehand stroke is drawn in.
  *
  * The width of a segment is the sum of the radii at its two ends, so a

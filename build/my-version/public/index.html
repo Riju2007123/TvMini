@@ -308,6 +308,7 @@
 
           <div class="tool-section-title" id="toolPropsTitle">Brush</div>
           <div class="tool-props">
+            <canvas id="brushShapePreview" class="brush-shape-preview" width="220" height="44" aria-label="The shape of the brush that is in the hand" hidden></canvas>
             <div class="brush-image-row" id="toolBrushRow">
               <span id="brushImageName" class="brush-image-name">the round tip</span>
               <select id="brushLibrary" title="The brushes you have saved"></select>
@@ -327,6 +328,14 @@
             <label class="field" id="toolSmoothRow" title="Takes the tremble out of the line: the points that do not bend it are taken away, the way the pencil of Flash does it (0 = off)">
               <span>Smooth <output id="smoothValue">50</output></span>
               <input id="smooth" type="range" min="0" max="100" step="1" value="50" />
+            </label>
+            <label class="field" id="toolVelocityRow" title="How much the width of the line follows the speed of the hand: a brush that is moved quickly leaves a thinner line (0 = off)">
+              <span>Velocity <output id="velocityValue">45</output></span>
+              <input id="velocity" type="range" min="0" max="100" step="1" value="45" />
+            </label>
+            <label class="field" id="toolTaperRow" title="How much of each end of the line is thin, the way the brush of Clip Studio Paint tapers in and out (0 = off)">
+              <span>Taper <output id="taperValue">20</output></span>
+              <input id="taper" type="range" min="0" max="100" step="1" value="20" />
             </label>
             <label class="field" id="toolOpacityRow" title="Transparency of the whole stroke (100 = solid)">
               <span>Stroke opacity</span>

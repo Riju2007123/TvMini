@@ -110,6 +110,23 @@ shipped earlier. Includes eraser touch-draw toggle.
   the eraser shows the eraser, and so on, with a note under the settings
   that says what the tool does. The settings of each tool are kept apart,
   so the width of the pencil does not change the width of the brush.
+- **The panel shows the shape of the brush** (2026-10-22), the way MoArt
+  does: a picture of the tip of the brush, drawn with the width it has now.
+- **The line follows the hand** (2026-10-22). Two settings were added to the
+  brush, and they are what makes a pen feel like a pen:
+  - the **velocity**: how much the width of the line follows the speed of the
+    hand. A brush that is moved quickly leaves a thinner line, the way it
+    does in Clip Studio Paint. The speed of the pointer is measured in the
+    pixels of the screen (the hand is quick at two pixels a millisecond) and
+    is put in the point of the stroke, so that the line that is drawn and
+    the line that is exported are the same line.
+  - the **taper**: how much of each end of the line is thin, the way the
+    brush of Clip Studio Paint tapers in and out. It is a share of the
+    length of the line, so a short line is not all taper.
+  With both of them a line drawn with the mouse is thin where the hand moved
+  quickly and thin at the ends, and the same line comes out of the PNG
+  export, because the taper is worked out in the shared painter that both
+  use (`public/core/paint.js`).
 
 Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
 0.25–2.0) of the brush thumbnails in the library, and building the paint
@@ -423,6 +440,29 @@ This batch put the shell on the recorded tokens.
   eyedropper or the hex field — so the marker of the ring and the dot of
   the square always stand for the colour that is in use. A grey has no hue
   of its own, so the ring keeps the hue it had instead of jumping to red.
+- **Every panel can be taken out of the window and put where it belongs.**
+  MoArt's panels sit in a fixed frame, but the window of TVMini is the
+  user's to arrange: the head of a panel is the handle that moves it, and a
+  drag pulls the panel out of the window and over it. The panel goes
+  **exactly where it is put** — it may hang over the edge of the window, as
+  long as a strip of it stays on the screen to grab it by — and the panel
+  keeps its place in the window all the same, so the panels around it do
+  not move, and the column it used to hold is given to the others. A panel
+  that floats has handles on its edges and in its corners to make it
+  bigger, and a button in its head (or a double-click on the head) puts it
+  back where it was.
+- **A panel is taken out of the window with a button, not with a drag.** The
+  `⇱` button next to the name of a panel floats it **where it stands** —
+  the same window, only loose, so it does not jump anywhere when it is
+  taken out — and the `⇲` button that takes its place puts it back where
+  it came from. The same grips as the one of the timeline sit on the seams
+  of the window: the one on the left makes the tool property panel wider,
+  the one on the right makes the column of the layers and the inspector
+  wider, and the one between the layers and the inspector makes the layers
+  taller. A grip grows the panel **away from the edge the grip sits on**,
+  so the grip on the top edge of the timeline makes the timeline taller
+  when it is pulled up. The layout is remembered, so the window comes back
+  the way it was left.
 - **The stage zooms around the pointer.** The point of the document under
   the pointer is worked out before the zoom, and the document is placed
   afterwards so that the same point lands under the pointer again. Each
