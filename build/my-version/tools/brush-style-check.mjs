@@ -216,6 +216,33 @@ for (const [index, set] of sets.entries()) {
 // The first line must not have changed when the settings of the others were
 // made: a stroke keeps the settings it was drawn with.
 const again = await inkIn(...band(rows[0]));
+
+// Binarize is a hard edge: the same soft brush is drawn twice on a clean
+// stage, once with its fade and once with every pixel of the tip made paint
+// or paper.
+const setBinarize = (on) =>
+  devtools.run(
+    '(() => { const box = document.querySelector("#binarize");' +
+      ` box.checked = ${on};` +
+      " box.dispatchEvent(new Event(\"change\", { bubbles: true })); return box.checked; })()",
+  );
+
+await devtools.run(
+  '(() => { window.confirm = () => true;' +
+    ' document.querySelector("#clearButton")?.click(); return true; })()',
+);
+await sleep(250);
+await setSlider("hardness", 30);
+await setSlider("grain", 0);
+await setBinarize(false);
+await drawLine(200, 120, 840);
+const softEdge = await inkIn(178, 222);
+await setBinarize(true);
+await drawLine(350, 120, 840);
+const hardEdge = await inkIn(328, 372);
+console.log(`a soft edge: ${JSON.stringify(softEdge)}`);
+console.log(`the same brush binarized: ${JSON.stringify(hardEdge)}`);
+await setBinarize(false);
 console.log(`the first line again: ${JSON.stringify(again)}`);
 
 const first = measured[0];
@@ -233,6 +260,7 @@ const checks = [
   ["the hardness softens the edge", measured[2].mid > first.mid],
   ["the thickness makes a thinner line", measured[3].ink < first.ink * 0.8],
   ["the grain takes paint out", measured[4].ink < first.ink * 0.95],
+  ["binarize takes the fade of the edge away", hardEdge.mid < softEdge.mid * 0.5],
   ["the first line kept the way it was drawn", again.ink === first.ink],
 ];
 

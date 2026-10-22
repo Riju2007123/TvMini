@@ -127,6 +127,30 @@ test("the hardness of a brush softens the edge of its tip", () => {
   assert.ok(soft.full < hard.full, "a soft brush has less paint at full strength");
 });
 
+test("binarize leaves an edge that is paint or paper", () => {
+  const soft = count(alphas(lineProject({ data: null, hardness: 40, width: 12 })));
+  const hard = count(alphas(lineProject({
+    data: null,
+    hardness: 40,
+    width: 12,
+    binarize: true,
+  })));
+
+  assert.ok(soft.part > 0, "a soft brush fades out at its edge");
+  assert.equal(hard.part, 0, "a binarized stroke has no half-covered pixel");
+  assert.ok(hard.painted > 0, "a binarized stroke still paints");
+  assert.ok(
+    hard.painted < soft.painted,
+    "the faint edge of the tip is dropped, so the line is a little narrower",
+  );
+});
+
+test("binarize is kept with the stroke", () => {
+  const clean = lineProject({ data: null, binarize: true }).layers[0].drawings[0].strokes[0].brush;
+  assert.equal(clean.binarize, true);
+  assert.equal(lineProject({ data: null }).layers[0].drawings[0].strokes[0].brush.binarize, undefined);
+});
+
 test("the thickness of a brush makes its tip flat", () => {
   const round = count(alphas(lineProject({ data: null, thickness: 100 })));
   const flat = count(alphas(lineProject({ data: null, thickness: 30 })));

@@ -138,7 +138,9 @@ const grainValue = document.getElementById("grainValue");
 const grainScaleInput = document.getElementById("grainScale");
 const grainScaleValue = document.getElementById("grainScaleValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
+const strokeOpacityValue = document.getElementById("strokeOpacityValue");
 const strokeBlendSelect = document.getElementById("strokeBlend");
+const binarizeInput = document.getElementById("binarize");
 const cameraAddButton = document.getElementById("cameraAdd");
 const cameraRemoveButton = document.getElementById("cameraRemove");
 const cameraFitButton = document.getElementById("cameraFit");
@@ -291,6 +293,7 @@ const state = {
       thickness: 100,
       grain: 0,
       grainScale: 100,
+      binarize: false,
     },
     pencil: {
       width: 3,
@@ -305,6 +308,7 @@ const state = {
       thickness: 100,
       grain: 0,
       grainScale: 100,
+      binarize: false,
     },
     eraser: {
       width: 30,
@@ -319,6 +323,7 @@ const state = {
       thickness: 100,
       grain: 0,
       grainScale: 100,
+      binarize: false,
     },
     line: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
     rect: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
@@ -481,6 +486,7 @@ quickSwatch?.addEventListener("click", () => {
 quickWidth?.addEventListener("input", () => {
   widthInput.value = quickWidth.value;
   widthValue.textContent = quickWidth.value;
+  if (brushShapeSize) brushShapeSize.textContent = `${quickWidth.value}px`;
   toolSettings().width = Number(quickWidth.value);
   syncQuickBar();
 });
@@ -1068,39 +1074,34 @@ function drawBrushShape() {
   context.fillStyle = "#f4f4f6";
   context.fillRect(0, 0, width, height);
 
-  const brush = currentBrush();
-  const size = Math.max(2, Math.min(30, toolSettings().width));
-  const picture = brush?.data ? tipImage(brush) : null;
-
-  if (picture && picture.complete && picture.naturalWidth > 0) {
-    const shape = tintedTip(brush, colorInput.value) ?? picture;
-    const boxHeight = size;
-    const boxWidth = boxHeight * (shape.width / Math.max(1, shape.height));
-    for (let step = 0; step <= 40; step += 1) {
-      const at = step / 40;
-      const x = 8 + (width - 16) * at;
-      const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
-      context.globalAlpha = 0.85;
-      context.drawImage(shape, x - boxWidth / 2, y - boxHeight / 2, boxWidth, boxHeight);
-    }
-    context.globalAlpha = 1;
-    return;
-  }
-
-  // No picture: the round tip, thin at the ends the way the brush tapers.
-  context.fillStyle = colorInput.value;
-  const radius = size / 2;
-  const steps = 60;
+  // The picture is a stroke across the panel, drawn by the same code as the
+  // stage: the flow, the hardness, the thickness, the grain and the hard edge
+  // of the brush all show up here, so the panel cannot promise a brush the
+  // paper does not get.
+  const settings = toolSettings();
+  const size = Math.max(2, Math.min(30, settings.width));
+  const points = [];
+  const steps = 40;
   for (let step = 0; step <= steps; step += 1) {
     const at = step / steps;
-    const x = 6 + (width - 12) * at;
-    const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
-    // The ends of the line are thin, the way the brush tapers in and out.
-    const factor = Math.max(0, Math.min(1, at / 0.12, (1 - at) / 0.12));
-    context.beginPath();
-    context.arc(x, y, Math.max(0.4, radius * (0.2 + 0.8 * factor)), 0, Math.PI * 2);
-    context.fill();
+    points.push([
+      8 + (width - 16) * at,
+      height - 8 - Math.sin(at * Math.PI) * (height - 20),
+    ]);
   }
+  // The ends are thin the way the taper of the tool makes them thin; a tool
+  // that has no taper row is shown with a slight taper, so the picture reads
+  // as a stroke and not as a bar.
+  const taper = TOOL_PROPS[state.tool]?.rows.includes("taper")
+    ? Math.max(0, Math.min(0.5, (Number(settings.taper) || 0) / 200))
+    : 0.15;
+  drawStrokeDirect(
+    context,
+    { color: colorInput.value, width: size, points, taper },
+    width,
+    height,
+    strokeBrushFor(settings),
+  );
 }
 
 /** The brush of a stroke.
@@ -1172,10 +1173,10 @@ const tintedTips = new Map();
  * stroke is mixed into it. The result is kept, because the same brush and
  * the same colour are used again and again.
  */
-function tintedTip(brush, color) {
+function tintedTip(brush, color, binarize = false) {
   const picture = tipImage(brush);
   if (!picture.complete || !picture.naturalWidth) return null;
-  const key = `${brush.data}|${color}`;
+  const key = `${brush.data}|${color}|${binarize ? 1 : 0}`;
   if (tintedTips.has(key)) return tintedTips.get(key);
 
   const surface = document.createElement("canvas");
@@ -1189,6 +1190,9 @@ function tintedTip(brush, color) {
   context.fillStyle = color;
   context.fillRect(0, 0, surface.width, surface.height);
   context.globalCompositeOperation = "source-over";
+  // Binarize takes the fade of the picture away, so the tip keeps its shape
+  // but none of its soft edge.
+  if (binarize) binarizeSurface(surface);
 
   if (tintedTips.size > 8) tintedTips.clear();
   tintedTips.set(key, surface);
@@ -1223,7 +1227,9 @@ function strokeBox(stroke, radii) {
 function drawStrokeWithDabs(ctx, stroke, style, picture = null) {
   const radii = strokeRadii(stroke);
   const widest = Math.max(2, Math.ceil(Math.max(...radii) * 2));
-  const dab = picture ? null : roundDab(stroke.color, style.hardness, Math.min(512, widest));
+  const dab = picture
+    ? null
+    : roundDab(stroke.color, style.hardness, Math.min(512, widest), style.binarize);
   const stamp = (x, y, radius) => {
     const height = Math.max(1, radius * 2 * style.thickness);
     if (picture) {
@@ -1272,8 +1278,8 @@ const roundDabs = new Map();
  * its edge: the hardness says how far out the paint stays at full strength,
  * the way the hardness of a Clip Studio Paint brush does.
  */
-function roundDab(color, hardness, diameter) {
-  const key = `${color}|${Math.round(hardness * 100)}|${diameter}`;
+function roundDab(color, hardness, diameter, binarize = false) {
+  const key = `${color}|${Math.round(hardness * 100)}|${diameter}|${binarize ? 1 : 0}`;
   if (roundDabs.has(key)) return roundDabs.get(key);
   const surface = document.createElement("canvas");
   surface.width = Math.max(2, diameter);
@@ -1294,8 +1300,27 @@ function roundDab(color, hardness, diameter) {
     context.fillStyle = gradient;
     context.fillRect(0, 0, surface.width, surface.height);
   }
+  if (binarize) binarizeSurface(surface);
   if (roundDabs.size > 24) roundDabs.clear();
   roundDabs.set(key, surface);
+  return surface;
+}
+
+/**
+ * Take the soft edge of a dab away.
+ *
+ * Binarize is the hard edge of Clip Studio Paint and MoArt: every pixel of the
+ * tip is either paint or paper, with no fade in between, so the picture is
+ * read once and every half-covered pixel is made whole or dropped.
+ */
+function binarizeSurface(surface) {
+  const context = surface.getContext("2d");
+  const image = context.getImageData(0, 0, surface.width, surface.height);
+  const data = image.data;
+  for (let at = 3; at < data.length; at += 4) {
+    data[at] = data[at] >= 128 ? 255 : 0;
+  }
+  context.putImageData(image, 0, 0);
   return surface;
 }
 
@@ -1476,6 +1501,7 @@ function strokeStyleOf(brush) {
     hardness: percent(brush?.hardness, 100, 0, 100) / 100,
     thickness: percent(brush?.thickness, 100, 10, 500) / 100,
     spacing: percent(brush?.spacing, 25, 1, 200) / 100,
+    binarize: brush?.binarize === true,
     grain: brush?.grain?.data ? brush.grain : null,
   };
 }
@@ -1516,7 +1542,7 @@ function paintStrokeShape(ctx, stroke, brush, style) {
   if (brush?.data) {
     // The picture of the brush is only the shape of the tip, so it is
     // painted in the colour of the stroke.
-    const shape = tintedTip(brush, stroke.color);
+    const shape = tintedTip(brush, stroke.color, style.binarize);
     if (shape) {
       drawStrokeWithDabs(ctx, stroke, style, shape);
       return;
@@ -1579,7 +1605,7 @@ function paintStrokeShape(ctx, stroke, brush, style) {
   // A brush that is soft, that leaves only part of its paint with one dab, or
   // whose tip is thick, is painted one dab at a time. A hard round brush is
   // painted as one shape, which is quicker and has one clean edge.
-  if (style.flow < 1 || style.hardness < 1 || style.thickness !== 1) {
+  if (style.flow < 1 || style.hardness < 1 || style.thickness !== 1 || style.binarize) {
     drawStrokeWithDabs(ctx, stroke, style, null);
     return;
   }
@@ -2432,6 +2458,7 @@ function applyBrushSettings(brush) {
     const value = Math.min(Number(widthInput.max) || 300, Math.round(size));
     widthInput.value = String(value);
     widthValue.textContent = String(value);
+    if (brushShapeSize) brushShapeSize.textContent = `${value}px`;
     settings.width = value;
     syncQuickBar();
   }
@@ -2439,6 +2466,7 @@ function applyBrushSettings(brush) {
   if (Number.isFinite(opacity) && opacity > 0) {
     const value = Math.min(100, Math.round(opacity));
     strokeOpacityInput.value = String(value);
+    strokeOpacityValue.textContent = `${value}%`;
     settings.opacity = value;
   }
   const flow = Number(brush.flow);
@@ -2582,6 +2610,9 @@ function strokeBrushFor(settings) {
     thickness: Math.max(10, Math.min(400, Math.round(Number(settings.thickness) || 100))),
     spacing: brush?.spacing ?? 25,
   };
+  // A hard edge is a way of painting, so it is kept with the stroke: a stroke
+  // that was drawn binarized stays binarized when the export draws it again.
+  if (settings.binarize) strokeBrush.binarize = true;
   if (grain) strokeBrush.grain = grain;
   return strokeBrush;
 }
@@ -5346,6 +5377,9 @@ canvas.addEventListener("pointercancel", endStroke);
 
 widthInput.addEventListener("input", () => {
   widthValue.textContent = widthInput.value;
+  // The width is written in the corner of the picture of the brush, the way
+  // MoArt writes it, so the number is visible without the slider.
+  if (brushShapeSize) brushShapeSize.textContent = `${widthInput.value}px`;
   // The width belongs to the tool in the hand, so the pencil keeps its own.
   toolSettings().width = Number(widthInput.value);
   syncQuickBar();
@@ -5356,7 +5390,20 @@ widthInput.addEventListener("input", () => {
 });
 
 strokeOpacityInput.addEventListener("input", () => {
-  toolSettings().opacity = Number(strokeOpacityInput.value) || 100;
+  const value = Math.max(1, Math.min(100, Math.round(Number(strokeOpacityInput.value) || 100)));
+  toolSettings().opacity = value;
+  strokeOpacityValue.textContent = `${value}%`;
+});
+
+binarizeInput.addEventListener("change", () => {
+  toolSettings().binarize = binarizeInput.checked;
+  saveSettings();
+  drawBrushShape();
+  setStatus(
+    binarizeInput.checked
+      ? "Binarize on — the edge of the brush is hard, pixel by pixel"
+      : "Binarize off — the edge of the brush is as soft as its hardness",
+  );
 });
 
 strokeBlendSelect.addEventListener("change", () => {
@@ -5407,31 +5454,44 @@ const TOOL_STATUS = {
 const TOOL_PROPS = {
   brush: {
     title: "Brush",
+    // The rows of the brush: a few of them are in the panel, the rest wait
+    // behind "Hidden items" until they are brought out with the eye.
     rows: [
       "brush",
       "width",
-      "stabilizer",
-      "smooth",
-      "velocity",
-      "taper",
+      "opacity",
       "flow",
+      "stabilizer",
+      "binarize",
+      "blend",
       "hardness",
       "thickness",
       "grain",
       "grainScale",
-      "opacity",
-      "blend",
+      "smooth",
+      "velocity",
+      "taper",
     ],
     note: "",
   },
   pencil: {
     title: "Pencil",
-    rows: ["width", "smooth", "opacity", "blend"],
+    rows: ["width", "opacity", "blend", "smooth"],
     note: "A thin line with a hard edge, the way the pencil of Flash draws it.",
   },
   eraser: {
     title: "Eraser",
-    rows: ["width", "flow", "hardness", "grain"],
+    rows: [
+      "width",
+      "opacity",
+      "stabilizer",
+      "binarize",
+      "flow",
+      "hardness",
+      "thickness",
+      "grain",
+      "grainScale",
+    ],
     note: "The eraser takes the paint away and shows the layer below.",
   },
   line: {
@@ -5470,21 +5530,273 @@ const toolPropsTitle = document.getElementById("toolPropsTitle");
 const toolNote = document.getElementById("toolNote");
 const penSectionTitle = document.getElementById("penSectionTitle");
 const penSection = document.getElementById("penSection");
-const toolPropRows = {
-  brush: [document.getElementById("toolBrushRow"), document.getElementById("toolBrushActionsRow")],
+const toolPropStrip = document.getElementById("toolPropStrip");
+const toolPropGroup = document.getElementById("toolPropGroup");
+const toolPropAdvBar = document.getElementById("toolPropAdvBar");
+const toolPropAdvBtn = document.getElementById("toolPropAdvBtn");
+const brushHeadRows = [
+  document.getElementById("toolBrushRow"),
+  document.getElementById("toolBrushActionsRow"),
+];
+const brushPreviewWrap = document.getElementById("brushPreviewWrap");
+const brushShapeSize = document.getElementById("brushShapeSize");
+
+/**
+ * The rows of the property panel, in the order they are shown.
+ *
+ * The panel works the way the one of MoArt does: a row is either in the panel
+ * or put away in the drawer, and the eye at its right says which. The order is
+ * the same in both places, so a row that is brought back does not jump to the
+ * end of the panel.
+ */
+const PROP_ROW_ORDER = [
+  "width",
+  "opacity",
+  "flow",
+  "stabilizer",
+  "binarize",
+  "blend",
+  "hardness",
+  "thickness",
+  "grain",
+  "grainScale",
+  "smooth",
+  "velocity",
+  "taper",
+];
+
+/** The rows a panel starts with, the way the brush panel of MoArt does. */
+const PROP_PINS_DEFAULT = ["width", "opacity", "stabilizer", "binarize", "blend"];
+/** How many rows the panel is willing to show at once. */
+const PROP_PINS_MAX = 8;
+const PROP_PINS_KEY = "tvmini.toolPanelPins.v1";
+const PROP_ADV_KEY = "tvmini.toolPanelAdv.v1";
+
+const PROP_ROW_ELEMENTS = {
   width: document.getElementById("toolWidthRow"),
-  stabilizer: document.getElementById("toolStabilizerRow"),
-  smooth: document.getElementById("toolSmoothRow"),
-  velocity: document.getElementById("toolVelocityRow"),
-  taper: document.getElementById("toolTaperRow"),
+  opacity: document.getElementById("toolOpacityRow"),
   flow: document.getElementById("toolFlowRow"),
+  stabilizer: document.getElementById("toolStabilizerRow"),
+  binarize: document.getElementById("toolBinarizeRow"),
+  blend: document.getElementById("toolBlendRow"),
   hardness: document.getElementById("toolHardnessRow"),
   thickness: document.getElementById("toolThicknessRow"),
   grain: document.getElementById("toolGrainRow"),
   grainScale: document.getElementById("toolGrainScaleRow"),
-  opacity: document.getElementById("toolOpacityRow"),
-  blend: document.getElementById("toolBlendRow"),
+  smooth: document.getElementById("toolSmoothRow"),
+  velocity: document.getElementById("toolVelocityRow"),
+  taper: document.getElementById("toolTaperRow"),
 };
+
+/** What a row is called when it is put away or brought back. */
+const PROP_ROW_NAMES = {
+  width: "Size",
+  opacity: "Opacity",
+  flow: "Flow",
+  stabilizer: "Stabilizer",
+  binarize: "Binarize",
+  blend: "Blend",
+  hardness: "Hardness",
+  thickness: "Thickness",
+  grain: "Grain",
+  grainScale: "Grain size",
+  smooth: "Smooth",
+  velocity: "Velocity",
+  taper: "Taper",
+};
+
+/** The eye that puts a row away, and the same eye with a line through it. */
+const EYE_SVG =
+  '<svg class="eye-on" viewBox="0 0 16 16" aria-hidden="true">' +
+  '<path d="M1.6 8S4 3.9 8 3.9 14.4 8 14.4 8 12 12.1 8 12.1 1.6 8 1.6 8Z" />' +
+  '<circle cx="8" cy="8" r="1.9" /></svg>' +
+  '<svg class="eye-off" viewBox="0 0 16 16" aria-hidden="true">' +
+  '<path d="M4.1 4.6C2.6 5.8 1.6 8 1.6 8S4 12.1 8 12.1c1.1 0 2-.3 2.9-.8" />' +
+  '<path d="M6.5 3.9c.5-.1 1-.1 1.5-.1 4 0 6.4 4.2 6.4 4.2s-.5.9-1.4 1.9" />' +
+  '<path d="M2.6 2.6l10.8 10.8" /></svg>';
+
+const propEyes = new Map();
+for (const [id, row] of Object.entries(PROP_ROW_ELEMENTS)) {
+  if (!row) continue;
+  const eye = document.createElement("button");
+  eye.type = "button";
+  eye.className = "prop-eye";
+  eye.dataset.propEye = id;
+  eye.innerHTML = EYE_SVG;
+  eye.addEventListener("click", () => togglePropPin(id));
+  row.appendChild(eye);
+  propEyes.set(id, eye);
+}
+
+/** The rows put away by the eye, kept between visits. */
+let propPins = null;
+
+function propPinList() {
+  if (!propPins) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PROP_PINS_KEY) || "null");
+      propPins = Array.isArray(raw)
+        ? raw.filter((id) => PROP_ROW_ORDER.includes(id))
+        : PROP_PINS_DEFAULT.slice();
+    } catch {
+      propPins = PROP_PINS_DEFAULT.slice();
+    }
+  }
+  return propPins;
+}
+
+function propSavePins() {
+  try {
+    localStorage.setItem(PROP_PINS_KEY, JSON.stringify(propPinList()));
+  } catch {
+    // A blocked store only loses where the rows were.
+  }
+}
+
+function propIsPinned(id) {
+  return propPinList().includes(id);
+}
+
+/** The drawer is open or closed, kept between visits. */
+let propDrawerOpen = null;
+
+function propDrawerIsOpen() {
+  if (propDrawerOpen === null) {
+    try {
+      propDrawerOpen = localStorage.getItem(PROP_ADV_KEY) === "1";
+    } catch {
+      propDrawerOpen = false;
+    }
+  }
+  return propDrawerOpen;
+}
+
+function propSetDrawerOpen(open) {
+  propDrawerOpen = !!open;
+  try {
+    localStorage.setItem(PROP_ADV_KEY, propDrawerOpen ? "1" : "0");
+  } catch {
+    // Best effort, the same as the pins.
+  }
+  layoutToolProps();
+  // The panel is a long strip; the drawer that was just opened is brought into
+  // view, so the press of the bar is not answered with nothing.
+  if (propDrawerOpen) toolPropGroup.scrollIntoView({ block: "nearest" });
+}
+
+/** The rows that belong to the tool in the hand. */
+function propRowsOfTool() {
+  return TOOL_PROPS[state.tool]?.rows ?? [];
+}
+
+/**
+ * Is any row of this tool put away?
+ *
+ * The bar that opens the drawer is only there while one is: a door to an
+ * empty room is furniture.
+ */
+function propHiddenRowsExist() {
+  const rows = propRowsOfTool();
+  return PROP_ROW_ORDER.some((id) => rows.includes(id) && !propIsPinned(id));
+}
+
+/** Where a row is shown: in the panel, in the drawer, or not at all. */
+function propRowVisibleIn(id) {
+  if (!propRowsOfTool().includes(id)) return "";
+  if (propIsPinned(id)) return "strip";
+  return propDrawerIsOpen() ? "group" : "";
+}
+
+/** Put a row away, or bring it back, with the eye. */
+function togglePropPin(id) {
+  if (!PROP_ROW_ORDER.includes(id)) return;
+  const list = propPinList();
+  const at = list.indexOf(id);
+  if (at >= 0) {
+    list.splice(at, 1);
+    propSavePins();
+    layoutToolProps();
+    setStatus(`${PROP_ROW_NAMES[id] ?? id} is in Hidden items`);
+    return;
+  }
+  if (list.length >= PROP_PINS_MAX) {
+    setStatus(`The panel holds ${PROP_PINS_MAX} rows — put one away first`, true);
+    return;
+  }
+  list.push(id);
+  propSavePins();
+  layoutToolProps();
+  setStatus(`${PROP_ROW_NAMES[id] ?? id} is back in the panel`);
+}
+
+/**
+ * Put every row where it belongs.
+ *
+ * The rows are moved, never built again, so the listeners on the sliders and
+ * on the eyes are the ones that were made once. A row that is not shown is
+ * parked in the panel so that its place in the order is kept.
+ */
+function layoutToolProps() {
+  let stripAt = 0;
+  let groupAt = 0;
+  for (const id of PROP_ROW_ORDER) {
+    const row = PROP_ROW_ELEMENTS[id];
+    if (!row) continue;
+    const where = propRowVisibleIn(id);
+    row.hidden = where === "";
+    const host = where === "group" ? toolPropGroup : toolPropStrip;
+    const at = host.children[where === "group" ? groupAt : stripAt] || null;
+    if (at !== row) host.insertBefore(row, at);
+    if (where === "group") groupAt += 1;
+    else stripAt += 1;
+    const eye = propEyes.get(id);
+    if (eye) {
+      const pinned = propIsPinned(id);
+      eye.setAttribute("aria-pressed", String(pinned));
+      eye.title = pinned
+        ? `Put ${PROP_ROW_NAMES[id] ?? id} away in Hidden items`
+        : `Bring ${PROP_ROW_NAMES[id] ?? id} back into the panel`;
+      eye.setAttribute("aria-label", eye.title);
+    }
+  }
+
+  const hasHidden = propHiddenRowsExist();
+  toolPropAdvBar.hidden = !hasHidden;
+  const open = hasHidden && propDrawerIsOpen();
+  toolPropGroup.hidden = !open;
+  toolPropAdvBtn.setAttribute("aria-expanded", String(open));
+  updatePropRowState();
+}
+
+/**
+ * A row that cannot do anything right now is greyed, not hidden.
+ *
+ * Not seeing a setting and pressing a setting that does nothing are not the
+ * same thing, so the panel says which rows are asleep instead of taking them
+ * away. The size of the grain is the one row of the brush that does nothing
+ * while the grain is off.
+ */
+function updatePropRowState() {
+  const asleep = !(Number(toolSettings().grain) > 0);
+  const row = PROP_ROW_ELEMENTS.grainScale;
+  if (!row) return;
+  row.classList.toggle("prop-disabled", asleep);
+  const input = row.querySelector("input");
+  if (input) input.disabled = asleep;
+}
+
+toolPropAdvBtn.addEventListener("click", () => {
+  propSetDrawerOpen(!propDrawerIsOpen());
+});
+
+// Pressing the picture of the brush opens the library, the way it does in
+// MoArt: the picture is the brush, and the brushes are one press behind it.
+if (brushPreviewWrap) {
+  brushPreviewWrap.title = "Open the brush library";
+  brushPreviewWrap.addEventListener("click", () => {
+    document.getElementById("brushPanelButton")?.click();
+  });
+}
 
 /** The settings of the tool in the hand. */
 function toolSettings() {
@@ -5523,26 +5835,31 @@ function showToolProps() {
   grainScaleInput.value = String(settings.grainScale ?? 100);
   grainScaleValue.textContent = String(settings.grainScale ?? 100);
   strokeOpacityInput.value = String(settings.opacity);
+  strokeOpacityValue.textContent = `${settings.opacity}%`;
   strokeBlendSelect.value = settings.blend;
+  binarizeInput.checked = settings.binarize === true;
 
-  for (const [name, row] of Object.entries(toolPropRows)) {
-    const shown = props.rows.includes(name);
-    for (const element of Array.isArray(row) ? row : [row]) {
-      if (element) element.hidden = !shown;
-    }
+  // The brush itself (its picture and its library) is above the rows, and it
+  // belongs to the brush alone; the rows are laid out by the eye.
+  const showsBrush = props.rows.includes("brush");
+  for (const element of brushHeadRows) {
+    if (element) element.hidden = !showsBrush;
   }
+  // The picture of the brush is shown for every tool that draws with a size,
+  // the way MoArt shows it above the rows.
+  const showsPreview = props.rows.includes("width");
+  brushPreviewWrap.hidden = !showsPreview;
+  if (showsPreview) {
+    brushShapeSize.textContent = `${settings.width}px`;
+    drawBrushShape();
+  }
+  layoutToolProps();
   toolNote.hidden = !props.note;
   toolNote.textContent = props.note;
   // The stylus is only of use to the tools that draw a line.
   const draws = state.tool !== "pick" && state.tool !== "camera" && state.tool !== "fill";
   penSectionTitle.hidden = !draws;
   penSection.hidden = !draws;
-  // The shape of the brush is shown in the panel, the way MoArt shows it.
-  const preview = document.getElementById("brushShapePreview");
-  if (preview) {
-    preview.hidden = state.tool !== "brush";
-    if (!preview.hidden) drawBrushShape();
-  }
   syncQuickBar();
 }
 
@@ -5562,6 +5879,7 @@ function saveToolProps() {
   settings.grainScale = Math.max(10, Math.min(400, Number(grainScaleInput.value) || 100));
   settings.opacity = Math.max(1, Math.min(100, Number(strokeOpacityInput.value) || 100));
   settings.blend = strokeBlendSelect.value;
+  settings.binarize = binarizeInput.checked;
 }
 
 function selectTool(tool) {
@@ -5748,6 +6066,7 @@ function loadSettings() {
           known.grainScale = Math.max(10, Math.min(400, Math.round(settings.grainScale)));
         }
         if (typeof settings.blend === "string") known.blend = settings.blend;
+        if (typeof settings.binarize === "boolean") known.binarize = settings.binarize;
       }
     }
     state.compactTimeline = data.compactTimeline !== false;
@@ -5908,6 +6227,7 @@ grainInput.addEventListener("input", () => {
   const value = Math.max(0, Math.min(100, Math.round(Number(grainInput.value))));
   toolSettings().grain = value;
   grainValue.textContent = String(value);
+  updatePropRowState();
   setStatus(
     value === 0
       ? "Grain off - the paint is smooth"

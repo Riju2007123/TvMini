@@ -350,6 +350,8 @@ function normalizeBrush(value, maxBase64, label) {
   if (Number.isFinite(value.spacing)) {
     brush.spacing = Math.max(1, Math.min(200, Math.round(value.spacing)));
   }
+  // A hard edge, the way binarize paints: every pixel is paint or paper.
+  if (value.binarize === true) brush.binarize = true;
 
   const grain = normalizeGrain(value.grain, maxBase64, `${label}.grain`);
   if (grain) brush.grain = grain;

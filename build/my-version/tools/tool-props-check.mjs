@@ -133,21 +133,107 @@ const TOOLS = [
   ["cameraTool", "Camera"],
 ];
 
+/** What the panel of the tool in the hand shows, and what it put away. */
+const READ_PANEL =
+  '(() => ({' +
+  ' title: document.querySelector("#toolPropsTitle")?.textContent,' +
+  ' width: document.querySelector("#width")?.value,' +
+  ' strip: [...document.querySelectorAll("#toolPropStrip > .prop-row")]' +
+  '   .filter((row) => !row.hidden).map((row) => row.id.replace(/^tool|Row$/g, "")),' +
+  ' drawer: [...document.querySelectorAll("#toolPropGroup > .prop-row")]' +
+  '   .filter((row) => !row.hidden).map((row) => row.id.replace(/^tool|Row$/g, "")),' +
+  ' bar: !document.querySelector("#toolPropAdvBar")?.hidden,' +
+  ' open: !document.querySelector("#toolPropGroup")?.hidden,' +
+  ' pinned: [...document.querySelectorAll("[data-prop-eye]")]' +
+  '   .filter((eye) => eye.getAttribute("aria-pressed") === "true").length,' +
+  ' note: document.querySelector("#toolNote")?.hidden ? "" : document.querySelector("#toolNote")?.textContent' +
+  '}))()';
+
+let failed = 0;
+function check(ok, text) {
+  console.log(`${ok ? "ok  " : "FAIL"} ${text}`);
+  if (!ok) failed += 1;
+}
+
 for (const [button, title] of TOOLS) {
   await devtools.run(`document.querySelector("#${button}")?.click(); true`);
   await sleep(120);
-  const panel = await devtools.run(
-    '(() => ({ title: document.querySelector("#toolPropsTitle")?.textContent,' +
-      ' width: document.querySelector("#width")?.value,' +
-      ' rows: [...document.querySelectorAll(".tool-props > *")].filter((row) => !row.hidden).length,' +
-      ' note: document.querySelector("#toolNote")?.hidden ? "" : document.querySelector("#toolNote")?.textContent }))()',
-  );
-  const right = panel.title === title ? "yes" : `no (it says ${panel.title})`;
+  const panel = await devtools.run(READ_PANEL);
+  check(panel.title === title, `${title}: the section says "${panel.title}"`);
   console.log(
-    `${title}: the section says "${panel.title}" — ${right};` +
-      ` ${panel.rows} settings shown; the width is ${panel.width}`,
+    `     shows ${panel.strip.length}: ${panel.strip.join(", ") || "nothing"}` +
+      `; hidden items bar: ${panel.bar ? "yes" : "no"};` +
+      ` the width is ${panel.width}`,
   );
 }
+
+/* -------------------------------------- the rows are put away with the eye */
+
+await devtools.run('document.querySelector("#brushButton")?.click(); true');
+await sleep(150);
+const atFirst = await devtools.run(READ_PANEL);
+check(
+  atFirst.strip.join(",") === "Width,Opacity,Stabilizer,Binarize,Blend",
+  `the brush starts with a clean panel: ${atFirst.strip.join(", ")}`,
+);
+check(
+  atFirst.bar && atFirst.drawer.length === 0,
+  `the Hidden items bar is there and the drawer is closed (${atFirst.drawer.length} in it)`,
+);
+
+// The eye of a row in the drawer brings it back into the panel.
+await devtools.run('document.querySelector(\'[data-prop-eye="velocity"]\')?.click(); true');
+await sleep(150);
+const broughtBack = await devtools.run(READ_PANEL);
+check(
+  broughtBack.strip.includes("Velocity"),
+  `the eye brings Velocity back into the panel: ${broughtBack.strip.join(", ")}`,
+);
+
+// The eye of a row in the panel puts it away.
+await devtools.run('document.querySelector(\'[data-prop-eye="width"]\')?.click(); true');
+await sleep(150);
+const putAway = await devtools.run(READ_PANEL);
+check(
+  !putAway.strip.includes("Width"),
+  `the eye puts Size away: ${putAway.strip.join(", ")}`,
+);
+
+// The bar opens the drawer, and the row that was put away is in it.
+await devtools.run('document.querySelector("#toolPropAdvBtn")?.click(); true');
+await sleep(150);
+const opened = await devtools.run(READ_PANEL);
+check(
+  opened.open && opened.drawer.includes("Width"),
+  `the drawer holds the row that was put away: ${opened.drawer.join(", ")}`,
+);
+await devtools.run(
+  '(() => { document.querySelector("#toolPropAdvBar")?.scrollIntoView({ block: "nearest" });' +
+    " return true; })()",
+);
+await sleep(150);
+const drawerShot = await devtools.send("Page.captureScreenshot", { format: "png" });
+fs.writeFileSync(path.join(OUT, "panel-hidden.png"), Buffer.from(drawerShot.data, "base64"));
+console.log(`a picture of the drawer: ${path.join(OUT, "panel-hidden.png")}`);
+
+// The reference tools order the drawer like the panel; ours does too.
+check(
+  opened.drawer.indexOf("Width") < opened.drawer.indexOf("Hardness"),
+  "the drawer keeps the order of the panel",
+);
+
+// Put the panel back the way it was, so the rest of the check starts clean.
+await devtools.run('document.querySelector(\'[data-prop-eye="width"]\')?.click(); true');
+await sleep(120);
+await devtools.run('document.querySelector(\'[data-prop-eye="velocity"]\')?.click(); true');
+await sleep(120);
+await devtools.run('document.querySelector("#toolPropAdvBtn")?.click(); true');
+await sleep(120);
+const restored = await devtools.run(READ_PANEL);
+check(
+  restored.strip.join(",") === "Width,Opacity,Stabilizer,Binarize,Blend" && !restored.open,
+  `the panel is back the way it was: ${restored.strip.join(", ")}`,
+);
 
 /* ------------------------------------------- the tools keep their own width */
 
@@ -271,11 +357,13 @@ console.log(
 const second = await drawStroke(220);
 console.log(`a stroke with the new brush: ${JSON.stringify(second)}`);
 
-// A picture of the panel, with the pencil in the hand.
-await devtools.run('document.querySelector("#pencilButton")?.click(); true');
+// A picture of the panel, with the brush in the hand.
+await devtools.run('document.querySelector("#brushButton")?.click(); true');
 await sleep(300);
 const shot = await devtools.send("Page.captureScreenshot", { format: "png" });
 fs.writeFileSync(path.join(OUT, "panel.png"), Buffer.from(shot.data, "base64"));
 console.log(`a picture of the panel: ${path.join(OUT, "panel.png")}`);
 
 edge.kill();
+console.log(failed ? `${failed} check${failed === 1 ? "" : "s"} failed` : "all the checks passed");
+process.exit(failed ? 1 : 0);

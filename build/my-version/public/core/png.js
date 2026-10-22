@@ -48,7 +48,7 @@ const stampCache = new Map();
  * apart the dabs are (its spacing). A round brush carries the same settings
  * without a picture.
  */
-const DEFAULT_STYLE = { flow: 1, hardness: 1, thickness: 1, spacing: 0.25 };
+const DEFAULT_STYLE = { flow: 1, hardness: 1, thickness: 1, spacing: 0.25, binarize: false };
 let strokeStyle = DEFAULT_STYLE;
 
 /** The grain of the paper of the stroke in hand, unpacked. */
@@ -90,6 +90,9 @@ function styleOfBrush(brush) {
     hardness: percent(brush?.hardness, 100, 0, 100) / 100,
     thickness: percent(brush?.thickness, 100, 10, 500) / 100,
     spacing: percent(brush?.spacing, 25, 1, 200) / 100,
+    // Binarize takes the soft edge of the tip away: a pixel is either paint
+    // or paper, the way Clip Studio Paint draws a hard edge.
+    binarize: brush?.binarize === true,
   };
 }
 
@@ -127,6 +130,13 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
   const py = Math.round(y);
   if (px < 0 || py < 0 || px >= width || py >= height) return;
   const index = (py * width + px) * 4;
+
+  if (strokeStyle.binarize && alpha < 255) {
+    // An edge that is either paint or paper: the middle of the fade is where
+    // the edge falls.
+    if (alpha < 128) return;
+    alpha = 255;
+  }
 
   if (erase) {
     layer[index + 3] = 0;

@@ -1143,6 +1143,152 @@ body.hide-inspector.hide-stage .workspace {
   padding: 4px 8px 10px;
 }
 
+/* The panel of a tool shows a few rows, the way MoArt does, and the rest is
+   put away behind "Hidden items". A row is put away with the eye at its right
+   (or brought back with the same eye), and the bar that opens the drawer is
+   there only while a row is actually put away. */
+.prop-strip,
+.prop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.prop-group {
+  padding: 7px 6px;
+  border: 1px dashed var(--seam-strong);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+
+.prop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prop-row > .field {
+  grid-column: 1;
+}
+
+/* The eye: the row is in the panel when it is pressed, and in the drawer when
+   it is not. It is a small, quiet button — not one of the blue buttons of the
+   toolbar — so the state of the panel is written by the icon alone. */
+.prop-row .prop-eye,
+.prop-row .prop-eye[aria-pressed="true"],
+.prop-row .prop-eye[aria-pressed="false"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  box-shadow: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.prop-row .prop-eye:hover:not(:disabled),
+.prop-row .prop-eye:focus-visible {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.prop-eye svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.prop-eye .eye-off,
+.prop-eye[aria-pressed="false"] .eye-on {
+  display: none;
+}
+
+.prop-eye[aria-pressed="false"] .eye-off {
+  display: inline;
+}
+
+.prop-eye[aria-pressed="false"] {
+  opacity: 0.55;
+}
+
+.prop-eye[aria-pressed="true"] {
+  color: var(--muted);
+}
+
+/* A row that does nothing right now (the size of a grain that is off) is
+   greyed and its control is asleep, the way MoArt greys a row. */
+.prop-row.prop-disabled .field {
+  opacity: 0.45;
+}
+
+.prop-row.prop-disabled input {
+  cursor: default;
+}
+
+/* The bar that opens the drawer of put-away rows. */
+.prop-adv-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.prop-adv-bar button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.prop-adv-chev {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.12s ease;
+}
+
+.prop-adv-bar button[aria-expanded="true"] .prop-adv-chev {
+  transform: rotate(180deg);
+}
+
+/* The shape of the brush, shown in the property panel. */
+.brush-preview-wrap {
+  position: relative;
+  cursor: pointer;
+}
+
+/* The size of the brush in the corner of the picture, the way MoArt writes
+   it next to the brush preview. */
+.brush-shape-size {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(20, 22, 24, 0.62);
+  color: #f2f4f6;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
 /* The shape of the brush, shown in the property panel. */
 .brush-shape-preview {
   display: block;

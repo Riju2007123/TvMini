@@ -183,6 +183,86 @@ shipped earlier. Includes eraser touch-draw toggle.
   shape of the rows in the panel follows the rows of MoArt, the behaviour
   follows Clip Studio Paint.
 
+### 4.1 The clean brush panel of MoArt (read 2026-10-22)
+
+The panel in the reference is short: **Size, Opacity, Stabilizer, Binarize,
+Blend** and a bar that says **Hidden items**. Everything else a brush can do
+(flow, the shape of the tip, the paper, the taper, the pressure curves…) is in
+a drawer behind that bar. What was read from the build:
+
+- **A row is a definition, not markup.** `PB_ROWS` holds one entry per row:
+  `kind` (`range` / `switch` / `chips` / `curve`), the label key, the smallest
+  and largest value and the step, `get`/`set`, `clampVal`, the unit, an
+  `enabled()` gate, and the square that opens the pressure modulation of that
+  row (`mod` / `modAxis` / `modOn` / `modToggle`). There is no separate row for
+  pressure: the square on a row is the pressure setting of that row.
+  **MOART-FACT**
+- **One order for both places.** `PB_ROW_ORDER` lists every row once, and both
+  the panel and the drawer are filled by walking it, so a row that is brought
+  back does not land at the end of the panel: Size, Opacity, Flow (right under
+  Opacity, "so the two axes read side by side"), Stabilizer, Binarize, Blend,
+  then the rest (bucket, selection, pressure curves, taper in/out/by speed, the
+  tip, the paper). **MOART-FACT**
+- **One table says which tool has which row** (`PB_TOOL_ROWS[tool]`). A row
+  that is not in the tool's list never appears for that tool. A row that is in
+  the list but cannot do anything right now is **greyed** (`.pb-disabled`), not
+  removed: "not seeing a thing and pressing a thing that does nothing are not
+  the same honesty". **MOART-FACT**
+- **The eye is the pin.** A row is shown when it is applicable and either
+  `always`, pinned by the user, or the drawer is open. Rows marked `always`
+  (the feather of the selection, for one) cannot be pinned or put away. The
+  pins are kept in `paintBrushPanelPins.v1`, at most **8**; pinning a ninth is
+  refused with a message. The rows pinned out of the box are Size, Opacity,
+  Stabilizer, Binarize and Blend — exactly the five in the picture. **MOART-FACT**
+- **The bar appears only when something is hidden**: `pbHiddenRowsExist()`
+  asks whether any applicable row is unpinned, and the bar is hidden when the
+  answer is no ("an empty disclosure is a door to an empty room"). The drawer
+  holds exactly the rows that were put away, in the same order as the panel,
+  and its open state is kept in `paintBrushPanelAdvOpen`. **MOART-FACT**
+- **Rows are built once and moved.** The panel builder moves the same nodes
+  between the strip and the drawer and only re-reads their values, so no
+  listener is ever added twice. **MOART-FACT**
+- **The preview sits above the rows** and carries the size of the brush in its
+  corner (`14px` in the picture); pressing the preview opens the brush library.
+  **MOART-FACT**
+- **Binarize** is a switch of its own, "anti-aliasing off, hard edge", with a
+  hint that differs for the pen and the eraser. **MOART-FACT**
+
+### 4.2 What TVMini does with it (our own code, 2026-10-22)
+
+- The property panel now has the same three tables in our own words:
+  `PROP_ROW_ORDER` (size, opacity, flow, stabilizer, binarize, blend,
+  hardness, thickness, grain, grain size, smooth, velocity, taper), the
+  vocabulary of each tool in `TOOL_PROPS[tool].rows`, and the pins in
+  `localStorage` (`tvmini.toolPanelPins.v1`, `tvmini.toolPanelAdv.v1`).
+- The rows a panel starts with are the same five as the reference, so the
+  brush opens with **Size, Opacity, Stabilizer, Binarize, Blend** and a
+  "Hidden items" bar. The eye at the right of a row puts it away, the same eye
+  in the drawer brings it back, at most eight rows fit, and the bar is only
+  there while a row of the tool in hand is put away.
+- The rows are moved between the panel and the drawer, never built again; the
+  order of `PROP_ROW_ORDER` is the order in both places. The drawer scrolls
+  itself into view when it is opened.
+- The eraser and the pencil have their own vocabularies (the eraser has the
+  flow, the hardness, the thickness and the paper; the pencil has the
+  smoothing), so each tool shows only the rows that do something for it, and
+  the shapes and the fill show no brush rows at all.
+- **Binarize is a real setting** in TVMini as well, not only a switch: every
+  pixel of a dab is either paint or paper (the alpha of the dab is read once
+  and made whole or dropped at half), on the stage and in the PNG export, and
+  the panel preview is drawn by the same painter. Measured with a soft brush
+  (hardness 30): half-covered pixels 1 315 → 36, and the faint ring of the tip
+  is gone, so the line is a little narrower (ink 1 854 283 → 1 544 614).
+- The preview of the brush is drawn by the painter of the stage (flow,
+  hardness, thickness, paper and hard edge all show), and the size is written
+  in its corner the way the reference writes it.
+- A row that does nothing is greyed: the size of the grain sleeps while the
+  grain is 0.
+
+Not adopted: the **pressure modulation squares** (`mod`) and their popup,
+which would need a pressure curve per row; the per-tool "always" rows; and the
+toast of the reference (TVMini writes the same message in the status bar).
+
 Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
 0.25–2.0) of the brush thumbnails in the library, and building the paint
 material in a **worker** as MoArt does.
