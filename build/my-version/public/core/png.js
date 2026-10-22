@@ -7,6 +7,7 @@ import {
   sampleEllipse,
   strokeRadii as sharedStrokeRadii,
 } from "./paint.js";
+import { grainSampler } from "./grain.js";
 import { deflateSync, inflateSync } from "./zlib.js";
 
 function parseHex(hex) {
@@ -15,23 +16,6 @@ function parseHex(hex) {
     parseInt(hex.slice(3, 5), 16),
     parseInt(hex.slice(5, 7), 16),
   ];
-}
-
-function setPixel(layer, width, height, x, y, rgb, erase) {
-  const px = Math.round(x);
-  const py = Math.round(y);
-  if (px < 0 || py < 0 || px >= width || py >= height) return;
-  const index = (py * width + px) * 4;
-
-  if (erase) {
-    layer[index + 3] = 0;
-    return;
-  }
-
-  layer[index] = rgb[0];
-  layer[index + 1] = rgb[1];
-  layer[index + 2] = rgb[2];
-  layer[index + 3] = 255;
 }
 
 /**
@@ -55,6 +39,59 @@ let drawingBrush = null;
 
 /** The stamps that have been unpacked, so a stroke does not unpack it again. */
 const stampCache = new Map();
+
+/**
+ * The way the paint of the stroke in hand goes down.
+ *
+ * A brush says how much paint one dab leaves (its flow), how hard the edge of
+ * its tip is (its hardness), how thick the tip is (its thickness) and how far
+ * apart the dabs are (its spacing). A round brush carries the same settings
+ * without a picture.
+ */
+const DEFAULT_STYLE = { flow: 1, hardness: 1, thickness: 1, spacing: 0.25 };
+let strokeStyle = DEFAULT_STYLE;
+
+/** The grain of the paper of the stroke in hand, unpacked. */
+let grainPicture = null;
+
+/** The pictures of the grains, unpacked, so a stroke does not unpack it again. */
+const grainCache = new Map();
+
+/** Unpack the picture of a grain into the plane of its alpha. */
+function grainPictureFor(grain) {
+  if (!grain?.data) return null;
+  const key = grain.data;
+  if (grainCache.has(key)) return grainCache.get(key);
+  let picture = null;
+  try {
+    const image = decodePng(Buffer.from(key, "base64"));
+    const alpha = new Uint8Array(image.width * image.height);
+    for (let index = 0; index < alpha.length; index += 1) {
+      alpha[index] = image.data[index * 4 + 3];
+    }
+    picture = { width: image.width, height: image.height, alpha };
+  } catch {
+    picture = null;
+  }
+  if (grainCache.size > 8) grainCache.clear();
+  grainCache.set(key, picture);
+  return picture;
+}
+
+/** The settings that shape the paint of a brush. */
+function styleOfBrush(brush) {
+  const percent = (value, fallback, low, high) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(low, Math.min(high, number));
+  };
+  return {
+    flow: percent(brush?.flow, 100, 0, 100) / 100,
+    hardness: percent(brush?.hardness, 100, 0, 100) / 100,
+    thickness: percent(brush?.thickness, 100, 10, 500) / 100,
+    spacing: percent(brush?.spacing, 25, 1, 200) / 100,
+  };
+}
 
 /**
  * Unpack a brush image into the plane of its alpha.
@@ -99,7 +136,17 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
   layer[index] = rgb[0];
   layer[index + 1] = rgb[1];
   layer[index + 2] = rgb[2];
-  if (alpha > layer[index + 3]) layer[index + 3] = alpha;
+  if (strokeStyle.flow >= 1) {
+    // Full flow: one dab is as strong as another, so the strongest one wins.
+    if (alpha > layer[index + 3]) layer[index + 3] = alpha;
+    return;
+  }
+  // A brush with a flow below 100 leaves part of its paint with every dab,
+  // and the dabs build up on each other, the way they do in Clip Studio
+  // Paint. What is already there stays, and the dab adds to it.
+  const under = layer[index + 3] / 255;
+  const cover = (alpha / 255) * strokeStyle.flow;
+  layer[index + 3] = Math.round((under + cover * (1 - under)) * 255);
 }
 
 /**
@@ -108,10 +155,11 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
  * The image is fitted to the size of the brush, the way Clip Studio Paint
  * fits a brush texture, and its alpha is the coverage of every pixel. The
  * image keeps its own shape: it is as tall as the brush is wide, and its
- * width follows from that.
+ * width follows from that. A brush whose tip is thick is drawn flatter: the
+ * thickness of the brush is the part of the height of the tip that is used.
  */
 function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
-  const boxHeight = Math.max(1, radius * 2);
+  const boxHeight = Math.max(1, radius * 2 * strokeStyle.thickness);
   const boxWidth = boxHeight * (brush.width / Math.max(1, brush.height));
   const x0 = Math.max(0, Math.floor(cx - boxWidth / 2));
   const x1 = Math.min(width - 1, Math.ceil(cx + boxWidth / 2));
@@ -133,23 +181,44 @@ function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
   }
 }
 
-/** Paint or erase a disc with hard edges (distance test) inside a bounding box. */
+/**
+ * Paint or erase a disc with hard edges (distance test) inside a bounding box.
+ *
+ * The tip of a round brush is a disc, flattened across the stroke by the
+ * thickness of the brush, and its edge is soft when the brush is not hard: a
+ * brush with a hardness of 100 paints up to its edge and stops, and one with
+ * a hardness of 0 fades out from the middle.
+ */
 function disc(layer, width, height, cx, cy, radius, rgb, erase) {
   if (brushStamp) {
     stamp(layer, width, height, cx, cy, radius, rgb, erase, brushStamp);
     return;
   }
-  const x0 = Math.max(0, Math.floor(cx - radius));
-  const x1 = Math.min(width - 1, Math.ceil(cx + radius));
-  const y0 = Math.max(0, Math.floor(cy - radius));
-  const y1 = Math.min(height - 1, Math.ceil(cy + radius));
-  const r2 = radius * radius;
+  const radiusX = radius;
+  const radiusY = Math.max(0.25, radius * strokeStyle.thickness);
+  const x0 = Math.max(0, Math.floor(cx - radiusX));
+  const x1 = Math.min(width - 1, Math.ceil(cx + radiusX));
+  const y0 = Math.max(0, Math.floor(cy - radiusY));
+  const y1 = Math.min(height - 1, Math.ceil(cy + radiusY));
+  const hard = strokeStyle.hardness >= 1;
+  const hardness = strokeStyle.hardness;
 
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
-      const dx = x + 0.5 - cx;
-      const dy = y + 0.5 - cy;
-      if (dx * dx + dy * dy <= r2) setPixel(layer, width, height, x, y, rgb, erase);
+      const dx = (x + 0.5 - cx) / radiusX;
+      const dy = (y + 0.5 - cy) / radiusY;
+      const away = Math.sqrt(dx * dx + dy * dy);
+      if (away > 1) continue;
+      if (hard) {
+        // A flow below 100 leaves part of the paint with this dab, so even a
+        // hard tip goes through the same door as a soft one.
+        setPixelAlpha(layer, width, height, x, y, rgb, 255, erase);
+        continue;
+      }
+      // The edge of a soft brush is a fade from the hardness of the brush out
+      // to its edge.
+      const cover = away <= hardness ? 1 : (1 - away) / Math.max(1e-6, 1 - hardness);
+      setPixelAlpha(layer, width, height, x, y, rgb, Math.round(255 * Math.min(1, cover)), erase);
     }
   }
 }
@@ -172,7 +241,9 @@ function segment(layer, width, height, [x0, y0], [x1, y1], r0, r1, rgb, erase) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const length = Math.hypot(dx, dy);
-  const step = Math.max(0.5, Math.min(r0, r1) / 2);
+  // How far apart the dabs are: a brush says so itself, and a brush that says
+  // nothing gets a dab every quarter of its width.
+  const step = Math.max(0.5, Math.min(r0, r1) * 2 * strokeStyle.spacing);
   const steps = Math.max(1, Math.ceil(length / step));
 
   for (let i = 0; i <= steps; i += 1) {
@@ -348,13 +419,22 @@ function directPicture(drawing, width, height) {
   return picture.data;
 }
 
-/** Paint or erase one stroke's shape into a straight-alpha RGBA buffer. */
-function paintStrokeInto(target, width, height, stroke, rgb) {
-  const erase = stroke.eraser === true;
+/**
+ * Paint or erase one stroke's shape into a straight-alpha RGBA buffer.
+ *
+ * `asMask` paints the shape of the stroke even when it is an eraser: a stroke
+ * that is painted into a mask of its own first is taken out of the drawing
+ * afterwards, with the strength of the stroke.
+ */
+function paintStrokeInto(target, width, height, stroke, rgb, asMask = false) {
+  const erase = !asMask && stroke.eraser === true;
   const radii = strokeRadii(stroke);
   // The brush of the stroke itself, or the brush of the drawing for strokes
   // that were made before a stroke remembered its brush.
-  brushStamp = stampFor("brush" in stroke ? stroke.brush ?? null : drawingBrush);
+  const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
+  brushStamp = stampFor(brush);
+  strokeStyle = styleOfBrush(brush);
+  grainPicture = grainPictureFor(brush?.grain);
 
   if (stroke.kind === "line") {
     segment(
@@ -412,7 +492,29 @@ function paintStrokeInto(target, width, height, stroke, rgb) {
 /** True when the stroke cannot be painted directly (needs a mask pass). */
 function needsMaskPass(stroke) {
   if (stroke.opacity !== undefined && stroke.opacity < 1) return true;
-  return stroke.blend !== undefined && stroke.blend !== "normal";
+  if (stroke.blend !== undefined && stroke.blend !== "normal") return true;
+  // A stroke that is drawn on paper with a grain is painted into a mask of
+  // its own, so that the grain can be taken out of it in one place.
+  const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
+  return Boolean(brush?.grain?.data);
+}
+
+/**
+ * Take the grain of the paper out of a stroke that has been painted into a
+ * mask: the paint is kept where the grain holds ink, and is taken away where
+ * the paper is clear.
+ */
+function applyGrainToMask(mask, width, height, grain) {
+  const picture = grainPictureFor(grain);
+  if (!picture) return;
+  const ink = grainSampler(picture, grain);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * 4 + 3;
+      if (mask[at] === 0) continue;
+      mask[at] = Math.round(mask[at] * ink(x + 0.5, y + 0.5));
+    }
+  }
 }
 
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
@@ -464,7 +566,9 @@ function paintDrawingInner(width, height, drawing) {
     // stroke's overlapping discs would darken each other.
     if (needsMaskPass(stroke)) {
       const mask = new Uint8Array(width * height * 4);
-      paintStrokeInto(mask, width, height, stroke, rgb);
+      paintStrokeInto(mask, width, height, stroke, rgb, true);
+      const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
+      if (brush?.grain?.data) applyGrainToMask(mask, width, height, brush.grain);
       if (stroke.eraser === true) eraseStrokeFrom(paint, mask, stroke.opacity ?? 1);
       else blendStrokeOver(paint, mask, stroke.opacity ?? 1, stroke.blend ?? "normal");
       continue;
@@ -740,6 +844,44 @@ export function scaleRgb(rgb, width, height, outWidth, outHeight) {
         const bottom =
           rgb[(y1 * width + x0) * 3 + channel] * (1 - fx) +
           rgb[(y1 * width + x1) * 3 + channel] * fx;
+        out[to + channel] = Math.round(top * (1 - fy) + bottom * fy);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Scale a straight-alpha RGBA picture.
+ *
+ * The grain of a brush is kept small: a paper grain repeats over the canvas,
+ * so a picture of a couple of hundred pixels is enough, and a small picture
+ * keeps the file of a drawing small. The picture is sampled with a bilinear
+ * filter, so a grain that is made smaller keeps its speckle.
+ */
+export function scaleRgba(rgba, width, height, outWidth, outHeight) {
+  if (outWidth === width && outHeight === height) return rgba;
+  const out = new Uint8Array(outWidth * outHeight * 4);
+  const stepX = width / outWidth;
+  const stepY = height / outHeight;
+  for (let y = 0; y < outHeight; y += 1) {
+    const sourceY = Math.min(height - 1, Math.max(0, (y + 0.5) * stepY - 0.5));
+    const y0 = Math.floor(sourceY);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const fy = sourceY - y0;
+    for (let x = 0; x < outWidth; x += 1) {
+      const sourceX = Math.min(width - 1, Math.max(0, (x + 0.5) * stepX - 0.5));
+      const x0 = Math.floor(sourceX);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const fx = sourceX - x0;
+      const to = (y * outWidth + x) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const top =
+          rgba[(y0 * width + x0) * 4 + channel] * (1 - fx) +
+          rgba[(y0 * width + x1) * 4 + channel] * fx;
+        const bottom =
+          rgba[(y1 * width + x0) * 4 + channel] * (1 - fx) +
+          rgba[(y1 * width + x1) * 4 + channel] * fx;
         out[to + channel] = Math.round(top * (1 - fy) + bottom * fy);
       }
     }

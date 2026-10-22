@@ -337,6 +337,26 @@
               <span>Taper <output id="taperValue">20</output></span>
               <input id="taper" type="range" min="0" max="100" step="1" value="20" />
             </label>
+            <label class="field" id="toolFlowRow" title="How much paint one dab of the brush leaves: below 100 the dabs build up on each other, the way the flow of a Clip Studio Paint brush works (100 = every dab leaves all of its paint)">
+              <span>Flow <output id="flowValue">100</output></span>
+              <input id="flow" type="range" min="1" max="100" step="1" value="100" />
+            </label>
+            <label class="field" id="toolHardnessRow" title="How hard the edge of the tip is: 100 is a sharp edge, 0 fades out from the middle, the way the hardness of a Clip Studio Paint brush works">
+              <span>Hardness <output id="hardnessValue">100</output></span>
+              <input id="hardness" type="range" min="0" max="100" step="1" value="100" />
+            </label>
+            <label class="field" id="toolThicknessRow" title="How thick the tip is: 100 is round, and below that the tip is flatter, so the line is thinner one way than the other, the way the thickness of a Clip Studio Paint brush works">
+              <span>Thickness <output id="thicknessValue">100</output></span>
+              <input id="thickness" type="range" min="10" max="400" step="1" value="100" />
+            </label>
+            <label class="field" id="toolGrainRow" title="How strongly the grain of the paper shows through the paint: the grain of a brush that came from Clip Studio Paint, or the paper of this program (0 = no grain)">
+              <span>Grain <output id="grainValue">0</output></span>
+              <input id="grain" type="range" min="0" max="100" step="1" value="0" />
+            </label>
+            <label class="field" id="toolGrainScaleRow" title="How large the grain of the paper is (100 = its own size, lower repeats it more often)">
+              <span>Grain size <output id="grainScaleValue">100</output></span>
+              <input id="grainScale" type="range" min="10" max="400" step="1" value="100" />
+            </label>
             <label class="field" id="toolOpacityRow" title="Transparency of the whole stroke (100 = solid)">
               <span>Stroke opacity</span>
               <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />

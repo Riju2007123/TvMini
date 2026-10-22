@@ -16,6 +16,11 @@ and looking inside. The tools that did the looking are in `tools/`:
 | `sut-compare.mjs` | compares a brush of Clip Studio Paint with one of ours |
 | `sut-roundtrip.mjs` | writes a brush and reads it back |
 | `sut-inside.mjs`, `sut-texture.mjs`, `sut-catalog.mjs`, `sut-zip.mjs` | the first steps of the search, kept for the record |
+| `sut-grain-probe.mjs` | prints the settings of the texture and the words of every material of a brush |
+| `sut-grain-xml.mjs` | prints the files and the XML of every material, so the paper can be told from the tip |
+| `sut-grain-dump.mjs` | writes the pictures of a brush out, so they can be looked at |
+| `sut-grain-survey.mjs` | the textures and the materials of every brush in a folder |
+| `brush-style-check.mjs` | draws with the flow, the hardness, the thickness and the paper in a headless browser and measures the ink |
 
 ## The file
 
@@ -42,8 +47,9 @@ The settings that matter for a brush are:
 | `BrushFlow` | how much paint one dab of the brush leaves |
 | `BrushHardness` | how hard the edge of the tip is |
 | `BrushThickness` | how much of the tip the stroke uses |
-| `TextureScale2`, `TextureRotate` | how the picture of the tip is turned and sized |
+| `BrushInterval` | how far apart the dabs are, as a share of the width (10 = a tenth) |
 | `TextureImage` | a short description of the picture, used by Clip Studio Paint itself |
+| `TextureDensity`, `TextureScale2`, `TextureRotate`, `TextureReverseDensity` | how the paper of the brush is used: how strong, how large, how far turned, and whether it is turned over |
 
 Every other column has a value that a new brush starts with, and this program
 writes those values too, so a brush written here looks the way a new brush in
@@ -89,17 +95,103 @@ The XML says what the material is. A brush material is marked like this:
 </datalist>
 ```
 
+## The paper of a brush
+
+Clip Studio Paint calls the paper of a brush its **texture**. A brush that is
+drawn on paper keeps a second material in the file, and that material says it
+is a `PaperTexture`:
+
+```xml
+<datalist key="systemtag">
+  <data>Resizable</data>
+  <data>PaperTexture</data>
+</datalist>
+<datalist key="foldertag">
+  <data>単色パターン:テクスチャ</data>
+</datalist>
+```
+
+**The grain is the alpha of `thumbnail/thumbnail.png` in that material.** The
+picture is black, and the pattern is in the channel that says how much paint
+is left: where the alpha is high the paper takes the paint, where it is low
+the paper shows through. The picture in `data/material.layer` is the same kind
+of picture, but it is written in the chunked form that cannot be read (see
+"the picture of the tip"), so the thumbnail is used here too.
+
+The other numbers of the texture say how it is used:
+
+| column | what it says | an example |
+|---|---|---|
+| `TextureDensity` | how strong the paper is, 0–100 | `rough pen 3` 24 |
+| `TextureScale2` | how large the paper is, in percent | `rough pen 3` 92 |
+| `TextureRotate` | how far the paper is turned, in degrees | most brushes 0 |
+| `TextureReverseDensity` | 1 turns the picture over: the holes paint | `CAT PEN 2` 1 |
+| `TextureCompositeMode`, `TextureForPlot` | how Clip Studio Paint mixes the texture | read, not used |
+
+`TextureImage` is not the picture: it is a name, written in UTF-16, that points
+at the material (`…:data:material.layer`). It is how Clip Studio Paint knows
+which of the materials of the file is the paper.
+
+A brush that has no `PaperTexture` material has no paper of its own
+(`Real G-Pen 2`, `Flat marker`), even though its `TextureDensity` column still
+holds the number a new brush starts with (50). The column only means something
+when there is a material to go with it.
+
+What was measured on this machine (`tools/sut-grain-survey.mjs`):
+
+| brush | paper | strength | size | turned over |
+|---|---|---|---|---|
+| `rough pen 3` | 251×251, alpha 41–248 | 24 | 92 | no |
+| `アニメーター専用リアル風鉛筆` | 300×300 | 89 | 32 | no |
+| `CAT PEN 2` | 300×300, alpha 22–233 | 100 | 100 | yes |
+| `Thick Paint One` | 225×300, alpha 31–174 | 20 | 25 | yes |
+| `Real G-Pen 2` | none | – | – | – |
+
+## The paint of a brush
+
+The numbers of the brush are used, not only read. TVMini reads:
+
+* **the flow**: how much paint one dab leaves, and the dabs build up on each
+  other when it is below 100;
+* **the hardness**: how hard the edge of the tip is;
+* **the thickness**: how thick the tip is, so a flat nib draws a thinner line
+  across itself than along itself;
+* **the spacing**: how far apart the dabs are (`BrushInterval`, a share of the
+  width; a brush that says nothing gets a dab every quarter of its width,
+  which is what this program drew before);
+* **the paper**: the picture and its strength, size and turn.
+
+The paper is kept apart from the stroke, in the place of the document, so the
+same brush drawn twice leaves the same holes in the same places. The picture
+of the paper is made smaller when it is read — 160 pixels on its longest side,
+with 16 steps of alpha — because it is kept with every stroke that is drawn on
+it, the way the picture of a tip is. That is about 17 000 characters of text
+for each stroke.
+
+A brush that is brought into the program brings its paper with it, and the
+panel says so: the card of such a brush says `· paper`, and the rows of the
+flow, the hardness, the thickness and the paper are set to the numbers of the
+brush.
+
 ## Reading a brush
 
 `public/core/sut.js` opens the database, asks for the name and the settings,
-and then looks for the picture: the thumbnail of the material that holds the
-shape of a brush. The picture is found by looking for the PNG inside the
-file, so a brush works even when the container around it is not understood.
+and then looks for the picture: the thumbnail of the material that says it is
+a brush shape (`BrushPattern`). The picture is found by looking for the PNG
+inside the file, so a brush works even when the container around it is not
+understood.
+
+The paper is looked for the same way: the material that says `PaperTexture` is
+the paper, and its thumbnail is the pattern. The words are searched for in the
+raw text of the XML of every material, because the way the XML is written
+changes from one material to the next (some write `<data>PaperTexture</data>`,
+some write the same word inside a list of words), and the name of the file is
+not a sign of anything (`data/material.layer` and `data/material_0.layer` both
+happen in the same file).
 
 The settings of the brush are kept as well: its size, how strong it paints,
-how much paint one dab leaves, how hard the edge of the tip is and the rest.
-TVMini can use the size and the strength; the rest describe how Clip Studio
-Paint draws the brush, which a picture of a tip cannot say.
+how much paint one dab leaves, how hard the edge of the tip is, how thick the
+tip is, how far apart the dabs are and the paper.
 
 ## Drawing with a brush that has a picture
 
@@ -125,6 +217,14 @@ mixed into it before it is painted.
 
 The TAR archive is written by `public/core/tar.js`.
 
+The paper of a brush is **not** written back. A brush that is written out here
+is written without a `PaperTexture` material, because the name that Clip Studio
+Paint uses to point at a material (`TextureImage`) is a BLOB whose layout was
+not worked out, and a file that points at nothing would be worse than a file
+without a paper. The brush itself (its size, its strength, its flow, its
+hardness, its thickness and its picture) is written, and so it comes back into
+Clip Studio Paint as the same brush, drawing on plain paper.
+
 ## What was checked
 
 * The file we write has the same tables and the same columns as a brush that
@@ -133,8 +233,17 @@ The TAR archive is written by `public/core/tar.js`.
   small graphs Clip Studio Paint keeps for its own sliders.
 * The picture of the tip comes back out of the file we write, with its name
   and its size (`tools/sut-roundtrip.mjs` and `test/sut-write.test.js`).
+* The paper of a brush is read out of the file, with its strength, its size,
+  its turn and the way it is turned over, for the brushes above
+  (`tools/sut-grain-survey.mjs`, `tools/sut-grain-probe.mjs`).
 * The whole way through the program — the panel, bringing a brush in, and
   writing one out — was done in a real browser (`tools/brush-check.mjs`).
+* A brush of Clip Studio Paint was brought into the program in a real browser,
+  with its paper: the card of the brush says `· paper`, the rows of the panel
+  take the numbers of the brush (size 80, flow 79, paper 24 for `rough pen 3`),
+  and the same line drawn with the paper turned off holds 11 percent more ink
+  than the line drawn with it (7 143 811 against 6 471 949, measured with
+  `tools/brush-style-check.mjs`).
 
 What was **not** checked here: the file was not imported into Clip Studio
 Paint itself. The menus of Clip Studio Paint cannot be driven by a script, so

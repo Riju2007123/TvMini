@@ -298,8 +298,73 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
  * A brush keeps its own size, not the size of the canvas, so it is checked
  * on its own. The size is read out of the picture itself rather than taken
  * on trust.
+ *
+ * A brush may have no picture (`data: null`): a round brush is a brush too,
+ * and it still carries the settings that shape its paint - how much paint one
+ * dab leaves, how hard its edge is, how thick the tip is and which grain of
+ * paper it draws on.
  */
 function normalizeBrush(value, maxBase64, label) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+
+  const hasPicture = typeof value.data === "string" && value.data.length > 0;
+  if (value.data !== null && value.data !== undefined && !hasPicture) {
+    throw new ValidationError(`${label}.data must be base64 text or null`);
+  }
+
+  const brush = { data: hasPicture ? value.data : null };
+  if (hasPicture) {
+    if (value.data.length > maxBase64) {
+      throw new ValidationError(`${label}.data is too large`);
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) {
+      throw new ValidationError(`${label}.data must be base64 text`);
+    }
+    const bytes = Buffer.from(value.data, "base64");
+    if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47) {
+      throw new ValidationError(`${label}.data must be a PNG`);
+    }
+    brush.width = bytes.readUInt32BE(16);
+    brush.height = bytes.readUInt32BE(20);
+  }
+
+  // A brush that comes from Clip Studio Paint has a size and a strength of
+  // its own, and they are kept with it.
+  if (Number.isFinite(value.size) && value.size > 0) brush.size = value.size;
+  if (Number.isFinite(value.opacity) && value.opacity > 0) brush.opacity = value.opacity;
+
+  // The way the paint goes down: how much one dab leaves, how hard the edge
+  // of the tip is, how thick the tip is and how far apart the dabs are.
+  if (Number.isFinite(value.flow)) {
+    brush.flow = Math.max(0, Math.min(100, Math.round(value.flow)));
+  }
+  if (Number.isFinite(value.hardness)) {
+    brush.hardness = Math.max(0, Math.min(100, Math.round(value.hardness)));
+  }
+  if (Number.isFinite(value.thickness)) {
+    brush.thickness = Math.max(10, Math.min(500, Math.round(value.thickness)));
+  }
+  if (Number.isFinite(value.spacing)) {
+    brush.spacing = Math.max(1, Math.min(200, Math.round(value.spacing)));
+  }
+
+  const grain = normalizeGrain(value.grain, maxBase64, `${label}.grain`);
+  if (grain) brush.grain = grain;
+
+  return brush;
+}
+
+/**
+ * Check the grain of a brush.
+ *
+ * The grain is a picture whose alpha is the pattern of the paper, with the
+ * settings that say how strongly and how large it is drawn. It is kept the
+ * same way as the picture of the tip: base64 text of a PNG.
+ */
+function normalizeGrain(value, maxBase64, label) {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new ValidationError(`${label} must be an object`);
@@ -317,17 +382,17 @@ function normalizeBrush(value, maxBase64, label) {
   if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47) {
     throw new ValidationError(`${label}.data must be a PNG`);
   }
-  const brush = {
+  return {
     data: value.data,
     width: bytes.readUInt32BE(16),
     height: bytes.readUInt32BE(20),
+    density: Number.isFinite(value.density) ? Math.max(0, Math.min(100, value.density)) : 100,
+    scale: Number.isFinite(value.scale) ? Math.max(1, Math.min(400, value.scale)) : 100,
+    rotate: Number.isFinite(value.rotate) ? Math.max(-360, Math.min(360, value.rotate)) : 0,
+    reverse: value.reverse === true,
   };
-  // A brush that comes from Clip Studio Paint has a size and a strength of
-  // its own, and they are kept with it.
-  if (Number.isFinite(value.size) && value.size > 0) brush.size = value.size;
-  if (Number.isFinite(value.opacity) && value.opacity > 0) brush.opacity = value.opacity;
-  return brush;
 }
+
 
 function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   const label = `layers[${index}]`;

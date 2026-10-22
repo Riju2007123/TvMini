@@ -127,6 +127,61 @@ shipped earlier. Includes eraser touch-draw toggle.
   quickly and thin at the ends, and the same line comes out of the PNG
   export, because the taper is worked out in the shared painter that both
   use (`public/core/paint.js`).
+- **The paint of a brush: flow, hardness, thickness and the paper**
+  (2026-10-22). Clip Studio Paint describes a brush with a handful of numbers
+  that say how its paint goes down. TVMini now reads them from the `.sut`
+  file and uses them (`docs/sut-format-study.md`, "The paint of a brush"):
+  - **flow** (`BrushFlow`): how much paint one dab leaves. Below 100 the dabs
+    build up on each other, the way they do in Clip Studio Paint.
+  - **hardness** (`BrushHardness`): how hard the edge of the tip is. 100 is
+    an edge; 0 fades out from the middle.
+  - **thickness** (`BrushThickness`): how thick the tip is. Below 100 the tip
+    is a flat nib, so a line across the nib is thinner than a line along it.
+  - **spacing** (`BrushInterval`, a share of the width): how far apart the
+    dabs are.
+  - **the paper** (`TextureImage` → the `PaperTexture` material): the grain
+    the brush is drawn on, with its strength (`TextureDensity`), its size
+    (`TextureScale2`), its turn (`TextureRotate`) and whether it is turned
+    over (`TextureReverseDensity`).
+  Each has a row of its own in the brush part of the property panel (the
+  flow, the hardness and the paper also in the eraser), and every stroke
+  keeps the brush it was drawn with, so moving a slider does not repaint the
+  lines that are on the paper already. A brush at flow 100, hardness 100 and
+  thickness 100 with no paper is still painted as one path, so a plain line
+  is as quick as it was.
+- **The paper belongs to the document, not to the stroke** (2026-10-22). The
+  grain is put on the paper at the size, turn and strength of the brush, and
+  the stroke is taken out of it, so the same brush drawn twice puts the same
+  holes in the same places and the grain stays still while the hand moves. A
+  stroke is painted into a sheet the size of the box it takes up and the
+  paper is taken out of that sheet in one pass, so a long drawing does not
+  pay for the paper of the whole canvas. A picture of a tip keeps its own
+  alpha; a round tip gets its hardness from the brush.
+- **Measured** (`tools/brush-style-check.mjs`, a headless browser, 60 moves of
+  a line, each line drawn from the plain brush with one setting changed):
+
+  | line | ink of the line | share of the plain line |
+  |---|---|---|
+  | plain (flow 100, hardness 100, thickness 100, no paper) | 2 335 085 | 1.00 |
+  | flow 12 | 923 278 | 0.40 |
+  | hardness 0 | 1 676 620 | 0.72 |
+  | thickness 30 | 615 211 | 0.26 |
+  | paper 70 | 1 528 488 | 0.65 |
+
+  The time of one move of the pointer on the stage (`tools/draw-check.mjs`
+  and the same tool), a round tip 6 and 80 pixels wide:
+
+  | how it is painted | 6 px wide | 80 px wide |
+  |---|---|---|
+  | one shape, no paper | 0.33 ms | 0.43 ms |
+  | one shape on paper | 0.57 ms | 1.58 ms |
+  | dab by dab on paper (flow 40) | 4.86 ms | 6.29 ms |
+
+  The dab-by-dab line is the slow one: it is many pictures along the path
+  instead of one shape, and it is what a brush with a flow below 100 is.
+  What MoArt does with a paper texture was not established (UNKNOWN); the
+  shape of the rows in the panel follows the rows of MoArt, the behaviour
+  follows Clip Studio Paint.
 
 Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
 0.25–2.0) of the brush thumbnails in the library, and building the paint
