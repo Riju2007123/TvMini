@@ -4,6 +4,7 @@ param(
   [int]$ClickX = -1,
   [int]$ClickY = -1,
   [string]$Key = "",
+  [string]$Keys = "",
   [int]$WaitAfterClick = 600
 )
 
@@ -96,6 +97,18 @@ if ($Key -ne "") {
   $shell.SendKeys($Key)
   Start-Sleep -Milliseconds $WaitAfterClick
   Write-Output "sent the key $Key"
+}
+
+# Several keys in a row, to open a menu for instance.
+if ($Keys -ne "") {
+  $shell = New-Object -ComObject WScript.Shell
+  [void]$shell.AppActivate([Flash8]::Title($win))
+  Start-Sleep -Milliseconds 400
+  foreach ($one in ($Keys -split ",")) {
+    $shell.SendKeys($one)
+    Start-Sleep -Milliseconds 500
+  }
+  Write-Output "sent the keys $Keys"
 }
 
 # A click in the window, to choose a tool for instance.

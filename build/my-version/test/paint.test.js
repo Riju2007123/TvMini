@@ -9,6 +9,7 @@ import {
   parseHexColor,
   sampleEllipse,
   smoothPoint,
+  strokeOutline,
 } from "../public/core/paint.js";
 
 /** First opaque pixel matching a colour, or null. */
@@ -336,6 +337,38 @@ test("smoothPoint eases a raw sample toward the running point", () => {
   const withPressure = smoothPoint([0, 0], [10, 10, 0.42], 3);
   assert.equal(withPressure.length, 3);
   assert.equal(withPressure[2], 0.42);
+});
+
+test("strokeOutline gives the two sides of a line whose width changes", () => {
+  // A line along the x axis, thin at the start, thick in the middle.
+  const points = [
+    [0, 0],
+    [10, 0],
+    [20, 0],
+  ];
+  const radii = [1, 5, 1];
+  const { left, right } = strokeOutline(points, radii);
+
+  // The two sides are above and below the line, each of them as far from
+  // the line as the width of the line is there.
+  assert.deepEqual(left[1], [10, 5]);
+  assert.deepEqual(right[1], [10, -5]);
+  assert.deepEqual(left[0], [0, 1]);
+  assert.deepEqual(right[2], [20, -1]);
+
+  // A line that turns: the sides follow the turn, and the corner is
+  // joined in the middle of the two directions.
+  const turned = strokeOutline(
+    [
+      [0, 0],
+      [10, 0],
+      [10, 10],
+    ],
+    [2, 2, 2],
+  );
+  assert.ok(Math.abs(turned.left[1][0] - 8.586) < 0.01);
+  assert.ok(Math.abs(turned.left[1][1] - 1.414) < 0.01);
+  assert.deepEqual(turned.left[2], [8, 10]);
 });
 
 test("sampleEllipse builds a closed ring around the bounding box", () => {

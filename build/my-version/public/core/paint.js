@@ -180,3 +180,43 @@ export function strokePathGroups(points, radii) {
   }
   return groups;
 }
+
+/**
+ * The outline of a stroke whose width changes along the way.
+ *
+ * The stroke is one shape: the left side of the line, then the right side
+ * of it, and the two are filled together. The width then changes the way
+ * the width of a pen changes, instead of in steps, and the edge of the line
+ * is one clean edge.
+ *
+ * The points where the line turns sharply are the hard ones: the two
+ * sides are joined by a small cut there, so that the shape does not fold
+ * on itself.
+ *
+ * @param {Array<Array<number>>} points The points of the stroke.
+ * @param {number[]} radii The half width of the line at every point.
+ * @returns {{left: Array<Array<number>>, right: Array<Array<number>>}} The two sides of the line.
+ */
+export function strokeOutline(points, radii) {
+  const left = [];
+  const right = [];
+  for (let index = 0; index < points.length; index += 1) {
+    const before = points[Math.max(0, index - 1)];
+    const after = points[Math.min(points.length - 1, index + 1)];
+    let dx = after[0] - before[0];
+    let dy = after[1] - before[1];
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-6) {
+      dx = 1;
+      dy = 0;
+    } else {
+      dx /= length;
+      dy /= length;
+    }
+    // The line across the direction of the stroke.
+    const across = radii[index];
+    left.push([points[index][0] - dy * across, points[index][1] + dx * across]);
+    right.push([points[index][0] + dy * across, points[index][1] - dx * across]);
+  }
+  return { left, right };
+}

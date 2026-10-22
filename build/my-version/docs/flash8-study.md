@@ -244,4 +244,55 @@ way the pencil of Flash does: the ends are cut square and the corners are
 sharp (`stroke.hard` in the project, `lineCap` and `lineJoin` in the
 drawing).
 
+## The pen pressure
+
+The strings of the program were read to find what it knows about the pen
+(`H:\flash 8\Flash 8\en\Configuration\FlashResources.dll`). Three of them
+are about the tablet:
+
+| The string in Flash 8 | What it is |
+|---|---|
+| **Change the Brush size based on pen pressure** | a setting of the brush: the size of the brush follows the pressure of the pen |
+| **Use angle information from the tablet to determine brush orientation** | a setting: the brush is turned with the tilt of the pen |
+| **Use Pressure** / **Use Tilt** | the two ways the tablet can shape the brush |
+
+So the pen does three things in Flash 8:
+
+1. **The size of the brush follows the pressure.** The setting is there
+   to turn it off; with it on, a light touch draws a thin line and a
+   hard press draws a thick one.
+2. **The brush is turned with the tilt of the pen**, so a picture brush
+   lies along the nib the way a real brush does.
+3. **The size of the brush is the pressure or the tilt**, never both at
+   once.
+
+There is **no pressure setting in the program itself** (`Flash.exe` has
+no string with "pressure" in it): the pressure is read from the tablet
+and used where the brush draws.
+
+**TVMini status.** The pressure of the pen sets the width of the line
+(`pressureFor` in `public/app.js`, the width of a stroke from the
+pressure of the point), with a gain that a person can set (25% to 300%),
+and the pen pressure can be turned off altogether. Two things were
+changed after this study:
+
+- **The readings of the pen are averaged.** The pen tells how hard it is
+  pressed many times a second, and the readings jump about a little
+  every time, so the width of the line jumped with them. The last four
+  readings are averaged now, the way the line itself is smoothed.
+- **A line whose width changes is one shape.** The stroke was drawn as a
+  run of segments, each with its own width, so the width of the line
+  changed in steps and the edge of the line was a row of little arcs.
+  The stroke is now the left side of the line and the right side of it,
+  filled together (`strokeOutline` in `public/core/paint.js`), so the
+  width changes the way the width of a pen changes and the edge of the
+  line is one clean edge. The export draws the same line the same way,
+  so what is on the stage is what is written in the file.
+
+The **tilt** is not used yet: a browser tells the tilt of the pen
+(`tiltX` and `tiltY` of a pointer event), and the brush of TVMini is a
+round tip ✗ — a round tip has no direction to turn ✗ — so the tilt
+would only matter for a picture brush.
+
+
 
