@@ -6361,13 +6361,14 @@ function changeTransform() {
   return drawing;
 }
 
-transformXInput.addEventListener("change", changeTransform);
-transformYInput.addEventListener("change", changeTransform);
-transformRotationInput.addEventListener("change", changeTransform);
-transformScaleInput.addEventListener("pointerdown", () => {
-  state.transformBefore = snapshot();
-});
-transformScaleInput.addEventListener("input", () => {
+/**
+ * Put the size of the cell that is on the frame.
+ *
+ * The slider is moved while the pointer is down, so the size is put on the
+ * cell as it goes and the history is only written when the pointer is let
+ * go.
+ */
+function applyTransformScale() {
   const layer = currentLayer();
   if (!layer || isGroup(layer)) return;
   const resolved = resolveDrawing(layer, state.project.currentFrame);
@@ -6379,8 +6380,19 @@ transformScaleInput.addEventListener("input", () => {
   transformScaleValue.textContent = `${Math.round(scale * 100)}%`;
   renderCanvas();
   markDirty();
+}
+
+transformXInput.addEventListener("change", changeTransform);
+transformYInput.addEventListener("change", changeTransform);
+transformRotationInput.addEventListener("change", changeTransform);
+transformScaleInput.addEventListener("pointerdown", () => {
+  state.transformBefore = snapshot();
 });
+transformScaleInput.addEventListener("input", applyTransformScale);
 transformScaleInput.addEventListener("change", () => {
+  // The slider may be moved with the keyboard, and then the value arrives
+  // without a pointer going down first.
+  applyTransformScale();
   const before = state.transformBefore;
   state.transformBefore = null;
   if (before) recordHistory(before);
