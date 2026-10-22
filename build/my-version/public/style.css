@@ -1435,8 +1435,6 @@ body.hide-inspector.hide-stage .workspace {
   display: flex;
   overflow: scroll;
   padding: 18px;
-  scrollbar-width: auto;
-  scrollbar-color: var(--surface-3) transparent;
 }
 
 .canvas-scroll::-webkit-scrollbar {
@@ -2430,11 +2428,11 @@ input[type="range"] {
 
 /* scrollbars ------------------------------------------------------------- */
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--surface-3) transparent;
-}
-
+/* The bars are drawn with the old rules, so they are the same everywhere.
+   The standard properties are not used: a browser that is given them draws
+   its own bars and ignores these, and those have no thumb when there is
+   nothing to scroll, so the scroller of the stage would vanish as soon as
+   the document fits in the pane. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
