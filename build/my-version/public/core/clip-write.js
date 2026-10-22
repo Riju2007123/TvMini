@@ -935,6 +935,23 @@ function animationRows(tree) {
     return frames.length ? Math.min(...frames) : null;
   };
 
+  // The last frame the artwork of a node covers. A cell of a row can be a
+  // folder of its own, and then its picture sits in the layers inside it, so
+  // the frames are looked for down there as well.
+  const lastFrameOf = (index, depth = 0) => {
+    const layer = tree.nodes[index].layer;
+    let last = -Infinity;
+    for (const drawing of layer.drawings ?? []) {
+      last = Math.max(last, drawing.at + drawing.hold - 1);
+    }
+    if (last !== -Infinity) return last;
+    if (depth >= 8) return -Infinity;
+    for (const child of tree.nodes[index].children) {
+      last = Math.max(last, lastFrameOf(child, depth + 1));
+    }
+    return last;
+  };
+
   // The parent of every node, so a node that sits inside a row can be found.
   const parentOf = new Map();
   tree.nodes.forEach((node, index) => {
@@ -955,7 +972,12 @@ function animationRows(tree) {
       const at = frameOf(child);
       if (at === null) continue;
       const drawing = childLayer.drawings?.[0] ?? null;
-      cells.push({ name: childLayer.name || String(cells.length + 1), at, drawing, child });
+      // How long the cell shows. Clip Studio holds a cell until the next one
+      // starts, and the last cell of a row until the end of its track, so the
+      // writer has to know how far the cell reaches.
+      const last = lastFrameOf(child);
+      const hold = last === -Infinity ? (drawing?.hold ?? 1) : last - at + 1;
+      cells.push({ name: childLayer.name || String(cells.length + 1), at, hold, drawing, child });
     }
     if (cells.length === 0) continue;
     cells.sort((one, two) => one.at - two.at);
@@ -989,6 +1011,7 @@ function animationRows(tree) {
     const cells = drawings.map((drawing, order) => ({
       name: drawing.name || String(order + 1),
       at: drawing.at,
+      hold: drawing.hold ?? 1,
       drawing,
     }));
     cells.sort((one, two) => one.at - two.at);
@@ -1200,8 +1223,8 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
     }
   }
   // The range of the track runs from the first frame of the project to the
-  // frame behind the last one, which is the frame the timeline ends on.
-  const range = { start: tickOf(startFrame), end: tickOf(end + 1), rate: 60 };
+  // last one, which is the frame the timeline ends on.
+  const range = { start: tickOf(startFrame), end: tickOf(end), rate: 60 };
 
   const trackIds = [];
 
@@ -1257,13 +1280,25 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
     // The plan of the row: the cells it shows, and the frame each one
     // starts on. The frames become ticks of the document's timebase.
     const keys = row.cells.map((cell) => ({ frame: cell.at, tag: cell.name }));
+    // The range of a row is the frames its own cells cover. Clip Studio holds
+    // the last cell of a row until the end of its track, so a track that ran
+    // to the end of the document would keep that cell on screen for every
+    // frame after it and the animation would stand still.
+    const firstCell = row.cells[0];
+    const lastCell = row.cells[row.cells.length - 1];
+    const lastFrame = lastCell.at + (lastCell.hold ?? 1) - 1;
+    const rowRange = {
+      start: tickOf(firstCell.at),
+      end: tickOf(Math.max(lastFrame, firstCell.at)),
+      rate: 60,
+    };
     const first = setTrackRange(
       parseActionDocument(spliceCelPlan(skeleton.first, { keys, frameRate: fps })),
-      range,
+      rowRange,
     );
     const second = setTrackRange(
       parseActionDocument(spliceCelPlan(skeleton.second, { keys, frameRate: fps })),
-      range,
+      rowRange,
     );
     const firstId = newMixerId();
     const secondId = newMixerId();

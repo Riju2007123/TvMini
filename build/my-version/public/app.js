@@ -4909,8 +4909,11 @@ function startPlayback() {
 
     const elapsed = now - last;
     last = now;
-    // After a long stall (hidden tab, debugger) resume gently, not in a jump.
-    carry += elapsed > 500 ? 0 : (elapsed / 1000) * project.fps * state.playSpeed;
+    // After a long stall (a hidden tab, a debugger) the animation resumes
+    // gently instead of jumping. The time is shortened rather than thrown
+    // away, so a frame that takes a long time to draw - a big document on a
+    // slow machine - still moves the animation along instead of freezing it.
+    carry += (Math.min(elapsed, 500) / 1000) * project.fps * state.playSpeed;
     const advance = Math.floor(carry);
     if (advance < 1) return;
     carry -= advance;

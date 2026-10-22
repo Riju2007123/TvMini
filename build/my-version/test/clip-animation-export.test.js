@@ -262,18 +262,40 @@ test("an animation folder is written as a track with its cells", async () => {
   assert.deepEqual(curve.keys.map((key) => key.time), [0, 10, 20]);
   assert.deepEqual(curve.keys.map((key) => key.value), [0, 1, 2]);
 
-  // The track runs to the frame behind the last one, so the last cell is
-  // held for a frame, and the timeline says the same.
+  // The track runs to the frame of the last cell, so that cell is held for
+  // its own length and no longer. A track that ran to the end of the
+  // document would hold it for every frame after it, and the animation would
+  // stand still.
   const range = readTrackRange(document);
-  assert.equal(range.end, 25);
+  assert.equal(range.end, 20);
   assert.equal(timeline.length, 1);
   assert.equal(Number(timeline[0].FrameRate), 12);
   assert.equal(Number(timeline[0].FirstTrack), Number(track.MainId));
   assert.equal(Number(timeline[0].EndFrame), 5);
 });
 
-test("the layer of an animation folder is marked as one", async () => {
+test("a cell that is held longer keeps its own length in the track", async () => {
+  // The last cell of a row is held until the end of the track, so the track
+  // has to end where that cell ends. A track that ran to the end of the
+  // document would hold the cell for every frame after it, and the animation
+  // would stand still in Clip Studio Paint.
+  const project = projectWithCells();
+  project.layers[3].drawings = [{ at: 5, hold: 4, strokes: [], name: "three" }];
+
   const skeleton = await skeletonClip();
+  const written = await createClipBuffer(project, { name: "animated", animation: skeleton });
+  const { rows } = await tracksOf(written.buffer);
+  const track = rows.find((row) => Number(row.TrackKind) === 2000);
+
+  const id = Buffer.from(track.TrackActionMixer2).toString("ascii");
+  const document = readActionBlob(externalOf(written.buffer, id));
+  const range = readTrackRange(document);
+  // Twelve frames a second, so a frame is five ticks: the cell runs from
+  // frame 5 to frame 8, which is tick 35.
+  assert.equal(range.end, 35);
+});
+
+test("the layer of an animation folder is marked as one", async () => {  const skeleton = await skeletonClip();
   const written = await createClipBuffer(projectWithCells(), {
     name: "animated",
     animation: skeleton,

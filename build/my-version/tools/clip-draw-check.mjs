@@ -372,6 +372,21 @@ console.log(
   )}`,
 );
 
+// 7. The play button: the animation has to move.
+console.log(`\n-- playing`);
+await devtools.run('document.querySelector("#playButton")?.click(); true');
+await sleep(400);
+const frames = [];
+for (let step = 0; step < 8; step += 1) {
+  frames.push(await devtools.run('document.querySelector("#frameLabel")?.textContent ?? ""'));
+  await sleep(250);
+}
+await devtools.run('document.querySelector("#playButton")?.click(); true');
+console.log(`   the frames while playing: ${frames.join(" | ")}`);
+console.log(
+  `   the status line says: ${await devtools.run('document.querySelector("#status")?.textContent ?? ""')}`,
+);
+
 if (devtools.errors.length) {
   console.log("\nwhat the program said:");
   for (const line of devtools.errors.slice(0, 10)) console.log(`   ${line}`);
