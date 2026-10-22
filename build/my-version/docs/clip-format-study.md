@@ -298,6 +298,27 @@ The writer has no curve of its own for that, so the picture is put where the
 transform says instead. The document looks the same, but the turn and the
 size of a cell live in the picture rather than in the curves of its track.
 
+### The tracks that are not cell tracks
+
+A document has more tracks than the ones that show cells:
+
+| kind | what it is | how it is written |
+|---|---|---|
+| 2003 | the paper: the range of the whole timeline | copied from the skeleton ✓ |
+| 2000 | a row of cells | the cells are spliced into it ✓ |
+| 2005 | the camera | its six curves are spliced into it ✓ |
+| 2001 | the track of an ordinary layer | carried over as it is ✓ |
+| 1000 | the track of the cel folder | carried over as it is ✓ |
+| 4000 | the play time of the animation | carried over as it is ✓ |
+
+The last three hold no cells, so the cells of a document do not depend on
+them, but **Clip Studio Paint shows a layer in its timeline only when the
+layer has a track** — a document that is written without them shows the
+rows of its animation folders and nothing else. They are carried over as
+they are, with the range of the document instead of the one they had, and a
+layer that had one gets its track again: the uuid of the layer is kept in
+the project, so the track can be found when the project is written back out.
+
 ### How a blob is found
 
 Three pieces fit together:

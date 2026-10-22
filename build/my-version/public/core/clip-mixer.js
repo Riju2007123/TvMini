@@ -426,6 +426,74 @@ export function spliceCelPlan(document, plan) {
 }
 
 /**
+ * Splice a camera plan into a track document.
+ *
+ * A camera track carries six curves: the half size of the frame the camera
+ * looks through (`ImageCenter` X and Y), where the middle of that frame sits
+ * (`ImagePosition` X and Y), how far the camera is turned (`ImageRotation`)
+ * and how much of the canvas it shows (`ImageScale`, in percent).
+ *
+ * A project stores a camera as a window over the canvas, not as those six
+ * numbers: `{ frame, x, y, width, height, rotation }`. The reader folds the
+ * centre and the zoom into a window, so writing it back needs a choice. The
+ * writer picks the zoom of **100%**, which makes the frame the window itself:
+ *
+ *   centreX   = width / 2          positionX = x + width / 2
+ *   centreY   = height / 2         positionY = y + height / 2
+ *   rotation  = rotation           scale     = 100
+ *
+ * At 100% the reader folds `position - centre * 1` back into the same `x`,
+ * the same `y` and the same size, so the window survives the round trip.
+ *
+ * The times are the 60 Hz ticks of the document, the same as the cells use.
+ * Both mixers of a track can be spliced this way, each in the layout it uses.
+ */
+export function spliceCameraPlan(document, plan) {
+  const keys = plan?.keys ?? [];
+  if (!keys.length) throw new Error("a camera plan needs at least one key");
+  const frameRate = Number(plan.frameRate) > 0 ? Number(plan.frameRate) : 30;
+  const startFrame = Number(plan.startFrame) > 0 ? Number(plan.startFrame) : 1;
+
+  const times = keys.map((key) => ((Number(key.frame) - startFrame) * 60) / frameRate);
+  const series = [
+    ["ImageCenter", "X", keys.map((key) => Number(key.width) / 2)],
+    ["ImageCenter", "Y", keys.map((key) => Number(key.height) / 2)],
+    ["ImagePosition", "X", keys.map((key) => Number(key.x) + Number(key.width) / 2)],
+    ["ImagePosition", "Y", keys.map((key) => Number(key.y) + Number(key.height) / 2)],
+    ["ImageRotation", null, keys.map((key) => Number(key.rotation) || 0)],
+    ["ImageScale", null, keys.map(() => 100)],
+  ];
+
+  // The strings a rebuilt curve refers to, so a document that does not use
+  // one of the six curves yet can still hold it afterwards.
+  const pool = withStrings(document.pool, [
+    "FCurve", "Type", "Axis", "Frame", "Value", "Int32[]", "Double[]", "Single[]",
+    "ImageCenter", "ImagePosition", "ImageRotation", "ImageScale", "X", "Y",
+  ]);
+
+  let current = { ...document, pool };
+  for (const [kind, axis, values] of series) {
+    const found = locateCurve(current, kind, axis);
+    const types = {};
+    if (found) {
+      for (const [name, field] of found.fields) types[name] = field.type;
+    }
+    // A document that writes its other curves as single precision keeps that
+    // layout; a curve that is new to it takes the type that goes with the
+    // document's version.
+    const fallback = (current.version ?? "0110") === "0100" ? "Single[]" : "Double[]";
+    const fields = [
+      { name: "Frame", type: types.Frame ?? fallback, values: times },
+      { name: "Value", type: types.Value ?? fallback, values },
+    ];
+    current = parseActionDocument(
+      spliceCurve(current, { kind, axis, fields, pool: current.pool }),
+    );
+  }
+  return rebuildDocument(current);
+}
+
+/**
  * Replace one curve record of a document, or add it when there is none.
  *
  * `body` is the part of the document after the pool, and the record is found

@@ -4,6 +4,7 @@ import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
 import {
   actionProperties,
+  cellTransformAt,
   celPlacement,
   celPlacementFromKeys,
   readActionBlob,
@@ -245,9 +246,15 @@ export function clipToProject(document, layers, fallback = {}) {
   const uuidKey = (value) => String(value ?? "").replace(/-/g, "").toLowerCase();
   const frameRate = Number(timeline.frameRate) > 0 ? Number(timeline.frameRate) : 30;
   const placementsByUuid = new Map();
+  const transformsByUuid = new Map();
   for (const track of document.tracks ?? []) {
     const key = uuidKey(track?.layerUuid);
-    if (!key || placementsByUuid.has(key)) continue;
+    if (!key) continue;
+    // The transform of the cells of a track says where their pictures sit.
+    if (track?.action2?.cellTransform && !transformsByUuid.has(key)) {
+      transformsByUuid.set(key, track.action2.cellTransform);
+    }
+    if (placementsByUuid.has(key)) continue;
     // The cell curve lives in the second mixer, but a track that has none
     // there can still carry one in the first.
     const second = track?.action2;
@@ -268,6 +275,36 @@ export function clipToProject(document, layers, fallback = {}) {
   }
 
   const placementOf = (node) => placementsByUuid.get(uuidKey(node.uuid)) ?? null;
+  const transformOf_ = (node) => transformsByUuid.get(uuidKey(node.uuid)) ?? null;
+
+  /**
+   * Where the picture of a cell sits, in the way the project keeps it.
+   *
+   * Clip Studio Paint says where the middle of the picture is and where it
+   * is at home; the difference is how far the picture is from its place. The
+   * project turns and grows the picture around the middle of the canvas, so
+   * the place is measured from there.
+   *
+   * @param {{keys: object[]}|null} transform The transform of the track.
+   * @param {number} frame The frame of the cell.
+   */
+  const cellTransform = (transform, frame) => {
+    if (!transform) return null;
+    const place = cellTransformAt(transform, tickOfFrame(frame, frameRate));
+    if (!place) return null;
+    const homeX = place.homeX ?? width / 2;
+    const homeY = place.homeY ?? height / 2;
+    const result = {
+      x: place.x - homeX,
+      y: place.y - homeY,
+      scale: place.scale > 0 ? place.scale : 1,
+      rotation: place.rotation,
+    };
+    if (result.x === 0 && result.y === 0 && result.scale === 1 && result.rotation === 0) {
+      return null;
+    }
+    return result;
+  };
 
   /** The picture of a layer, as the base of a drawing. */
   const pictureOf = (node) => {
@@ -324,6 +361,7 @@ export function clipToProject(document, layers, fallback = {}) {
     inheritedName,
     placement,
     inheritedHold,
+    inheritedTransform,
   ) => {
     const folder = Boolean(node.folder);
     const ownName = node.name || `Layer ${node.id}`;
@@ -369,6 +407,13 @@ export function clipToProject(document, layers, fallback = {}) {
       id: node.id,
       name: ownName,
       type: folder ? "group" : "anim",
+      // The uuid of the layer in the document, so that the track of the
+      // layer can be written back out.
+      ...(node.uuid ? { uuid: node.uuid } : {}),
+      // The camera of a document hangs on a folder of its own, a layer of
+      // type 512. The flag keeps that folder a camera folder, so that the
+      // camera track of an imported document can be written back on it.
+      ...(Number(node.type) === 512 ? { camera: true } : {}),
       visible: node.visible !== false,
       locked: Boolean(node.locked),
       opacity: typeof node.opacity === "number" && Number.isFinite(node.opacity) ? node.opacity : 1,
@@ -381,6 +426,13 @@ export function clipToProject(document, layers, fallback = {}) {
       parent: -1,
       drawings: [],
     };
+
+    // A cell that is a folder of layers is moved as a whole, so the place its
+    // track moves it to belongs to the folder.
+    if (folder && isCel) {
+      const place = cellTransform(inheritedTransform, cellFrame);
+      if (place) layer.transform = place;
+    }
 
     if (!folder) {
       const picture = pictureOf(node);
@@ -405,6 +457,9 @@ export function clipToProject(document, layers, fallback = {}) {
           hold: spot.hold,
           strokes: [],
         };
+        // A cell that is moved by its track keeps the place it is moved to.
+        const place = isCel ? cellTransform(inheritedTransform, spot.frame) : null;
+        if (place) drawing.transform = place;
         if (cellName) drawing.name = cellName;
         if (picture) drawing.image = picture;
         layer.drawings.push(drawing);
@@ -417,6 +472,9 @@ export function clipToProject(document, layers, fallback = {}) {
     // first frame down, so those keep the order the document stores and are
     // sorted by the frame their name gives.
     const childPlacement = node.animationFolder ? placementOf(node) : null;
+    // The track of an animation folder may move the cells of the folder, so
+    // the transform of the track goes down with the placement.
+    const childTransform = node.animationFolder ? transformOf_(node) : null;
 
     let kids = childrenOf(node).filter((child) => !isDocumentRow(child));
     if (node.animationFolder) {
@@ -436,6 +494,7 @@ export function clipToProject(document, layers, fallback = {}) {
         isCel ? cellName : inheritedName,
         childPlacement,
         isCel ? (runs?.[0]?.hold ?? 1) : inheritedHold,
+        childTransform,
       ),
     );
     if (folder) layer.children = children;

@@ -2,6 +2,7 @@
 import { openDatabase } from "./sqlite.js";
 import { ValidationError } from "./model.js";
 import { decodePng, encodePng, renderDrawingRgba, renderLayerRgba, renderProject } from "./png.js";
+import { composeMatrix, transformOf, transformRgba } from "./transform.js";
 import { parseClipContainer } from "./clip.js";
 import { validateClipBytes } from "./clip-validate.js";
 import {
@@ -18,6 +19,7 @@ import {
   replaceCurve,
   setTrackEnd,
   setTrackRange,
+  spliceCameraPlan,
   spliceCelPlan,
   withStrings,
 } from "./clip-mixer.js";
@@ -849,12 +851,13 @@ function setTimeline(database, project) {
  * level, so nothing is lost.
  */
 function buildTree(layers) {
-  const nodes = layers.map((layer) => ({ layer, layerId: 0, children: [] }));
+  const nodes = layers.map((layer) => ({ layer, layerId: 0, children: [], parent: -1 }));
   const roots = [];
   nodes.forEach((node, index) => {
     const parent = node.layer.parent ?? -1;
     if (parent >= 0 && parent < nodes.length && parent !== index) {
       nodes[parent].children.push(index);
+      node.parent = parent;
     } else {
       roots.push(index);
     }
@@ -873,6 +876,23 @@ function buildTree(layers) {
     if (!reached.has(index)) roots.push(index);
   }
   return { nodes, roots };
+}
+
+/**
+ * The node of the tree that holds a layer of a given uuid.
+ *
+ * The uuid of a layer is written with dashes on the layer and without them
+ * on the track, so the two are compared with the dashes taken out.
+ */
+function nodeOfUuid(tree, uuid) {
+  if (!uuid) return null;
+  const key = String(uuid).replace(/-/g, "").toLowerCase();
+  for (const node of tree.nodes) {
+    const layer = node.layer;
+    if (!layer?.uuid) continue;
+    if (String(layer.uuid).replace(/-/g, "").toLowerCase() === key) return node;
+  }
+  return null;
 }
 
 /**
@@ -1298,6 +1318,49 @@ function animationSkeleton(source, container) {
     "SELECT * FROM Layer WHERE LayerType = 1584 ORDER BY MainId LIMIT 1",
   );
 
+  // The camera of the document, when it has one: the track of kind 2005 with
+  // its two mixers, and the folder (a layer of type 512) it hangs on. A
+  // camera's tree is copied from a real document the same way a cell track
+  // is, because the only part of it this writer understands is the six
+  // curves; the rest is carried over untouched.
+  const cameraRow = layerRow(
+    "SELECT * FROM Track WHERE TrackKind = 2005 ORDER BY _PW_ID LIMIT 1",
+  );
+  const camera = cameraRow
+    ? {
+        track: cameraRow,
+        first: blobOf(cameraRow.TrackActionMixer),
+        second: blobOf(cameraRow.TrackActionMixer2),
+      }
+    : null;
+  const cameraLayerRow = layerRow(
+    "SELECT * FROM Layer WHERE LayerType = 512 ORDER BY MainId LIMIT 1",
+  );
+
+  // The tracks of a document that are not cell tracks: the track of a layer
+  // (kind 2001), the track of the cel folder (kind 1000) and the track of
+  // the play time (kind 4000). They hold no cells, so the cells of a
+  // document do not depend on them, but Clip Studio Paint shows a layer in
+  // its timeline only when the layer has a track.
+  const extraTracks = [];
+  for (const row of readAll(
+    source,
+    "SELECT * FROM Track WHERE TrackKind IN (1000, 2001, 4000) ORDER BY _PW_ID",
+  )) {
+    const first = blobOf(row.TrackActionMixer);
+    const second = blobOf(row.TrackActionMixer2);
+    if (!first || !second) continue;
+    extraTracks.push({
+      kind: Number(row.TrackKind),
+      flags: Number(row.TrackOptionFlag),
+      uuid: row.LayerUuidWithTrack
+        ? Buffer.from(row.LayerUuidWithTrack).toString("hex")
+        : null,
+      first,
+      second,
+    });
+  }
+
   return {
     tables,
     timeline,
@@ -1309,6 +1372,9 @@ function animationSkeleton(source, container) {
     folderRow,
     celRow,
     paperLayerRow,
+    camera: camera?.first && camera?.second ? camera : null,
+    cameraLayerRow,
+    extraTracks,
   };
 }
 
@@ -1344,9 +1410,17 @@ function insertRow(database, table, source, overrides) {
  * track are written, the newer one and the older one, so that whichever of
  * the two Clip Studio reads, it reads the same cells.
  *
+ * The camera of the project is a track of kind 2005: the six curves of its
+ * mixer (`ImageCenter`, `ImagePosition`, `ImageRotation`, `ImageScale`) are
+ * spliced from the keys of `project.camera` into the camera track the
+ * skeleton carries, and the track is bound to the folder of the project that
+ * says it is the camera (a layer of type 512). A skeleton with no camera
+ * track has no tree to copy, so a project exported from one gets no camera.
+ *
  * `skeleton` comes from a real document, so every part of the tree the
  * writer does not understand is copied rather than made up. Returns the
- * number of tracks that were written.
+ * number of cell tracks that were written; the paper's track and the camera
+ * are not counted.
  */
 function writeAnimation(database, tree, project, skeleton, pixels, rows, source) {
   if (!columnsOf(database, "Layer").includes("AnimationFolder")) {
@@ -1359,7 +1433,9 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
     const name = /CREATE TABLE\s+"?(\w+)/i.exec(sql)?.[1];
     if (name && columnsOf(database, name).length === 0) database.exec(sql);
   }
-  if (!rows.length) return 0;
+  // A document whose whole timeline is a camera still has a track to write.
+  const cameraKeys = Array.isArray(project.camera?.keys) ? project.camera.keys : [];
+  if (!rows.length && !(cameraKeys.length && skeleton.camera)) return 0;
 
   const fps = Math.max(1, Number(project.fps) || 12);
   const startFrame = Number(project.startFrame) || 1;
@@ -1484,6 +1560,99 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source)
       TrackContentOpen: 0,
       TrackKind: 2000,
       TrackOptionFlag: 768,
+    });
+  }
+
+  // The camera of the document: a track of kind 2005, hung on the folder
+  // that holds the camera - the layer of type 512 that the reader marked.
+  // Its six curves are spliced into the mixers of the camera track the
+  // skeleton has, the same way the cells of a row are spliced into a cell
+  // track, so the parts of the camera a track carries beyond its curves are
+  // copied rather than made up.
+  //
+  // A skeleton without a camera track has no tree to copy, so a project
+  // with camera keys and no camera track in its skeleton does not get one.
+  if (cameraKeys.length && skeleton.camera) {
+    const cameraLayer = readOne(
+      database,
+      "SELECT MainId, LayerUuid FROM Layer WHERE LayerType = 512 ORDER BY MainId LIMIT 1",
+    );
+    if (cameraLayer) {
+      if (source && skeleton.cameraLayerRow) {
+        copyLayerSettings(database, source, skeleton.cameraLayerRow, cameraLayer.MainId);
+      }
+      const plan = { keys: cameraKeys, frameRate: fps, startFrame };
+      const cameraRange = {
+        start: tickOf(cameraKeys[0].frame),
+        end: tickOf(cameraKeys[cameraKeys.length - 1].frame + 1),
+        rate: 60,
+      };
+      const first = setTrackRange(
+        parseActionDocument(spliceCameraPlan(parseActionDocument(skeleton.camera.first.raw), plan)),
+        cameraRange,
+      );
+      const second = setTrackRange(
+        parseActionDocument(spliceCameraPlan(parseActionDocument(skeleton.camera.second.raw), plan)),
+        cameraRange,
+      );
+      const firstId = newMixerId();
+      const secondId = newMixerId();
+      pixels.set(firstId, Buffer.from(encodeMixerPayload(first, firstId)).subarray(56));
+      pixels.set(secondId, Buffer.from(encodeMixerPayload(second, secondId)).subarray(56));
+
+      const id = nextId(database, "Track");
+      trackIds.push(id);
+      insertRow(database, "Track", skeleton.camera.track, {
+        MainId: id,
+        TrackNextIndex: 0,
+        TrackActionMixerSize: mixerColumnSize(first),
+        TrackActionMixer: Buffer.from(firstId, "ascii"),
+        TrackActionMixer2Size: mixerColumnSize(second),
+        TrackActionMixer2: Buffer.from(secondId, "ascii"),
+        TrackUuid: uuidBytes(cryptoId()),
+        LayerUuidWithTrack: uuidBytes(cameraLayer.LayerUuid),
+        TrackOpen: 0,
+        TrackContentOpen: 0,
+        TrackKind: 2005,
+      });
+    }
+  }
+
+  // The tracks of the layers of the document: the track of a layer (kind
+  // 2001), the track of the cel folder (kind 1000) and the track of the play
+  // time (kind 4000). They hold no cells, but Clip Studio Paint shows a
+  // layer in its timeline only when the layer has a track, so the tracks of
+  // the layers of an imported document are written out again.
+  for (const extra of skeleton.extraTracks ?? []) {
+    const node = nodeOfUuid(tree, extra.uuid);
+    if (!node) continue;
+    const layer = readOne(database, "SELECT MainId, LayerUuid FROM Layer WHERE MainId = ?", node.layerId);
+    if (!layer) continue;
+
+    // The tree of the track is carried over as it is, with the range of the
+    // document instead of the one it had.
+    const first = setTrackRange(parseActionDocument(extra.first.raw), range);
+    const second = setTrackRange(parseActionDocument(extra.second.raw), range);
+    const firstId = newMixerId();
+    const secondId = newMixerId();
+    pixels.set(firstId, Buffer.from(encodeMixerPayload(first, firstId)).subarray(56));
+    pixels.set(secondId, Buffer.from(encodeMixerPayload(second, secondId)).subarray(56));
+
+    const id = nextId(database, "Track");
+    trackIds.push(id);
+    insertRow(database, "Track", skeleton.track, {
+      MainId: id,
+      TrackNextIndex: 0,
+      TrackActionMixerSize: mixerColumnSize(first),
+      TrackActionMixer: Buffer.from(firstId, "ascii"),
+      TrackActionMixer2Size: mixerColumnSize(second),
+      TrackActionMixer2: Buffer.from(secondId, "ascii"),
+      TrackUuid: uuidBytes(cryptoId()),
+      LayerUuidWithTrack: uuidBytes(layer.LayerUuid),
+      TrackOpen: 0,
+      TrackContentOpen: 0,
+      TrackKind: extra.kind,
+      TrackOptionFlag: extra.flags,
     });
   }
 
@@ -1683,6 +1852,9 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
     for (let index = 0; index < tree.nodes.length; index += 1) {
       const node = tree.nodes[index];
       const folder = isFolderNode(node);
+      // A camera is a folder of its own but a layer of type 512, so the
+      // timeline of the document can hang its camera track on it.
+      const camera = node.layer.camera === true;
       if (index === 0) {
         created.push({ ...templateLayer, layerId: templateLayer.MainId });
       } else {
@@ -1691,7 +1863,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
             __width: project.width,
             __height: project.height,
             LayerFolder: folder ? 1 : 0,
-            LayerType: folder ? 0 : 1,
+            LayerType: camera ? 512 : folder ? 0 : 1,
           }),
         );
       }
@@ -1727,6 +1899,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
       const source = tree.nodes[index].layer;
       const target = created[index];
       const folder = isFolderNode(tree.nodes[index]);
+      const camera = source.camera === true;
       const opacity = Math.max(0, Math.min(256, Math.round((source.opacity ?? 1) * 256)));
       database
         .prepare(
@@ -1735,7 +1908,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
         .run(
           String(source.name || "Layer").slice(0, 80),
           folder ? 1 : 0,
-          folder ? 0 : 1,
+          camera ? 512 : folder ? 0 : 1,
           source.visible === false ? 0 : 1,
           source.locked ? 1 : 0,
           opacity,

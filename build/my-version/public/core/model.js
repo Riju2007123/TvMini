@@ -453,6 +453,10 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   // folder is the layer the camera track hangs on, so that an imported
   // document gets its camera layer back on export.
   const camera = value.camera === true && type === "group";
+  // A layer that came from a Clip Studio document keeps the uuid of that
+  // document, so that the track of the layer can be found again when the
+  // project is written back out.
+  const uuid = value.uuid === undefined ? null : String(value.uuid).trim() || null;
   // A layer may carry a transform of its own. A cell of an animation folder
   // that is a folder of layers is moved as a whole, and the transform of the
   // cell belongs to the folder that holds it.
@@ -558,6 +562,9 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   return {
     name,
     type,
+    ...(camera ? { camera: true } : {}),
+    ...(uuid ? { uuid } : {}),
+    ...(transform ? { transform } : {}),
     visible,
     locked,
     opacity,
