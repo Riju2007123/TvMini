@@ -13,6 +13,7 @@ import {
   insertDrawing,
   layerBounds,
   layerIsVisible,
+  moveDrawing,
   resolveDrawing,
   setExposure,
   shiftStartFrame,
@@ -94,6 +95,53 @@ test("holdDrawing extends the exposure that owns the frame", () => {
   const held = holdDrawing(layer, 2);
   assert.equal(held.hold, 3);
   assert.equal(holdDrawing(layer, 50), null);
+});
+
+test("a cell can be moved to another frame", () => {
+  const layer = layerWith([drawing(1, 1), drawing(5, 1)]);
+  const moved = moveDrawing(layer, 1, 6);
+  assert.equal(moved.at, 6);
+  // The cell keeps its length, and the cell that was after it comes back to
+  // where the gap was.
+  assert.deepEqual(layer.drawings.map((item) => item.at).sort((a, b) => a - b), [4, 6]);
+});
+
+test("a cell that is moved keeps its length", () => {
+  const layer = layerWith([drawing(1, 3)]);
+  const moved = moveDrawing(layer, 1, 8);
+  assert.equal(moved.at, 8);
+  assert.equal(moved.hold, 3);
+});
+
+test("the gap a cell leaves is closed", () => {
+  const layer = layerWith([drawing(1, 2), drawing(5, 1)]);
+  moveDrawing(layer, 1, 9);
+  // The cell that was after it comes back to where the gap was.
+  assert.deepEqual(layer.drawings.map((item) => item.at).sort((a, b) => a - b), [3, 9]);
+});
+
+test("a cell that is moved onto another one cuts it in two", () => {
+  const layer = layerWith([drawing(1, 1), drawing(4, 4)]);
+  moveDrawing(layer, 1, 5);
+  // The cell that was cut keeps the frames before it, and the rest of it goes
+  // behind the cell that was moved. The frames are covered once and once
+  // only: [3,5) + [5,6) + [6,8).
+  const at = layer.drawings.map((item) => item.at).sort((a, b) => a - b);
+  assert.deepEqual(at, [3, 5, 6]);
+  const head = layer.drawings.find((item) => item.at === 3);
+  assert.equal(head.hold, 2);
+  const moved = layer.drawings.find((item) => item.at === 5);
+  assert.equal(moved.hold, 1);
+  const tail = layer.drawings.find((item) => item.at === 6);
+  assert.equal(tail.hold, 2);
+});
+
+test("a cell cannot be moved to a frame it is already on", () => {
+  const layer = layerWith([drawing(3, 1)]);
+  const moved = moveDrawing(layer, 3, 3);
+  assert.equal(moved.at, 3);
+  assert.deepEqual(layer.drawings.map((item) => item.at), [3]);
+  assert.equal(moveDrawing(layer, 99, 2), null);
 });
 
 test("resolveDrawing applies pre and post behaviour", () => {

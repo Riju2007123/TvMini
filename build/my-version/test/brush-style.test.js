@@ -3,22 +3,6 @@ import assert from "node:assert/strict";
 import { createProject } from "../src/model.js";
 import { normalizeProject } from "../public/core/model.js";
 import { encodeRgbaPng, renderLayerRgba } from "../src/png.js";
-import { grainCoverage, grainMaskAt } from "../public/core/grain.js";
-
-/** A picture of a grain: a chequerboard of paint and holes. */
-function grainPng(size = 16) {
-  const data = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const at = (y * size + x) * 4;
-      // The picture of a grain is black, and its alpha is the pattern. The
-      // blocks are two pixels wide, so the pattern is not lost between two
-      // pixels when it is sampled.
-      data[at + 3] = (Math.floor(x / 2) + Math.floor(y / 2)) % 2 === 0 ? 255 : 0;
-    }
-  }
-  return encodeRgbaPng(size, size, data);
-}
 
 /** A drawing of one line across the middle of the canvas. */
 function lineProject(brush) {
@@ -57,86 +41,97 @@ function count(values) {
   return { painted, full, part };
 }
 
-test("the grain of the paper takes paint out of a stroke", () => {
-  const plain = count(alphas(lineProject({ data: null })));
-  const grained = count(alphas(lineProject({
-    data: null,
-    grain: { data: grainPng().toString("base64"), density: 100, scale: 100 },
-  })));
+test("a brush paints solid paint", () => {
+  const all = count(alphas(lineProject({ data: null })));
 
-  assert.ok(plain.full > 0, "a plain stroke should be solid");
+  assert.ok(all.full > 0, "a brush leaves solid paint");
   assert.ok(
-    grained.full < plain.full * 0.75,
-    "the holes of the grain should take paint out of the stroke",
-  );
-  assert.ok(grained.painted > 0, "the grain should not take the whole stroke away");
-});
-
-test("a grain at half strength leaves more paint than a grain at full strength", () => {
-  const total = (project) => alphas(project).reduce((sum, alpha) => sum + alpha, 0);
-  const full = total(lineProject({
-    data: null,
-    grain: { data: grainPng().toString("base64"), density: 100 },
-  }));
-  const half = total(lineProject({
-    data: null,
-    grain: { data: grainPng().toString("base64"), density: 50 },
-  }));
-
-  assert.ok(half > full, "a weaker grain should keep more of the stroke");
-});
-
-test("the grain belongs to the paper: it repeats, and its strength and turn are its settings", () => {
-  // A picture of a grain that is a single row of ink.
-  const picture = { width: 4, height: 4, alpha: Uint8Array.from([255, 128, 0, 64, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]) };
-  const grain = { density: 100, scale: 100, rotate: 0, reverse: false };
-  const inkAt = (x, y, settings) => grainMaskAt(picture, settings, x, y);
-
-  // The same place of the paper holds the same ink, whatever was drawn before.
-  assert.equal(inkAt(1.5, 0.5, grain), inkAt(1.5, 0.5, grain));
-  // The picture repeats over the paper, once for every four pixels.
-  assert.equal(inkAt(1.5, 0.5, grain), inkAt(5.5, 0.5, grain));
-  // At a quarter of its size it repeats four times as often.
-  assert.equal(inkAt(1.0, 0.5, { ...grain, scale: 25 }), inkAt(1.5, 0.5, { ...grain, scale: 25 }));
-  // A grain at no strength leaves the paint alone; at full strength the
-  // picture is the paint; turned over, it is the hole that paints.
-  assert.equal(grainCoverage(0.25, { density: 0 }), 1);
-  assert.equal(grainCoverage(0.25, { density: 1 }), 0.25);
-  assert.equal(grainCoverage(0.25, { density: 1, reverse: true }), 0.75);
-  assert.equal(grainCoverage(0.25, { density: 0.5 }), 0.625);
-});
-
-test("the flow of a brush says how much paint one dab leaves", () => {
-  const all = count(alphas(lineProject({ data: null, flow: 100 })));
-  const little = count(alphas(lineProject({ data: null, flow: 10 })));
-
-  assert.equal(all.part, 0, "a brush at full flow leaves solid paint");
-  assert.ok(little.part > 0, "a brush at low flow leaves paint that builds up");
-  assert.ok(
-    little.full < all.full,
-    "a brush at low flow should leave less than a solid stroke",
+    all.part < all.full / 4,
+    "the paint is solid, and only the edge of it is soft",
   );
 });
 
-test("the hardness of a brush softens the edge of its tip", () => {
-  const hard = count(alphas(lineProject({ data: null, hardness: 100, width: 12 })));
-  const soft = count(alphas(lineProject({ data: null, hardness: 0, width: 12 })));
+test("the edge of a stroke is soft, the way the browser draws it", () => {
+  // A stroke that crosses the picture at an angle has an edge that falls
+  // between the pixels. The export has to paint the share of the pixel the
+  // tip covers, or the file holds steps where the screen shows a curve, and
+  // Clip Studio Paint draws those steps as a staircase.
+  const project = createProject(60, 60, "#ffffff");
+  project.layers[0].drawings = [{
+    at: 1,
+    hold: 1,
+    strokes: [{
+      color: "#000000",
+      width: 5,
+      points: [[8, 8], [52, 52]],
+      brush: { data: null, spacing: 25 },
+    }],
+  }];
+  const clean = normalizeProject(project);
+  const pixels = renderLayerRgba(clean, clean.layers[0]);
 
-  assert.equal(hard.part, 0, "a hard brush has an edge, not a fade");
-  assert.ok(soft.part > 0, "a soft brush fades out at its edge");
-  assert.ok(soft.full < hard.full, "a soft brush has less paint at full strength");
+  let part = 0;
+  let full = 0;
+  for (let at = 3; at < pixels.length; at += 4) {
+    const alpha = pixels[at];
+    if (alpha === 255) full += 1;
+    if (alpha > 0 && alpha < 255) part += 1;
+  }
+
+  assert.ok(full > 0, "the stroke should be painted");
+  assert.ok(part > 0, "the edge of the stroke should be soft, not a step");
+  assert.ok(
+    part < full,
+    "only the edge of the stroke should be soft, the middle of it is solid",
+  );
+});
+
+test("the paint of a stroke is as wide as the brush is", () => {
+  // The width of the paint across a stroke: the alphas of a column through
+  // it, added up, say how wide the stroke really is. A stroke that is fatter
+  // than the brush is a stroke that was painted too many times over the same
+  // pixels, and a thin stroke is where that shows first.
+  const measure = (width, pressure) => {
+    const project = createProject(60, 60, "#ffffff");
+    project.layers[0].drawings = [{
+      at: 1,
+      hold: 1,
+      strokes: [{
+        color: "#000000",
+        width,
+        points: pressure === undefined
+          ? [[8, 30], [52, 30]]
+          : [[8, 30, pressure], [52, 30, pressure]],
+      }],
+    }];
+    const clean = normalizeProject(project);
+    const pixels = renderLayerRgba(clean, clean.layers[0]);
+    const at = (x, y) => pixels[(y * 60 + x) * 4 + 3];
+    let sum = 0;
+    for (let y = 0; y < 60; y += 1) sum += at(30, y);
+    return sum / 255;
+  };
+
+  const full = measure(12);
+  assert.ok(
+    Math.abs(full - 12) < 0.5,
+    `a stroke of a 12px brush should be 12px of paint, it is ${full.toFixed(2)}px`,
+  );
+
+  // A light pen: the width follows the pressure, so the line is thinner.
+  const light = measure(12, 0.3);
+  const wanted = 12 * (0.2 + 0.8 * 0.3);
+  assert.ok(
+    Math.abs(light - wanted) < wanted * 0.25,
+    `a light stroke should be about ${wanted.toFixed(2)}px of paint, it is ${light.toFixed(2)}px`,
+  );
 });
 
 test("binarize leaves an edge that is paint or paper", () => {
-  const soft = count(alphas(lineProject({ data: null, hardness: 40, width: 12 })));
-  const hard = count(alphas(lineProject({
-    data: null,
-    hardness: 40,
-    width: 12,
-    binarize: true,
-  })));
+  const soft = count(alphas(lineProject({ data: null, width: 12 })));
+  const hard = count(alphas(lineProject({ data: null, width: 12, binarize: true })));
 
-  assert.ok(soft.part > 0, "a soft brush fades out at its edge");
+  assert.ok(soft.part > 0, "the edge of the tip is soft");
   assert.equal(hard.part, 0, "a binarized stroke has no half-covered pixel");
   assert.ok(hard.painted > 0, "a binarized stroke still paints");
   assert.ok(
@@ -151,49 +146,41 @@ test("binarize is kept with the stroke", () => {
   assert.equal(lineProject({ data: null }).layers[0].drawings[0].strokes[0].brush.binarize, undefined);
 });
 
-test("the thickness of a brush makes its tip flat", () => {
-  const round = count(alphas(lineProject({ data: null, thickness: 100 })));
-  const flat = count(alphas(lineProject({ data: null, thickness: 30 })));
-
-  assert.ok(
-    flat.painted < round.painted * 0.6,
-    "a flat tip should paint a thinner line across the stroke",
-  );
-});
-
-test("a brush keeps its grain and its settings through a save", () => {
-  const grain = grainPng();
+test("a brush keeps its settings through a save", () => {
   const brush = {
     data: null,
-    flow: 40,
-    hardness: 25,
-    thickness: 60,
+    size: 24,
+    opacity: 80,
     spacing: 10,
-    grain: {
-      data: grain.toString("base64"),
-      density: 70,
-      scale: 150,
-      rotate: 30,
-      reverse: true,
-    },
   };
   const clean = lineProject(brush).layers[0].drawings[0].strokes[0].brush;
 
   assert.equal(clean.data, null, "a round brush has no picture");
-  assert.equal(clean.flow, 40);
-  assert.equal(clean.hardness, 25);
-  assert.equal(clean.thickness, 60);
+  assert.equal(clean.size, 24);
+  assert.equal(clean.opacity, 80);
   assert.equal(clean.spacing, 10);
-  assert.equal(clean.grain.density, 70);
-  assert.equal(clean.grain.scale, 150);
-  assert.equal(clean.grain.rotate, 30);
-  assert.equal(clean.grain.reverse, true);
-  assert.equal(clean.grain.width, 16, "the size of the grain is read from the picture");
-  assert.equal(clean.grain.height, 16);
 });
 
-test("a brush that says nothing is a hard round brush with no grain", () => {
+test("a brush that says nothing is a plain round brush", () => {
   const clean = lineProject({ data: null }).layers[0].drawings[0].strokes[0].brush;
-  assert.equal(clean.grain, undefined);
+  assert.equal(clean.data, null);
+  assert.equal(clean.spacing, undefined);
+  assert.equal(clean.binarize, undefined);
+});
+
+test("the settings a brush no longer has are dropped", () => {
+  // A project that was made with the settings of an older version of this
+  // program still opens, and the settings that are gone are dropped with it.
+  const clean = lineProject({
+    data: null,
+    flow: 40,
+    hardness: 25,
+    thickness: 60,
+    grain: { data: null, density: 70 },
+  }).layers[0].drawings[0].strokes[0].brush;
+
   assert.equal(clean.flow, undefined);
+  assert.equal(clean.hardness, undefined);
+  assert.equal(clean.thickness, undefined);
+  assert.equal(clean.grain, undefined);
 });

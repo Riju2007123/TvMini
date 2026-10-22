@@ -1944,6 +1944,7 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
             project.width,
             project.height,
           ),
+          "nearest",
         );
         setLayerPixels(database, target.layerId, placed, pixels);
         currentLayerId = target.layerId;

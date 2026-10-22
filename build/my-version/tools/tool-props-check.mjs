@@ -177,17 +177,8 @@ check(
   `the brush starts with a clean panel: ${atFirst.strip.join(", ")}`,
 );
 check(
-  atFirst.bar && atFirst.drawer.length === 0,
-  `the Hidden items bar is there and the drawer is closed (${atFirst.drawer.length} in it)`,
-);
-
-// The eye of a row in the drawer brings it back into the panel.
-await devtools.run('document.querySelector(\'[data-prop-eye="velocity"]\')?.click(); true');
-await sleep(150);
-const broughtBack = await devtools.run(READ_PANEL);
-check(
-  broughtBack.strip.includes("Velocity"),
-  `the eye brings Velocity back into the panel: ${broughtBack.strip.join(", ")}`,
+  !atFirst.bar,
+  `every row of the brush is in the panel, so there is no drawer (${atFirst.drawer.length} in it)`,
 );
 
 // The eye of a row in the panel puts it away.
@@ -198,8 +189,14 @@ check(
   !putAway.strip.includes("Width"),
   `the eye puts Size away: ${putAway.strip.join(", ")}`,
 );
+check(
+  putAway.bar,
+  "the Hidden items bar appears when a row is put away",
+);
 
-// The bar opens the drawer, and the row that was put away is in it.
+// The bar opens the drawer, and the rows that were put away are in it.
+await devtools.run('document.querySelector(\'[data-prop-eye="stabilizer"]\')?.click(); true');
+await sleep(150);
 await devtools.run('document.querySelector("#toolPropAdvBtn")?.click(); true');
 await sleep(150);
 const opened = await devtools.run(READ_PANEL);
@@ -218,14 +215,14 @@ console.log(`a picture of the drawer: ${path.join(OUT, "panel-hidden.png")}`);
 
 // The reference tools order the drawer like the panel; ours does too.
 check(
-  opened.drawer.indexOf("Width") < opened.drawer.indexOf("Hardness"),
+  opened.drawer.indexOf("Width") < opened.drawer.indexOf("Stabilizer"),
   "the drawer keeps the order of the panel",
 );
 
 // Put the panel back the way it was, so the rest of the check starts clean.
 await devtools.run('document.querySelector(\'[data-prop-eye="width"]\')?.click(); true');
 await sleep(120);
-await devtools.run('document.querySelector(\'[data-prop-eye="velocity"]\')?.click(); true');
+await devtools.run('document.querySelector(\'[data-prop-eye="stabilizer"]\')?.click(); true');
 await sleep(120);
 await devtools.run('document.querySelector("#toolPropAdvBtn")?.click(); true');
 await sleep(120);

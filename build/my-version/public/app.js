@@ -11,9 +11,8 @@ import {
   strokePathGroups,
   strokeRadii as sharedStrokeRadii,
 } from "./core/paint.js";
-import { grainCoverage } from "./core/grain.js";
-import { smoothRadius, smoothStroke } from "./core/smooth.js";
 import { brushImageFromBytes } from "./core/brush.js";
+import { isPlain, pointToPicture, transformMatrix, transformOf } from "./core/transform.js";
 import { readSutBrush } from "./core/sut.js";
 import {
   WHEEL_SIZE,
@@ -51,6 +50,7 @@ import {
   layerIsVisible,
   layerTree,
   moveBlock,
+  moveDrawing,
   nextKeyframe,
   packLayers,
   paperPixels,
@@ -122,22 +122,6 @@ const fillToolButton = document.getElementById("fillTool");
 const cameraToolButton = document.getElementById("cameraTool");
 const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
-const smoothInput = document.getElementById("smooth");
-const velocityInput = document.getElementById("velocity");
-const taperInput = document.getElementById("taper");
-const smoothValue = document.getElementById("smoothValue");
-const velocityValue = document.getElementById("velocityValue");
-const taperValue = document.getElementById("taperValue");
-const flowInput = document.getElementById("flow");
-const flowValue = document.getElementById("flowValue");
-const hardnessInput = document.getElementById("hardness");
-const hardnessValue = document.getElementById("hardnessValue");
-const thicknessInput = document.getElementById("thickness");
-const thicknessValue = document.getElementById("thicknessValue");
-const grainInput = document.getElementById("grain");
-const grainValue = document.getElementById("grainValue");
-const grainScaleInput = document.getElementById("grainScale");
-const grainScaleValue = document.getElementById("grainScaleValue");
 const strokeOpacityInput = document.getElementById("strokeOpacity");
 const strokeOpacityValue = document.getElementById("strokeOpacityValue");
 const strokeBlendSelect = document.getElementById("strokeBlend");
@@ -183,6 +167,12 @@ const touchDrawInput = document.getElementById("touchDraw");
 
 const layerNameInput = document.getElementById("layerName");
 const opacityInput = document.getElementById("opacity");
+const transformXInput = document.getElementById("transformX");
+const transformYInput = document.getElementById("transformY");
+const transformScaleInput = document.getElementById("transformScale");
+const transformScaleValue = document.getElementById("transformScaleValue");
+const transformRotationInput = document.getElementById("transformRotation");
+const transformResetButton = document.getElementById("transformReset");
 const opacityValue = document.getElementById("opacityValue");
 const preBehaviorInput = document.getElementById("preBehavior");
 const postBehaviorInput = document.getElementById("postBehavior");
@@ -273,63 +263,35 @@ const state = {
   audioElement: null,
   // Line smoothing while drawing (0 = off, up to 10 = very smooth).
   smoothedPoint: null,
-  // The raw points of the stroke in hand, before the smoothing.
-  rawPoints: [],
   // The settings of each tool, so that one tool does not change the other:
   // how wide it draws, how steady the line is, how strong it paints and how
-  // it mixes with the paint under it. The velocity is how much the width of
-  // the line follows the speed of the hand, and the taper is how much of
-  // each end of the line is thin.
+  // it mixes with the paint under it.
   toolSettings: {
     brush: {
       width: 6,
       stabilizer: 0,
-      smooth: 50,
       opacity: 100,
       blend: "normal",
-      velocity: 45,
-      taper: 20,
-      flow: 100,
-      hardness: 100,
-      thickness: 100,
-      grain: 0,
-      grainScale: 100,
       binarize: false,
     },
     pencil: {
       width: 3,
       stabilizer: 0,
-      smooth: 70,
       opacity: 100,
       blend: "normal",
-      velocity: 0,
-      taper: 0,
-      flow: 100,
-      hardness: 100,
-      thickness: 100,
-      grain: 0,
-      grainScale: 100,
       binarize: false,
     },
     eraser: {
       width: 30,
       stabilizer: 0,
-      smooth: 0,
       opacity: 100,
       blend: "normal",
-      velocity: 0,
-      taper: 0,
-      flow: 100,
-      hardness: 100,
-      thickness: 100,
-      grain: 0,
-      grainScale: 100,
       binarize: false,
     },
-    line: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
-    rect: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
-    ellipse: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
-    fill: { width: 6, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal", velocity: 0, taper: 0 },
+    line: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
+    rect: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
+    ellipse: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
+    fill: { width: 6, stabilizer: 0, opacity: 100, blend: "normal" },
   },
   homeDir: ".",
   playing: false,
@@ -1052,11 +1014,11 @@ function strokeRadius(stroke, point) {
 /**
  * The width of a stroke at every one of its points.
  *
- * The ends of the stroke are thinner, the way the brush of Clip Studio Paint
- * tapers in and out.
+ * The width follows the pressure of the hand, the way the brush of Clip Studio
+ * Paint does.
  */
 function strokeRadii(stroke) {
-  return sharedStrokeRadii(stroke, stroke.taper ?? 0);
+  return sharedStrokeRadii(stroke);
 }
 
 /**
@@ -1076,9 +1038,8 @@ function drawBrushShape() {
   context.fillRect(0, 0, width, height);
 
   // The picture is a stroke across the panel, drawn by the same code as the
-  // stage: the flow, the hardness, the thickness, the grain and the hard edge
-  // of the brush all show up here, so the panel cannot promise a brush the
-  // paper does not get.
+  // stage: the shape of the tip and the hard edge of the brush show up here,
+  // so the panel cannot promise a brush the paper does not get.
   const settings = toolSettings();
   const size = Math.max(2, Math.min(30, settings.width));
   const points = [];
@@ -1090,15 +1051,9 @@ function drawBrushShape() {
       height - 8 - Math.sin(at * Math.PI) * (height - 20),
     ]);
   }
-  // The ends are thin the way the taper of the tool makes them thin; a tool
-  // that has no taper row is shown with a slight taper, so the picture reads
-  // as a stroke and not as a bar.
-  const taper = TOOL_PROPS[state.tool]?.rows.includes("taper")
-    ? Math.max(0, Math.min(0.5, (Number(settings.taper) || 0) / 200))
-    : 0.15;
   drawStrokeDirect(
     context,
-    { color: colorInput.value, width: size, points, taper },
+    { color: colorInput.value, width: size, points },
     width,
     height,
     strokeBrushFor(settings),
@@ -1220,19 +1175,17 @@ function strokeBox(stroke, radii) {
  * The dabs of a stroke.
  *
  * A brush puts its paint down one dab at a time, a little apart along the
- * path, and that is what makes a brush feel like a brush: the edge can be
- * soft, one dab can leave less paint than the next, and the dabs build up on
- * each other. The dab is the picture of the brush, or a disc with the
- * softness of the brush when the brush has no picture.
+ * path, and that is what makes a brush feel like a brush. The dab is the
+ * picture of the brush, or a disc when the brush has no picture.
  */
 function drawStrokeWithDabs(ctx, stroke, style, picture = null) {
   const radii = strokeRadii(stroke);
   const widest = Math.max(2, Math.ceil(Math.max(...radii) * 2));
   const dab = picture
     ? null
-    : roundDab(stroke.color, style.hardness, Math.min(512, widest), style.binarize);
+    : roundDab(stroke.color, Math.min(512, widest), style.binarize);
   const stamp = (x, y, radius) => {
-    const height = Math.max(1, radius * 2 * style.thickness);
+    const height = Math.max(1, radius * 2);
     if (picture) {
       const width = height * (picture.width / Math.max(1, picture.height));
       ctx.drawImage(picture, x - width / 2, y - height / 2, width, height);
@@ -1241,13 +1194,8 @@ function drawStrokeWithDabs(ctx, stroke, style, picture = null) {
     }
   };
 
-  // A brush that leaves less than all of its paint with one dab builds up:
-  // every dab adds to the one under it.
-  ctx.globalAlpha = style.flow < 1 ? style.flow : 1;
-
   if (stroke.points.length === 1) {
     stamp(stroke.points[0][0], stroke.points[0][1], radii[0]);
-    ctx.globalAlpha = 1;
     return;
   }
 
@@ -1266,7 +1214,6 @@ function drawStrokeWithDabs(ctx, stroke, style, picture = null) {
       stamp(x0 + (x1 - x0) * at, y0 + (y1 - y0) * at, r0 + (r1 - r0) * at);
     }
   }
-  ctx.globalAlpha = 1;
 }
 
 /** The dabs of a round brush, in the colours they were used in. */
@@ -1275,12 +1222,10 @@ const roundDabs = new Map();
 /**
  * One dab of a round brush.
  *
- * A hard brush is a disc with an edge. A soft one fades from its middle to
- * its edge: the hardness says how far out the paint stays at full strength,
- * the way the hardness of a Clip Studio Paint brush does.
+ * The tip is a disc with an edge.
  */
-function roundDab(color, hardness, diameter, binarize = false) {
-  const key = `${color}|${Math.round(hardness * 100)}|${diameter}|${binarize ? 1 : 0}`;
+function roundDab(color, diameter, binarize = false) {
+  const key = `${color}|${diameter}|${binarize ? 1 : 0}`;
   if (roundDabs.has(key)) return roundDabs.get(key);
   const surface = document.createElement("canvas");
   surface.width = Math.max(2, diameter);
@@ -1288,19 +1233,10 @@ function roundDab(color, hardness, diameter, binarize = false) {
   const context = surface.getContext("2d");
   const centre = surface.width / 2;
   const radius = Math.max(0.5, centre);
-  if (hardness >= 0.999) {
-    context.beginPath();
-    context.arc(centre, centre, Math.max(0.5, radius - 0.5), 0, Math.PI * 2);
-    context.fillStyle = color;
-    context.fill();
-  } else {
-    const gradient = context.createRadialGradient(centre, centre, 0, centre, centre, radius);
-    gradient.addColorStop(0, colorWithAlpha(color, 1));
-    gradient.addColorStop(Math.max(0, Math.min(0.999, hardness)), colorWithAlpha(color, 1));
-    gradient.addColorStop(1, colorWithAlpha(color, 0));
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, surface.width, surface.height);
-  }
+  context.beginPath();
+  context.arc(centre, centre, Math.max(0.5, radius - 0.5), 0, Math.PI * 2);
+  context.fillStyle = color;
+  context.fill();
   if (binarize) binarizeSurface(surface);
   if (roundDabs.size > 24) roundDabs.clear();
   roundDabs.set(key, surface);
@@ -1333,136 +1269,6 @@ function colorWithAlpha(color, alpha) {
     .padStart(2, "0")}`;
 }
 
-/** The pictures of the grains, as they were handed in. */
-const grainPictures = new Map();
-
-/** The grains as a pattern of ink, in the strengths they were used in. */
-const grainMasks = new Map();
-
-/** The picture of a grain, as an element that can be painted. */
-function grainPictureOf(grain) {
-  const key = grain.data;
-  if (grainPictures.has(key)) return grainPictures.get(key);
-  const element = new Image();
-  // The picture arrives in the background, and the stage is drawn again when
-  // it has, the same way the picture of a tip is.
-  element.onload = () => renderCanvas();
-  element.src = `data:image/png;base64,${grain.data}`;
-  if (grainPictures.size > 8) grainPictures.clear();
-  grainPictures.set(key, element);
-  return element;
-}
-
-/**
- * The grain as a mask of ink.
- *
- * The picture of a grain is black with see-through holes, and its alpha is
- * the pattern of the paper. The mask is made once for every grain and
- * strength: its alpha is how much of the ink the paper leaves at that place.
- */
-function grainMaskOf(grain) {
-  const key = `${grain.data}|${grain.density}|${grain.reverse ? 1 : 0}`;
-  if (grainMasks.has(key)) return grainMasks.get(key);
-  const picture = grainPictureOf(grain);
-  if (!picture.complete || !picture.naturalWidth) return null;
-
-  const surface = document.createElement("canvas");
-  surface.width = picture.naturalWidth;
-  surface.height = picture.naturalHeight;
-  const context = surface.getContext("2d");
-  context.drawImage(picture, 0, 0);
-  const image = context.getImageData(0, 0, surface.width, surface.height);
-  const density = Math.max(0, Math.min(100, Number(grain.density) || 0)) / 100;
-  for (let at = 3; at < image.data.length; at += 4) {
-    const ink = image.data[at] / 255;
-    image.data[at] = Math.round(grainCoverage(ink, { density, reverse: grain.reverse === true }) * 255);
-  }
-  // The colour of the mask does not matter: only its alpha is used.
-  context.putImageData(image, 0, 0);
-
-  if (grainMasks.size > 8) grainMasks.clear();
-  grainMasks.set(key, surface);
-  return surface;
-}
-
-/**
- * The grain of the paper, as a pattern over the document.
- *
- * The grain is anchored to the paper, not to the stroke: the pattern is put
- * on the document itself, so the same brush drawn twice puts the same holes
- * in both lines.
- */
-function grainPattern(ctx, grain) {
-  const mask = grainMaskOf(grain);
-  if (!mask) return null;
-  const pattern = ctx.createPattern(mask, "repeat");
-  if (!pattern) return null;
-  const scale = Math.max(0.05, Math.min(10, (Number(grain.scale) || 100) / 100));
-  const rotate = Number.isFinite(grain.rotate) ? grain.rotate : 0;
-  if (typeof pattern.setTransform === "function") {
-    pattern.setTransform(new DOMMatrix().scale(scale).rotate(rotate));
-  }
-  return pattern;
-}
-
-/** The sheet a stroke that is drawn on paper with a grain is painted on. */
-const grainCanvas = document.createElement("canvas");
-const grainCtx = grainCanvas.getContext("2d");
-
-/**
- * Paint a stroke through the grain of the paper.
- *
- * The stroke is painted into a sheet of its own, the size of the box it takes
- * up, and the grain is taken out of that sheet in one pass. Only the box of
- * the stroke is worked on, so a long drawing does not pay for the grain of
- * the whole canvas.
- */
-function drawStrokeThroughGrain(ctx, stroke, brush, style) {
-  const radii = strokeRadii(stroke);
-  const box = strokeBox(stroke, radii);
-  const matrix = ctx.getMatrix?.() ?? ctx.getTransform();
-  const corners = [
-    [box.x0, box.y0],
-    [box.x1, box.y0],
-    [box.x0, box.y1],
-    [box.x1, box.y1],
-  ].map(([x, y]) => [matrix.a * x + matrix.c * y + matrix.e, matrix.b * x + matrix.d * y + matrix.f]);
-  const limitX = ctx.canvas.width;
-  const limitY = ctx.canvas.height;
-  const left = Math.max(0, Math.floor(Math.min(...corners.map((corner) => corner[0]))));
-  const top = Math.max(0, Math.floor(Math.min(...corners.map((corner) => corner[1]))));
-  const right = Math.min(limitX, Math.ceil(Math.max(...corners.map((corner) => corner[0]))));
-  const bottom = Math.min(limitY, Math.ceil(Math.max(...corners.map((corner) => corner[1]))));
-  const width = right - left;
-  const height = bottom - top;
-  if (width <= 0 || height <= 0) return;
-
-  // The sheet is the size of the box, and it is kept between strokes.
-  if (grainCanvas.width < width || grainCanvas.height < height) {
-    grainCanvas.width = Math.max(grainCanvas.width, width);
-    grainCanvas.height = Math.max(grainCanvas.height, height);
-  }
-  grainCtx.setTransform(1, 0, 0, 1, 0, 0);
-  grainCtx.clearRect(0, 0, width, height);
-  // The stroke is painted in the same place of the document on the sheet.
-  grainCtx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e - left, matrix.f - top);
-  paintStrokeShape(grainCtx, stroke, brush, style);
-
-  const pattern = grainPattern(grainCtx, style.grain);
-  if (pattern) {
-    grainCtx.globalCompositeOperation = "destination-in";
-    grainCtx.fillStyle = pattern;
-    grainCtx.fillRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
-    grainCtx.globalCompositeOperation = "source-over";
-  }
-  grainCtx.setTransform(1, 0, 0, 1, 0, 0);
-
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(grainCanvas, 0, 0, width, height, left, top, width, height);
-  ctx.restore();
-}
-
 /** Bucket fill: flood the paint canvas from the seed with the stroke colour. */
 function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
   const rgb = parseHexColor(stroke.color);
@@ -1485,11 +1291,10 @@ function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
 /**
  * The way the paint of a stroke goes down, read from its brush.
  *
- * A brush says how much paint one dab leaves (its flow), how hard the edge of
- * its tip is (its hardness), how thick the tip is (its thickness) and how far
- * apart the dabs are (its spacing). A brush that says nothing is a hard round
- * brush that leaves all of its paint with every dab, which is how every
- * stroke was drawn before a brush carried these settings.
+ * A brush says how far apart the dabs are (its spacing) and whether the soft
+ * edge of its tip is taken away (its binarize). A brush that says nothing is
+ * a hard round brush, which is how every stroke was drawn before a brush
+ * carried these settings.
  */
 function strokeStyleOf(brush) {
   const percent = (value, fallback, low, high) => {
@@ -1498,12 +1303,8 @@ function strokeStyleOf(brush) {
     return Math.max(low, Math.min(high, number));
   };
   return {
-    flow: percent(brush?.flow, 100, 0, 100) / 100,
-    hardness: percent(brush?.hardness, 100, 0, 100) / 100,
-    thickness: percent(brush?.thickness, 100, 10, 500) / 100,
     spacing: percent(brush?.spacing, 25, 1, 200) / 100,
     binarize: brush?.binarize === true,
-    grain: brush?.grain?.data ? brush.grain : null,
   };
 }
 
@@ -1511,21 +1312,12 @@ function strokeStyleOf(brush) {
  * Paint one stroke (shape or freehand) directly into a 2D context.
  *
  * `brush` is the brush the stroke was made with. A brush that has a picture
- * paints that picture along the stroke instead of a plain line, and a brush
- * that has a grain paints its stroke on paper.
+ * paints that picture along the stroke instead of a plain line.
  */
 function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null) {
   const style = strokeStyleOf(brush);
   ctx.globalCompositeOperation = stroke.eraser === true ? "destination-out" : "source-over";
-
-  // A grain is a mask over the whole stroke, so the stroke is painted into a
-  // sheet of its own first and the grain is taken out of it there.
-  if (style.grain) {
-    drawStrokeThroughGrain(ctx, stroke, brush, style);
-  } else {
-    paintStrokeShape(ctx, stroke, brush, style);
-  }
-
+  paintStrokeShape(ctx, stroke, brush, style);
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -1603,10 +1395,9 @@ function paintStrokeShape(ctx, stroke, brush, style) {
     return;
   }
 
-  // A brush that is soft, that leaves only part of its paint with one dab, or
-  // whose tip is thick, is painted one dab at a time. A hard round brush is
-  // painted as one shape, which is quicker and has one clean edge.
-  if (style.flow < 1 || style.hardness < 1 || style.thickness !== 1 || style.binarize) {
+  // A brush that has a picture is painted one dab at a time. A hard round
+  // brush is painted as one shape, which is quicker and has one clean edge.
+  if (style.binarize) {
     drawStrokeWithDabs(ctx, stroke, style, null);
     return;
   }
@@ -1755,11 +1546,19 @@ function renderCanvas(frame = state.project.currentFrame) {
     const resolved = resolveDrawing(layer, frame);
     if (!resolved) continue;
 
+    // A cell may sit somewhere else than it was drawn: moved, made bigger or
+    // smaller, and turned. The picture of the cell is put on the stage with
+    // it, so that the cell is where it says it is. A layer may have a
+    // transform of its own as well, and it comes first.
+    const transform = transformOf(resolved.drawing);
+    const layerTransform = transformOf(layer);
+
     // A clipped layer is cut by the picture of the layer below it.
     if (layer.clip) {
       const source = clipSourceOf(project, index);
       const sourceResolved = source >= 0 ? resolveDrawing(project.layers[source], frame) : null;
       if (sourceResolved) {
+        const sourceTransform = transformOf(sourceResolved.drawing);
         drawDrawingToPaint(project, resolved.drawing, 1, paintCtx, paintCanvas);
         const sourceOpacity = effectiveOpacity(project, source);
         drawDrawingToPaint(project, sourceResolved.drawing, sourceOpacity, maskCtx, maskCanvas);
@@ -2399,13 +2198,7 @@ function saveBrushToLibrary(brush) {
     data: brush.data,
     size: brush.size ?? null,
     opacity: brush.opacity ?? null,
-    flow: brush.flow ?? null,
-    hardness: brush.hardness ?? null,
-    thickness: brush.thickness ?? null,
     spacing: brush.spacing ?? null,
-    scale: brush.scale ?? null,
-    rotate: brush.rotate ?? null,
-    grain: brush.grain ?? null,
   });
   writeBrushLibrary(list);
 }
@@ -2460,14 +2253,9 @@ function useBrush(brush, name) {
       data: brush.data,
       size: brush.size ?? null,
       opacity: brush.opacity ?? null,
-      // The rest of the brush: how the paint goes down and which grain of
-      // paper it is drawn on, so that the brush is the same brush when it is
-      // taken in the hand again.
-      flow: brush.flow ?? null,
-      hardness: brush.hardness ?? null,
-      thickness: brush.thickness ?? null,
+      // How far apart the dabs of the brush are, so that the brush is the
+      // same brush when it is taken in the hand again.
       spacing: brush.spacing ?? null,
-      grain: brush.grain ?? null,
     };
   } else {
     delete drawing.brush;
@@ -2485,11 +2273,9 @@ function useBrush(brush, name) {
 /**
  * Put the settings of a brush into the tool panel.
  *
- * A brush that comes from Clip Studio Paint brings everything that says how
- * its paint goes down: its size, how strong it paints, how much paint one dab
- * leaves, how hard the edge of its tip is, how thick the tip is and which
- * grain of paper it draws on. All of it is put into the tool in the hand, so
- * that the brush that was chosen is the brush that is drawn with.
+ * A brush that comes from Clip Studio Paint brings the size of its tip and
+ * how strong it paints. Both are put into the tool in the hand, so that the
+ * brush that was chosen is the brush that is drawn with.
  */
 function applyBrushSettings(brush) {
   const settings = toolSettings();
@@ -2509,151 +2295,26 @@ function applyBrushSettings(brush) {
     strokeOpacityValue.textContent = `${value}%`;
     settings.opacity = value;
   }
-  const flow = Number(brush.flow);
-  if (Number.isFinite(flow)) {
-    const value = Math.max(1, Math.min(100, Math.round(flow)));
-    flowInput.value = String(value);
-    flowValue.textContent = String(value);
-    settings.flow = value;
-  }
-  const hardness = Number(brush.hardness);
-  if (Number.isFinite(hardness)) {
-    const value = Math.max(0, Math.min(100, Math.round(hardness)));
-    hardnessInput.value = String(value);
-    hardnessValue.textContent = String(value);
-    settings.hardness = value;
-  }
-  const thickness = Number(brush.thickness);
-  if (Number.isFinite(thickness)) {
-    const value = Math.max(10, Math.min(400, Math.round(thickness)));
-    thicknessInput.value = String(value);
-    thicknessValue.textContent = String(value);
-    settings.thickness = value;
-  }
-  if (brush.grain?.data) {
-    const density = Math.max(0, Math.min(100, Math.round(Number(brush.grain.density) || 0)));
-    grainInput.value = String(density);
-    grainValue.textContent = String(density);
-    settings.grain = density;
-    const scale = Math.max(10, Math.min(400, Math.round(Number(brush.grain.scale) || 100)));
-    grainScaleInput.value = String(scale);
-    grainScaleValue.textContent = String(scale);
-    settings.grainScale = scale;
-  } else {
-    // A brush without a grain draws on plain paper.
-    grainInput.value = "0";
-    grainValue.textContent = "0";
-    settings.grain = 0;
-  }
-}
-
-/* ------------------------------------------------------------- the grain */
-
-/** The grain of paper this program always has, made when it is first needed. */
-let paperGrain = null;
-
-/**
- * A grain of paper that is always there.
- *
- * A brush that came from Clip Studio Paint brings its own grain; a brush made
- * here has none, so the grain slider would do nothing for it. This picture is
- * a paper of its own, made in the page from a speckle that is the same every
- * time, so that the same stroke is drawn the same way again and the export
- * matches the stage.
- */
-function builtInGrain() {
-  if (paperGrain) return paperGrain;
-  const size = 128;
-  const surface = document.createElement("canvas");
-  surface.width = size;
-  surface.height = size;
-  const context = surface.getContext("2d");
-  const image = context.createImageData(size, size);
-  let seed = 0x9e3779b9;
-  const random = () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 0x100000000;
-  };
-  // The clumps of the paper first, then the speckle on top of them.
-  const clumps = 16;
-  const grid = Array.from({ length: clumps * clumps }, random);
-  const clump = (x, y) => {
-    const gx = (x / size) * clumps;
-    const gy = (y / size) * clumps;
-    const x0 = Math.floor(gx) % clumps;
-    const y0 = Math.floor(gy) % clumps;
-    const x1 = (x0 + 1) % clumps;
-    const y1 = (y0 + 1) % clumps;
-    const fx = gx - Math.floor(gx);
-    const fy = gy - Math.floor(gy);
-    const top = grid[y0 * clumps + x0] * (1 - fx) + grid[y0 * clumps + x1] * fx;
-    const bottom = grid[y1 * clumps + x0] * (1 - fx) + grid[y1 * clumps + x1] * fx;
-    return top * (1 - fy) + bottom * fy;
-  };
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const value = 0.55 * clump(x, y) + 0.45 * random();
-      image.data[(y * size + x) * 4 + 3] = Math.round(255 * Math.max(0, Math.min(1, value)));
-    }
-  }
-  context.putImageData(image, 0, 0);
-  paperGrain = {
-    data: surface.toDataURL("image/png").split(",")[1] ?? "",
-    width: size,
-    height: size,
-  };
-  return paperGrain;
-}
-
-/**
- * The grain a stroke is drawn on.
- *
- * The picture comes from the brush: a brush of Clip Studio Paint keeps the
- * paper it was made with. A brush without one is drawn on the paper of this
- * program. How strongly the grain shows and how large it is come from the
- * tool, so that the grain can be turned down or off for a while without
- * taking the brush apart.
- */
-function grainForStroke(brushGrain, settings) {
-  const strength = Math.max(0, Math.min(100, Number(settings.grain) || 0));
-  if (strength === 0) return null;
-  const picture = brushGrain?.data ? brushGrain : builtInGrain();
-  if (!picture?.data) return null;
-  return {
-    data: picture.data,
-    width: picture.width ?? 0,
-    height: picture.height ?? 0,
-    density: strength,
-    scale: Math.max(10, Math.min(400, Number(settings.grainScale) || 100)),
-    rotate: Number(brushGrain?.rotate) || 0,
-    reverse: brushGrain?.reverse === true,
-  };
 }
 
 /**
  * The brush a stroke is made with.
  *
- * It is the picture of the brush in the hand, and the way the tool in the
- * hand paints: how much paint one dab leaves, how hard the tip is, how thick
- * it is and which grain of paper it is drawn on. Keeping it with the stroke
+ * It is the picture of the brush in the hand and the way the tool in the hand
+ * paints: whether the edge of the tip is hard. Keeping it with the stroke
  * means a stroke is drawn the same way after the brush has been changed.
  */
 function strokeBrushFor(settings) {
   const brush = currentBrush();
-  const grain = grainForStroke(brush?.grain, settings);
   const strokeBrush = {
     data: brush?.data ?? null,
     size: brush?.size ?? null,
     opacity: brush?.opacity ?? null,
-    flow: Math.max(1, Math.min(100, Math.round(Number(settings.flow) || 100))),
-    hardness: Math.max(0, Math.min(100, Math.round(Number(settings.hardness ?? 100)))),
-    thickness: Math.max(10, Math.min(400, Math.round(Number(settings.thickness) || 100))),
     spacing: brush?.spacing ?? 25,
   };
   // A hard edge is a way of painting, so it is kept with the stroke: a stroke
   // that was drawn binarized stays binarized when the export draws it again.
   if (settings.binarize) strokeBrush.binarize = true;
-  if (grain) strokeBrush.grain = grain;
   return strokeBrush;
 }
 
@@ -2718,11 +2379,6 @@ function brushCard(brush, options = {}) {
   const size = document.createElement("span");
   size.className = "brush-card-size";
   size.textContent = `${brush.size ?? Number(widthInput.value) ?? 6}px`;
-  if (brush.grain?.data) {
-    // A brush that came with the paper it was made on says so.
-    size.textContent += " · paper";
-    size.title = "This brush brings the grain of the paper it was made on";
-  }
   card.append(size);
 
   const use = document.createElement("button");
@@ -2768,9 +2424,8 @@ function drawBrushPreview(surface, brush) {
 
   const size = Math.max(2, Math.min(30, Number(brush.size) || 6));
   // The line of the preview is a stroke, and it is painted by the same code
-  // that paints the stage, so a brush that is soft, that has a flat tip, that
-  // is drawn on paper or that has a picture of its own looks here the way it
-  // looks on the paper.
+  // that paints the stage, so a brush that has a picture of its own looks
+  // here the way it looks on the paper.
   const points = [];
   for (let step = 0; step <= 48; step += 1) {
     const at = step / 48;
@@ -2778,13 +2433,11 @@ function drawBrushPreview(surface, brush) {
   }
   drawStrokeDirect(context, { color: colorInput.value, width: size, points }, width, height, brush);
 
-  // The pictures of the tip and of the paper come in from the page, so the
-  // preview is drawn again when they arrive.
+  // The picture of the tip comes in from the page, so the preview is drawn
+  // again when it arrives.
   const again = () => drawBrushPreview(surface, brush);
   const tip = brush.data ? tipImage(brush) : null;
   if (tip && !tip.complete) tip.addEventListener("load", again, { once: true });
-  const paper = brush.grain?.data ? grainPictureOf(brush.grain) : null;
-  if (paper && !paper.complete) paper.addEventListener("load", again, { once: true });
 }
 
 /** Fill the panel with the brushes that are there. */
@@ -2832,15 +2485,7 @@ async function importBrushFiles(files) {
       size = brush.size;
       settings = {
         opacity: brush.opacity,
-        flow: brush.flow,
-        hardness: brush.hardness,
-        thickness: brush.thickness,
         spacing: brush.spacing,
-        scale: brush.scale,
-        rotate: brush.rotate,
-        // The paper the brush was made with, kept with the brush so that it
-        // draws here the way it draws in Clip Studio Paint.
-        grain: brush.grain ?? null,
       };
     } else {
       picture = brushImageFromBytes(bytes);
@@ -2901,9 +2546,6 @@ async function exportBrushAsSut(brush) {
         name: brush.name,
         size,
         opacity: Number(strokeOpacityInput.value) || 100,
-        flow: Number(flowInput.value) || 100,
-        hardness: Number(hardnessInput.value) || 0,
-        thickness: Math.min(100, Number(thicknessInput.value) || 100),
         texture: brush.data ? { data: brush.data } : null,
       },
       `${brush.name}.sut`,
@@ -3726,6 +3368,15 @@ function renderTimeline() {
           ? `Cell "${entry.name}" on frame ${frame} — ${entry.count} frame${entry.count === 1 ? "" : "s"}`
           : `Held frame — ${entry.remaining} of ${entry.count} remaining`;
         cell.addEventListener("click", () => selectFrame(frame, owner));
+        // The head of a cell is the frame where nothing of it is left, so it
+        // is the frame where the whole cell is still to come.
+        addCellHandles(
+          cell,
+          entry.layer,
+          frame,
+          entry.remaining === 1,
+          entry.remaining === entry.count,
+        );
         cells.append(cell);
         continue;
       }
@@ -3753,6 +3404,7 @@ function renderTimeline() {
         event.preventDefault();
         renameCell(index, frame);
       });
+      addCellHandles(cell, index, frame, info.remaining === 1, info.kind === "head");
       cells.append(cell);
     }
 
@@ -4149,6 +3801,22 @@ function syncLayerControls() {
   holdButton.disabled = !editable;
   deleteFrameButton.disabled = !editable;
   addFrameButton.disabled = folder;
+
+  // The transform of the cell that is on the frame: where its picture sits,
+  // how big it is and how far it is turned.
+  const cell = folder ? null : resolveDrawing(layer, project.currentFrame)?.drawing ?? null;
+  const transform = transformOf(cell);
+  transformXInput.value = String(Math.round(transform.x));
+  transformYInput.value = String(Math.round(transform.y));
+  transformScaleInput.value = String(Math.round(transform.scale * 100));
+  transformScaleValue.textContent = `${Math.round(transform.scale * 100)}%`;
+  transformRotationInput.value = String(Math.round(transform.rotation));
+  const canTransform = Boolean(cell);
+  transformXInput.disabled = !canTransform;
+  transformYInput.disabled = !canTransform;
+  transformScaleInput.disabled = !canTransform;
+  transformRotationInput.disabled = !canTransform;
+  transformResetButton.disabled = !canTransform;
 
   deleteLayerButton.disabled = project.layers.length <= 1;
   const siblings = childrenOf(project, layer.parent ?? -1);
@@ -4620,6 +4288,131 @@ function addDrawing() {
   markDirty();
   afterChange();
   setStatus(`Inserted a blank drawing at frame ${state.project.currentFrame}`);
+}
+
+/* the cells of the timeline can be moved and made longer ----------------- */
+
+let cellDrag = null;
+
+/**
+ * Put the handles of a cell on it.
+ *
+ * The last frame of a cell carries the handle that makes the cell longer or
+ * shorter, the way the edge of a cell is pulled in Clip Studio Paint, and the
+ * first frame of a cell is the handle that moves it.
+ *
+ * @param {Element} cell The cell in the timeline.
+ * @param {number} layerIndex The layer the cell belongs to.
+ * @param {number} frame The frame the cell is on.
+ * @param {boolean} last Whether this is the last frame of the cell.
+ * @param {boolean} first Whether this is the first frame of the cell.
+ */
+function addCellHandles(cell, layerIndex, frame, last, first) {
+  if (last) {
+    const handle = element("span", "tl-cell-handle");
+    handle.title = "Drag to make the cell longer or shorter";
+    handle.setAttribute("aria-label", "Make the cell longer or shorter");
+    handle.addEventListener("pointerdown", (event) => {
+      startCellDrag(event, layerIndex, frame, "resize");
+    });
+    cell.append(handle);
+  }
+  if (first) {
+    cell.classList.add("movable");
+    cell.addEventListener("pointerdown", (event) => {
+      startCellDrag(event, layerIndex, frame, "move");
+    });
+  }
+}
+
+/**
+ * The frame the pointer is over in a row of the timeline.
+ *
+ * Every frame has a column of the same width, so the frame is found by
+ * counting the columns from the left of the row.
+ */
+function frameUnderPointer(event, cells) {
+  const rect = cells.getBoundingClientRect();
+  const width = timelineCellWidth();
+  const index = Math.floor((event.clientX - rect.left) / width);
+  return state.project.startFrame + index;
+}
+
+/** The cells of the row of a layer, as they are drawn now. */
+function cellsOfRow(layerIndex) {
+  return timelineEl.querySelector(`.tl-row[data-layer="${layerIndex}"] .tl-cells`);
+}
+
+/**
+ * Start a drag of a cell: moving it to another frame, or making it longer.
+ *
+ * The timeline is drawn again after every change, so the drag is watched on
+ * the window and the cell is found by the frame the pointer is over.
+ */
+function startCellDrag(event, layerIndex, frame, mode) {
+  if (event.button !== 0) return;
+  const layer = state.project.layers[layerIndex];
+  if (!layer || layer.locked) return;
+  const info = exposureInfo(layer, frame);
+  if (!info.drawing) return;
+
+  cellDrag = {
+    mode,
+    layerIndex,
+    layer,
+    drawing: info.drawing,
+    at: info.drawing.at,
+    hold: info.drawing.hold,
+    startX: event.clientX,
+    // The state before the drag, so that the undo puts the cell back.
+    before: snapshot(),
+  };
+  event.preventDefault();
+  event.stopPropagation();
+  document.body.classList.add("cell-dragging");
+  window.addEventListener("pointermove", onCellDragMove);
+  window.addEventListener("pointerup", onCellDragEnd, { once: true });
+  window.addEventListener("pointercancel", onCellDragEnd, { once: true });
+}
+
+/** Move the cell, or make it longer, as the pointer goes. */
+function onCellDragMove(event) {
+  if (!cellDrag) return;
+  const width = timelineCellWidth();
+  const delta = Math.round((event.clientX - cellDrag.startX) / width);
+  const drawing = cellDrag.drawing;
+
+  if (cellDrag.mode === "move") {
+    const target = cellDrag.at + delta;
+    if (target < 0 || target === drawing.at) return;
+    moveDrawing(cellDrag.layer, drawing.at, target);
+  } else {
+    const cells = cellsOfRow(cellDrag.layerIndex);
+    if (!cells) return;
+    const frame = frameUnderPointer(event, cells);
+    const hold = Math.max(1, frame - drawing.at + 1);
+    if (hold === drawing.hold) return;
+    setExposure(cellDrag.layer, drawing.at, hold);
+  }
+  renderTimeline();
+  updatePlayhead();
+}
+
+/** Finish the drag and keep the change. */
+function onCellDragEnd() {
+  window.removeEventListener("pointermove", onCellDragMove);
+  if (!cellDrag) return;
+  const { mode, drawing, before } = cellDrag;
+  cellDrag = null;
+  document.body.classList.remove("cell-dragging");
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(
+    mode === "move"
+      ? `Moved the cell to frame ${drawing.at}`
+      : `The cell is now ${drawing.hold} frame${drawing.hold === 1 ? "" : "s"} long`,
+  );
 }
 
 /**
@@ -5168,15 +4961,10 @@ function forgetPressure() {
 
 function drawPoint(event) {
   const [x, y] = canvasPoint(event);
-  // The speed of the hand is measured on every move, so that the line can be
-  // thinner where the hand moved quickly.
-  const speed = pointerSpeed(event);
   const pressure = pressureFor(event);
   if (pressure === null) {
-    // Without a stylus the speed of the hand is used: a brush that is moved
-    // quickly leaves a thinner line, the way it does in Clip Studio Paint.
-    const strength = (toolSettings().velocity ?? 0) / 100;
-    return [x, y, 1 - speed * strength];
+    // Without a stylus the line keeps the width of the brush.
+    return [x, y];
   }
   pressureValue.textContent = pressure.toFixed(2);
   return [x, y, pressure];
@@ -5201,24 +4989,6 @@ function drawPointIn(event, drawing) {
     state.project.height,
   );
   return [picture.x, picture.y, ...point.slice(2)];
-}
-
-/** Where the pointer was the last time, and when. */
-let lastPointer = null;
-
-/**
- * How fast the hand is moving, as a number from 0 (still) to 1 (quick).
- *
- * The speed is measured in the pixels of the screen: the hand is quick at
- * two pixels a millisecond.
- */
-function pointerSpeed(event) {
-  const previous = lastPointer;
-  lastPointer = { x: event.clientX, y: event.clientY, time: event.timeStamp };
-  if (!previous) return 0;
-  const time = Math.max(1, event.timeStamp - previous.time);
-  const distance = Math.hypot(event.clientX - previous.x, event.clientY - previous.y);
-  return Math.min(1, distance / time / 2);
 }
 
 function layerForDrawing() {
@@ -5323,16 +5093,9 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (state.tool === "brush" || state.tool === "pencil" || state.tool === "eraser") {
     // A stroke remembers the brush it was made with, the way Clip Studio
-    // Paint does, and how the tool painted: the flow, the hardness, the
-    // thickness of the tip and the grain of the paper. Changing the brush or
-    // the settings afterwards therefore does not change the strokes that are
-    // already on the paper.
+    // Paint does. Changing the brush or the settings afterwards therefore
+    // does not change the strokes that are already on the paper.
     stroke.brush = strokeBrushFor(settings);
-    // The ends of the stroke are thin, the way the brush of Clip Studio
-    // Paint tapers in and out.
-    if (state.tool === "brush" && settings.taper > 0) {
-      stroke.taper = Math.min(0.5, settings.taper / 200);
-    }
   }
   // The opacity and the blend belong to every tool that paints, and not to
   // the fill, which floods the region with the colour as it is.
@@ -5341,14 +5104,14 @@ canvas.addEventListener("pointerdown", (event) => {
     if (settings.blend !== "normal") stroke.blend = settings.blend;
   }
   state.smoothedPoint = stroke.points[stroke.points.length - 1];
-  // The raw points of the stroke in hand, so the smoothing can be laid
-  // over them again for every move of the pointer.
-  state.rawPoints = stroke.kind ? [] : [...stroke.points];
 
   drawing.strokes.push(stroke);
   state.strokeBefore = before;
   state.strokeWasNew = !existing;
   state.drawing = stroke;
+  // The cell the ink goes on. A cell may sit somewhere else than it was
+  // drawn, so the brush has to know which one it is on.
+  state.drawingCell = drawing;
   markDirty();
   renderCanvas();
 });
@@ -5388,15 +5151,8 @@ canvas.addEventListener("pointermove", (event) => {
 
     const last = state.drawing.points[state.drawing.points.length - 1];
     if (Math.hypot(smoothed[0] - last[0], smoothed[1] - last[1]) < 1.5) continue;
-    // The raw points are kept aside, so the smoothing can be laid over them
-    // again and again while the stroke is drawn. A filter that was laid
-    // over its own result would melt the line away.
-    state.rawPoints.push(smoothed);
-    // The smoothing takes the tremble out of the line, the way the pencil
-    // of Flash does it: the shape of the line stays, only the trembling of
-    // the hand is gone. The line that is shown is the line that will be
-    // left behind.
-    state.drawing.points = smoothStroke(state.rawPoints, smoothRadius(toolSettings().smooth));
+    // The line that is shown is the line that will be left behind.
+    state.drawing.points.push(smoothed);
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
@@ -5415,7 +5171,6 @@ function endStroke() {
   }
   if (!state.drawing) return;
   state.drawing = null;
-  state.rawPoints = [];
   forgetPressure();
 
   const before = state.strokeBefore;
@@ -5463,7 +5218,7 @@ binarizeInput.addEventListener("change", () => {
   setStatus(
     binarizeInput.checked
       ? "Binarize on — the edge of the brush is hard, pixel by pixel"
-      : "Binarize off — the edge of the brush is as soft as its hardness",
+      : "Binarize off — the edge of the brush is soft",
   );
 });
 
@@ -5517,42 +5272,17 @@ const TOOL_PROPS = {
     title: "Brush",
     // The rows of the brush: a few of them are in the panel, the rest wait
     // behind "Hidden items" until they are brought out with the eye.
-    rows: [
-      "brush",
-      "width",
-      "opacity",
-      "flow",
-      "stabilizer",
-      "binarize",
-      "blend",
-      "hardness",
-      "thickness",
-      "grain",
-      "grainScale",
-      "smooth",
-      "velocity",
-      "taper",
-    ],
+    rows: ["brush", "width", "opacity", "stabilizer", "binarize", "blend"],
     note: "",
   },
   pencil: {
     title: "Pencil",
-    rows: ["width", "opacity", "blend", "smooth"],
+    rows: ["width", "opacity", "blend"],
     note: "A thin line with a hard edge, the way the pencil of Flash draws it.",
   },
   eraser: {
     title: "Eraser",
-    rows: [
-      "width",
-      "opacity",
-      "stabilizer",
-      "binarize",
-      "flow",
-      "hardness",
-      "thickness",
-      "grain",
-      "grainScale",
-    ],
+    rows: ["width", "opacity", "stabilizer", "binarize"],
     note: "The eraser takes the paint away and shows the layer below.",
   },
   line: {
@@ -5610,21 +5340,7 @@ const brushShapeSize = document.getElementById("brushShapeSize");
  * the same in both places, so a row that is brought back does not jump to the
  * end of the panel.
  */
-const PROP_ROW_ORDER = [
-  "width",
-  "opacity",
-  "flow",
-  "stabilizer",
-  "binarize",
-  "blend",
-  "hardness",
-  "thickness",
-  "grain",
-  "grainScale",
-  "smooth",
-  "velocity",
-  "taper",
-];
+const PROP_ROW_ORDER = ["width", "opacity", "stabilizer", "binarize", "blend"];
 
 /** The rows a panel starts with, the way the brush panel of MoArt does. */
 const PROP_PINS_DEFAULT = ["width", "opacity", "stabilizer", "binarize", "blend"];
@@ -5636,34 +5352,18 @@ const PROP_ADV_KEY = "tvmini.toolPanelAdv.v1";
 const PROP_ROW_ELEMENTS = {
   width: document.getElementById("toolWidthRow"),
   opacity: document.getElementById("toolOpacityRow"),
-  flow: document.getElementById("toolFlowRow"),
   stabilizer: document.getElementById("toolStabilizerRow"),
   binarize: document.getElementById("toolBinarizeRow"),
   blend: document.getElementById("toolBlendRow"),
-  hardness: document.getElementById("toolHardnessRow"),
-  thickness: document.getElementById("toolThicknessRow"),
-  grain: document.getElementById("toolGrainRow"),
-  grainScale: document.getElementById("toolGrainScaleRow"),
-  smooth: document.getElementById("toolSmoothRow"),
-  velocity: document.getElementById("toolVelocityRow"),
-  taper: document.getElementById("toolTaperRow"),
 };
 
 /** What a row is called when it is put away or brought back. */
 const PROP_ROW_NAMES = {
   width: "Size",
   opacity: "Opacity",
-  flow: "Flow",
   stabilizer: "Stabilizer",
   binarize: "Binarize",
   blend: "Blend",
-  hardness: "Hardness",
-  thickness: "Thickness",
-  grain: "Grain",
-  grainScale: "Grain size",
-  smooth: "Smooth",
-  velocity: "Velocity",
-  taper: "Taper",
 };
 
 /** The eye that puts a row away, and the same eye with a line through it. */
@@ -5826,24 +5526,6 @@ function layoutToolProps() {
   const open = hasHidden && propDrawerIsOpen();
   toolPropGroup.hidden = !open;
   toolPropAdvBtn.setAttribute("aria-expanded", String(open));
-  updatePropRowState();
-}
-
-/**
- * A row that cannot do anything right now is greyed, not hidden.
- *
- * Not seeing a setting and pressing a setting that does nothing are not the
- * same thing, so the panel says which rows are asleep instead of taking them
- * away. The size of the grain is the one row of the brush that does nothing
- * while the grain is off.
- */
-function updatePropRowState() {
-  const asleep = !(Number(toolSettings().grain) > 0);
-  const row = PROP_ROW_ELEMENTS.grainScale;
-  if (!row) return;
-  row.classList.toggle("prop-disabled", asleep);
-  const input = row.querySelector("input");
-  if (input) input.disabled = asleep;
 }
 
 toolPropAdvBtn.addEventListener("click", () => {
@@ -5879,22 +5561,6 @@ function showToolProps() {
   widthValue.textContent = String(settings.width);
   stabilizerInput.value = String(settings.stabilizer);
   stabilizerValue.textContent = String(settings.stabilizer);
-  smoothInput.value = String(settings.smooth);
-  smoothValue.textContent = String(settings.smooth);
-  velocityInput.value = String(settings.velocity ?? 0);
-  velocityValue.textContent = String(settings.velocity ?? 0);
-  taperInput.value = String(settings.taper ?? 0);
-  taperValue.textContent = String(settings.taper ?? 0);
-  flowInput.value = String(settings.flow ?? 100);
-  flowValue.textContent = String(settings.flow ?? 100);
-  hardnessInput.value = String(settings.hardness ?? 100);
-  hardnessValue.textContent = String(settings.hardness ?? 100);
-  thicknessInput.value = String(settings.thickness ?? 100);
-  thicknessValue.textContent = String(settings.thickness ?? 100);
-  grainInput.value = String(settings.grain ?? 0);
-  grainValue.textContent = String(settings.grain ?? 0);
-  grainScaleInput.value = String(settings.grainScale ?? 100);
-  grainScaleValue.textContent = String(settings.grainScale ?? 100);
   strokeOpacityInput.value = String(settings.opacity);
   strokeOpacityValue.textContent = `${settings.opacity}%`;
   strokeBlendSelect.value = settings.blend;
@@ -5929,15 +5595,6 @@ function saveToolProps() {
   const settings = toolSettings();
   settings.width = Math.max(1, Math.min(300, Number(widthInput.value) || settings.width));
   settings.stabilizer = Math.max(0, Math.min(100, Number(stabilizerInput.value) || 0));
-  settings.smooth = Math.max(0, Math.min(100, Number(smoothInput.value) || 0));
-  settings.velocity = Math.max(0, Math.min(100, Number(velocityInput.value) || 0));
-  settings.taper = Math.max(0, Math.min(100, Number(taperInput.value) || 0));
-  settings.flow = Math.max(1, Math.min(100, Number(flowInput.value) || 100));
-  settings.hardness = Math.max(0, Math.min(100, Number(hardnessInput.value) || 0));
-  // A tip is at least a tenth of its width; 100 is round.
-  settings.thickness = Math.max(10, Math.min(400, Number(thicknessInput.value) || 100));
-  settings.grain = Math.max(0, Math.min(100, Number(grainInput.value) || 0));
-  settings.grainScale = Math.max(10, Math.min(400, Number(grainScaleInput.value) || 100));
   settings.opacity = Math.max(1, Math.min(100, Number(strokeOpacityInput.value) || 100));
   settings.blend = strokeBlendSelect.value;
   settings.binarize = binarizeInput.checked;
@@ -6084,9 +5741,6 @@ function loadSettings() {
         Math.min(100, Math.round(remembered)),
       );
     }
-    if (Number.isFinite(data.smooth)) {
-      state.toolSettings.brush.smooth = Math.max(0, Math.min(100, Math.round(data.smooth)));
-    }
     // The settings of each tool are remembered, so the pencil keeps its own
     // width and the brush keeps its own.
     if (data.toolSettings && typeof data.toolSettings === "object") {
@@ -6099,32 +5753,8 @@ function loadSettings() {
         if (Number.isFinite(settings.stabilizer)) {
           known.stabilizer = Math.max(0, Math.min(100, Math.round(settings.stabilizer)));
         }
-        if (Number.isFinite(settings.smooth)) {
-          known.smooth = Math.max(0, Math.min(100, Math.round(settings.smooth)));
-        }
         if (Number.isFinite(settings.opacity)) {
           known.opacity = Math.max(1, Math.min(100, Math.round(settings.opacity)));
-        }
-        if (Number.isFinite(settings.velocity)) {
-          known.velocity = Math.max(0, Math.min(100, Math.round(settings.velocity)));
-        }
-        if (Number.isFinite(settings.taper)) {
-          known.taper = Math.max(0, Math.min(100, Math.round(settings.taper)));
-        }
-        if (Number.isFinite(settings.flow)) {
-          known.flow = Math.max(1, Math.min(100, Math.round(settings.flow)));
-        }
-        if (Number.isFinite(settings.hardness)) {
-          known.hardness = Math.max(0, Math.min(100, Math.round(settings.hardness)));
-        }
-        if (Number.isFinite(settings.thickness)) {
-          known.thickness = Math.max(10, Math.min(400, Math.round(settings.thickness)));
-        }
-        if (Number.isFinite(settings.grain)) {
-          known.grain = Math.max(0, Math.min(100, Math.round(settings.grain)));
-        }
-        if (Number.isFinite(settings.grainScale)) {
-          known.grainScale = Math.max(10, Math.min(400, Math.round(settings.grainScale)));
         }
         if (typeof settings.blend === "string") known.blend = settings.blend;
         if (typeof settings.binarize === "boolean") known.binarize = settings.binarize;
@@ -6147,7 +5777,6 @@ function saveSettings() {
         playSpeed: state.playSpeed,
         stabilizer: state.toolSettings.brush.stabilizer,
         stabilizerScale: 100,
-        smooth: state.toolSettings.brush.smooth,
         toolSettings: state.toolSettings,
         compactTimeline: state.compactTimeline,
         onion: { ...state.onion },
@@ -6168,8 +5797,6 @@ function syncSettingsUI() {
   const settings = toolSettings();
   stabilizerInput.value = String(settings.stabilizer);
   stabilizerValue.textContent = String(settings.stabilizer);
-  smoothInput.value = String(settings.smooth);
-  smoothValue.textContent = String(settings.smooth);
   onionInput.checked = state.onion.enabled;
   onionBeforeInput.value = String(state.onion.before);
   onionAfterInput.value = String(state.onion.after);
@@ -6211,99 +5838,6 @@ stabilizerInput.addEventListener("input", () => {
   setStatus(value === 0 ? "Stabiliser off" : `Stabiliser ${value} — new strokes get smoother`);
 });
 stabilizerInput.addEventListener("change", saveSettings);
-
-smoothInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(100, Math.round(Number(smoothInput.value))));
-  toolSettings().smooth = value;
-  smoothValue.textContent = String(value);
-  setStatus(
-    value === 0
-      ? "Smoothing off — the line is the line the hand made"
-      : `Smoothing ${value} — the tremble is taken out of the line`,
-  );
-});
-smoothInput.addEventListener("change", saveSettings);
-
-velocityInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(100, Math.round(Number(velocityInput.value))));
-  toolSettings().velocity = value;
-  velocityValue.textContent = String(value);
-  setStatus(
-    value === 0
-      ? "Velocity off — the line keeps the same width"
-      : `Velocity ${value} — a quick hand leaves a thinner line`,
-  );
-});
-velocityInput.addEventListener("change", saveSettings);
-
-taperInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(100, Math.round(Number(taperInput.value))));
-  toolSettings().taper = value;
-  taperValue.textContent = String(value);
-  setStatus(
-    value === 0
-      ? "Taper off — the line is as thick at the ends as in the middle"
-      : `Taper ${value} — the ends of the line are thin`,
-  );
-});
-taperInput.addEventListener("change", saveSettings);
-
-flowInput.addEventListener("input", () => {
-  const value = Math.max(1, Math.min(100, Math.round(Number(flowInput.value))));
-  toolSettings().flow = value;
-  flowValue.textContent = String(value);
-  setStatus(
-    value === 100
-      ? "Flow 100 - every dab leaves all of its paint"
-      : `Flow ${value} - the dabs build up on each other`,
-  );
-});
-flowInput.addEventListener("change", saveSettings);
-
-hardnessInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(100, Math.round(Number(hardnessInput.value))));
-  toolSettings().hardness = value;
-  hardnessValue.textContent = String(value);
-  setStatus(
-    value === 100
-      ? "Hardness 100 - the edge of the tip is sharp"
-      : `Hardness ${value} - the edge of the tip is soft`,
-  );
-});
-hardnessInput.addEventListener("change", saveSettings);
-
-thicknessInput.addEventListener("input", () => {
-  const value = Math.max(10, Math.min(400, Math.round(Number(thicknessInput.value))));
-  toolSettings().thickness = value;
-  thicknessValue.textContent = String(value);
-  setStatus(
-    value === 100
-      ? "Thickness 100 - the tip is round"
-      : `Thickness ${value} - the tip is flat, so the line is thinner one way than the other`,
-  );
-});
-thicknessInput.addEventListener("change", saveSettings);
-
-grainInput.addEventListener("input", () => {
-  const value = Math.max(0, Math.min(100, Math.round(Number(grainInput.value))));
-  toolSettings().grain = value;
-  grainValue.textContent = String(value);
-  updatePropRowState();
-  setStatus(
-    value === 0
-      ? "Grain off - the paint is smooth"
-      : `Grain ${value} - the paper shows through the paint`,
-  );
-});
-grainInput.addEventListener("change", saveSettings);
-
-grainScaleInput.addEventListener("input", () => {
-  const value = Math.max(10, Math.min(400, Math.round(Number(grainScaleInput.value))));
-  toolSettings().grainScale = value;
-  grainScaleValue.textContent = String(value);
-  setStatus(`Grain size ${value} - 100 is the size of the picture of the paper`);
-});
-grainScaleInput.addEventListener("change", saveSettings);
 
 clearButton.addEventListener("click", clearDrawing);
 undoButton.addEventListener("click", undo);

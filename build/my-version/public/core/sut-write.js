@@ -353,10 +353,11 @@ function materialFile(png) {
  *   `name`      the name of the brush;
  *   `size`      the width of the brush in pixels;
  *   `opacity`   how strong the brush paints, from 0 to 100;
- *   `flow`      how much paint a single dab leaves;
- *   `hardness`  how hard the edge of the tip is;
- *   `thickness` how much of the tip the stroke uses;
  *   `texture`   the picture of the tip, as the base64 of a PNG.
+ *
+ * The flow, the hardness and the thickness of the brush are the ones Clip
+ * Studio Paint starts every brush with: a hard tip that leaves all of its
+ * paint with every dab.
  *
  * The result is the bytes of the file, ready to be written to disk.
  */
@@ -364,9 +365,6 @@ export async function writeSutBrush(brush = {}) {
   const name = String(brush.name ?? "brush").trim() || "brush";
   const size = Number.isFinite(Number(brush.size)) ? Number(brush.size) : 100;
   const opacity = clamp(Number(brush.opacity ?? 100), 0, 100);
-  const flow = clamp(Number(brush.flow ?? 100), 0, 100);
-  const hardness = clamp(Number(brush.hardness ?? 100), 0, 100);
-  const thickness = clamp(Number(brush.thickness ?? 100), 0, 100);
 
   const database = await createDatabase();
   try {
@@ -416,9 +414,9 @@ export async function writeSutBrush(brush = {}) {
       Opacity: opacity,
       BrushSize: size,
       BrushSizeUnit: 0,
-      BrushFlow: flow,
-      BrushHardness: hardness,
-      BrushThickness: thickness,
+      BrushFlow: 100,
+      BrushHardness: 100,
+      BrushThickness: 100,
     };
     writeVariant(database, 1, settings);
 

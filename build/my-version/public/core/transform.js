@@ -124,39 +124,62 @@ export function composeMatrix(transforms, width, height) {
  * @param {object} matrix The matrix, as `transformMatrix` gives it.
  * @returns {Uint8Array} The picture, put where the matrix says.
  */
-export function transformRgba(rgba, width, height, matrix) {
+export function transformRgba(rgba, width, height, matrix, interpolation) {
   if (!matrix || (matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1 && !matrix.e && !matrix.f)) {
     return rgba;
   }
   const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
   if (!determinant) return rgba;
 
-  const out = new Uint8Array(rgba.length);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const dx = x - matrix.e;
-      const dy = y - matrix.f;
-      // The point of the picture this pixel of the result comes from.
-      const sourceX = (matrix.d * dx - matrix.c * dy) / determinant;
-      const sourceY = (-matrix.b * dx + matrix.a * dy) / determinant;
-      const target = (y * width + x) * 4;
-      if (sourceX < 0 || sourceY < 0 || sourceX > width - 1 || sourceY > height - 1) {
-        continue;
+  let out;
+  if (interpolation === "nearest") {
+    // Nearest-neighbour: every result pixel takes the closest source pixel.
+    out = new Uint8Array(rgba.length);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const dx = x - matrix.e;
+        const dy = y - matrix.f;
+        const sourceX = (matrix.d * dx - matrix.c * dy) / determinant;
+        const sourceY = (-matrix.b * dx + matrix.a * dy) / determinant;
+        const sx = Math.floor(sourceX + 0.5);
+        const sy = Math.floor(sourceY + 0.5);
+        if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
+          const target = (y * width + x) * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            out[target + channel] = rgba[(sy * width + sx) * 4 + channel];
+          }
+        }
       }
-      const left = Math.floor(sourceX);
-      const top = Math.floor(sourceY);
-      const right = Math.min(left + 1, width - 1);
-      const bottom = Math.min(top + 1, height - 1);
-      const along = sourceX - left;
-      const down = sourceY - top;
-      for (let channel = 0; channel < 4; channel += 1) {
-        const topLeft = rgba[(top * width + left) * 4 + channel];
-        const topRight = rgba[(top * width + right) * 4 + channel];
-        const bottomLeft = rgba[(bottom * width + left) * 4 + channel];
-        const bottomRight = rgba[(bottom * width + right) * 4 + channel];
-        const upper = topLeft + (topRight - topLeft) * along;
-        const lower = bottomLeft + (bottomRight - bottomLeft) * along;
-        out[target + channel] = Math.round(upper + (lower - upper) * down);
+    }
+  } else {
+    // Bilinear (default): every result pixel takes a weighted mix of the 4
+    // surrounding source pixels.
+    out = new Uint8Array(rgba.length);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const dx = x - matrix.e;
+        const dy = y - matrix.f;
+        const sourceX = (matrix.d * dx - matrix.c * dy) / determinant;
+        const sourceY = (-matrix.b * dx + matrix.a * dy) / determinant;
+        const target = (y * width + x) * 4;
+        if (sourceX < 0 || sourceY < 0 || sourceX > width - 1 || sourceY > height - 1) {
+          continue;
+        }
+        const left = Math.floor(sourceX);
+        const top = Math.floor(sourceY);
+        const right = Math.min(left + 1, width - 1);
+        const bottom = Math.min(top + 1, height - 1);
+        const along = sourceX - left;
+        const down = sourceY - top;
+        for (let channel = 0; channel < 4; channel += 1) {
+          const topLeft = rgba[(top * width + left) * 4 + channel];
+          const topRight = rgba[(top * width + right) * 4 + channel];
+          const bottomLeft = rgba[(bottom * width + left) * 4 + channel];
+          const bottomRight = rgba[(bottom * width + right) * 4 + channel];
+          const upper = topLeft + (topRight - topLeft) * along;
+          const lower = bottomLeft + (bottomRight - bottomLeft) * along;
+          out[target + channel] = Math.round(upper + (lower - upper) * down);
+        }
       }
     }
   }

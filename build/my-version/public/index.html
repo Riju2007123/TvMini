@@ -334,12 +334,6 @@
                   <input id="strokeOpacity" type="range" min="1" max="100" step="1" value="100" />
                 </label>
               </div>
-              <div class="prop-row" id="toolFlowRow">
-                <label class="field" title="How much paint one dab of the brush leaves: below 100 the dabs build up on each other, the way the flow of a Clip Studio Paint brush works (100 = every dab leaves all of its paint)">
-                  <span>Flow <output id="flowValue">100</output></span>
-                  <input id="flow" type="range" min="1" max="100" step="1" value="100" />
-                </label>
-              </div>
               <div class="prop-row" id="toolStabilizerRow">
                 <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
                   <span>Stabilizer <output id="stabilizerValue">0</output></span>
@@ -360,48 +354,6 @@
                     <option value="multiply">Multiply</option>
                     <option value="screen">Screen</option>
                   </select>
-                </label>
-              </div>
-              <div class="prop-row" id="toolHardnessRow">
-                <label class="field" title="How hard the edge of the tip is: 100 is a sharp edge, 0 fades out from the middle, the way the hardness of a Clip Studio Paint brush works">
-                  <span>Hardness <output id="hardnessValue">100</output></span>
-                  <input id="hardness" type="range" min="0" max="100" step="1" value="100" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolThicknessRow">
-                <label class="field" title="How thick the tip is: 100 is round, and below that the tip is flatter, so the line is thinner one way than the other, the way the thickness of a Clip Studio Paint brush works">
-                  <span>Thickness <output id="thicknessValue">100</output></span>
-                  <input id="thickness" type="range" min="10" max="400" step="1" value="100" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolGrainRow">
-                <label class="field" title="How strongly the grain of the paper shows through the paint: the grain of a brush that came from Clip Studio Paint, or the paper of this program (0 = no grain)">
-                  <span>Grain <output id="grainValue">0</output></span>
-                  <input id="grain" type="range" min="0" max="100" step="1" value="0" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolGrainScaleRow">
-                <label class="field" title="How large the grain of the paper is (100 = its own size, lower repeats it more often)">
-                  <span>Grain size <output id="grainScaleValue">100</output></span>
-                  <input id="grainScale" type="range" min="10" max="400" step="1" value="100" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolSmoothRow">
-                <label class="field" title="Takes the tremble out of the line: the points that do not bend it are taken away, the way the pencil of Flash does it (0 = off)">
-                  <span>Smooth <output id="smoothValue">50</output></span>
-                  <input id="smooth" type="range" min="0" max="100" step="1" value="50" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolVelocityRow">
-                <label class="field" title="How much the width of the line follows the speed of the hand: a brush that is moved quickly leaves a thinner line (0 = off)">
-                  <span>Velocity <output id="velocityValue">45</output></span>
-                  <input id="velocity" type="range" min="0" max="100" step="1" value="45" />
-                </label>
-              </div>
-              <div class="prop-row" id="toolTaperRow">
-                <label class="field" title="How much of each end of the line is thin, the way the brush of Clip Studio Paint tapers in and out (0 = off)">
-                  <span>Taper <output id="taperValue">20</output></span>
-                  <input id="taper" type="range" min="0" max="100" step="1" value="20" />
                 </label>
               </div>
             </div>

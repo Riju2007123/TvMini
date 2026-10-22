@@ -41,8 +41,6 @@ test("a Clip Studio Paint brush is written and read again", async () => {
     name: "TVMini brush",
     size: 24,
     opacity: 80,
-    flow: 60,
-    hardness: 50,
     texture: { data: png.toString("base64") },
   });
 
@@ -78,8 +76,6 @@ test("a Clip Studio Paint brush is written and read again", async () => {
   const brush = await readSutBrush(bytes);
   assert.equal(brush.name, "TVMini brush");
   assert.equal(brush.size, 24);
-  assert.equal(brush.flow, 60);
-  assert.equal(brush.hardness, 50);
   assert.equal(brush.texture.width, 16);
   assert.equal(brush.texture.height, 16);
 });
@@ -149,8 +145,7 @@ test("the project keeps the picture of a brush", () => {
   assert.equal(project.layers[0].drawings[0].brush.data, png.toString("base64"));
 });
 
-test("the tip of a brush is found in the material of the brush", async () => {
-  const png = stampPng(8);
+test("the tip of a brush is found in the material of the brush", async () => {  const png = stampPng(8);
   // The material of a brush is a TAR archive, and the tip of the brush is
   // the thumbnail in it.
   const material = writeTar([
@@ -195,9 +190,7 @@ test("the tip of a brush is found in the material of the brush", async () => {
     // The settings of the brush are kept, so that it does not lose them.
     assert.equal(brush.size, 42);
     assert.equal(brush.opacity, 77);
-    assert.equal(brush.flow, 60);
-    assert.equal(brush.hardness, 50);
-    assert.equal(brush.thickness, 90);
+    assert.equal(brush.spacing, 10);
   } finally {
     await fs.rm(file, { force: true });
   }

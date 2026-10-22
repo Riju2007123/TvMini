@@ -15,8 +15,10 @@ import { decodePng } from "../public/core/png.js";
  * the document.
  *
  * The strokes lie on top of the paper, so the canvas is found as one piece
- * of paper with the strokes as holes, and the comparison leaves out the
- * pixels the strokes cover.
+ * of paper with the strokes as holes. Every pixel of the canvas is compared:
+ * the paper, and the strokes as well, because a stroke is where an export
+ * goes wrong most easily - an edge that is a step instead of a curve looks
+ * right in the paper around it and is wrong in the stroke itself.
  */
 const [screenshotPath, expectedPath] = process.argv.slice(2);
 const paper = process.argv[4] ?? "#ff00ff";
@@ -81,23 +83,31 @@ if (boxWidth !== want.width || boxHeight !== want.height) {
   process.exit(1);
 }
 
-// Compare the canvas with the expected picture. The strokes cover part of
-// the paper, so those pixels are left out of the comparison.
+// Compare the canvas with the expected picture. The paper and the strokes
+// are both compared, pixel by pixel: the strokes are where a difference
+// shows up first.
+//
+// A pixel may be one unit off. Clip Studio Paint puts the layer over the
+// paper with its own arithmetic, and a stroke that has a soft edge is
+// composited with a rounding of its own, so one unit on a handful of the
+// edge pixels is the picture being the same picture. More than that is a
+// difference that matters.
 let worst = 0;
 let compared = 0;
-let skipped = 0;
+let strokes = 0;
+let offByOne = 0;
 const offenders = [];
 for (let y = 0; y < want.height; y += 1) {
   for (let x = 0; x < want.width; x += 1) {
     const s = ((best.minY + y) * shot.width + (best.minX + x)) * 4;
     const w = (y * want.width + x) * 4;
-    if (shot.data[s] !== pr || shot.data[s + 1] !== pg || shot.data[s + 2] !== pb) {
-      skipped += 1;
-      continue;
-    }
-    compared += 1;
+    const wantIsPaper =
+      want.data[w] === pr && want.data[w + 1] === pg && want.data[w + 2] === pb;
+    if (wantIsPaper) compared += 1;
+    else strokes += 1;
     for (let c = 0; c < 3; c += 1) {
       const d = Math.abs(shot.data[s + c] - want.data[w + c]);
+      if (d === 1) offByOne += 1;
       if (d > worst) {
         worst = d;
         if (offenders.length < 6) {
@@ -108,8 +118,11 @@ for (let y = 0; y < want.height; y += 1) {
   }
 }
 
-console.log(`compared ${compared} paper pixels, skipped ${skipped} covered by the strokes`);
-if (worst === 0) {
+console.log(
+  `compared ${compared} paper pixels and ${strokes} stroke pixels` +
+    (offByOne ? `; ${offByOne} of them are one unit off` : ""),
+);
+if (worst <= 1) {
   console.log("=> the canvas Clip Studio Paint drew is the canvas we meant to draw");
   process.exit(0);
 }

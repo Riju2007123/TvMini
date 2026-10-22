@@ -807,6 +807,62 @@ export function duplicateDrawing(layer, frame) {
 }
 
 /**
+ * Move a drawing to another frame.
+ *
+ * The drawing keeps its length, the gap it leaves is closed, and the room it
+ * needs is opened where it lands. A drawing that lands inside another one
+ * cuts it in two, the way a new drawing does, so the two never sit on the
+ * same frames.
+ *
+ * @param {object} layer The layer the drawing is in.
+ * @param {number} frame The frame the drawing is on now.
+ * @param {number} to The frame it is put on.
+ * @returns {object|null} The drawing, or null when there is none there.
+ */
+export function moveDrawing(layer, frame, to) {
+  const drawings = drawingsOf(layer);
+  const index = drawingIndexAt(layer, frame);
+  if (index === -1) return null;
+
+  const source = drawings[index];
+  const hold = source.hold;
+  const start = source.at;
+  const target = Math.max(0, Math.round(to));
+  if (target === start) return source;
+
+  // Take the drawing out and close the gap it leaves.
+  drawings.splice(index, 1);
+  for (const other of drawings) {
+    if (other.at >= start + hold) other.at -= hold;
+  }
+
+  // Open the room for it where it lands.
+  for (const other of drawings) {
+    if (other.at >= target) other.at += hold;
+  }
+
+  // A drawing that lands inside another one cuts it in two.
+  const over = drawingIndexAt(layer, target);
+  if (over !== -1) {
+    const other = drawings[over];
+    if (other.at < target) {
+      const tail = {
+        at: target + hold,
+        hold: other.at + other.hold - target,
+        strokes: clone(other.strokes),
+      };
+      other.hold = target - other.at;
+      drawings.push(tail);
+    }
+  }
+
+  source.at = target;
+  drawings.push(source);
+  sortDrawings(layer);
+  return source;
+}
+
+/**
  * Change the exposure of the drawing that owns `frame`, moving later drawings
  * by the same delta so they keep their order without overlapping.
  */

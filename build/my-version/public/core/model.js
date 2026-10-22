@@ -171,13 +171,6 @@ function normalizeStrokes(value, label) {
       clean.brush = brush;
     }
 
-    // The ends of a stroke are thin, the way the brush of Clip Studio Paint
-    // tapers in and out. It is a share of the line, from 0 to half of it.
-    if (stroke.taper !== undefined) {
-      const taper = numberInRange(stroke.taper, `${label}[${index}].taper`, 0, 0.5);
-      if (taper > 0) clean.taper = taper;
-    }
-
     return clean;
   });
 
@@ -319,10 +312,7 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
  * on its own. The size is read out of the picture itself rather than taken
  * on trust.
  *
- * A brush may have no picture (`data: null`): a round brush is a brush too,
- * and it still carries the settings that shape its paint - how much paint one
- * dab leaves, how hard its edge is, how thick the tip is and which grain of
- * paper it draws on.
+ * A brush may have no picture (`data: null`): a round brush is a brush too.
  */
 function normalizeBrush(value, maxBase64, label) {
   if (value === undefined || value === null) return null;
@@ -356,63 +346,194 @@ function normalizeBrush(value, maxBase64, label) {
   if (Number.isFinite(value.size) && value.size > 0) brush.size = value.size;
   if (Number.isFinite(value.opacity) && value.opacity > 0) brush.opacity = value.opacity;
 
-  // The way the paint goes down: how much one dab leaves, how hard the edge
-  // of the tip is, how thick the tip is and how far apart the dabs are.
-  if (Number.isFinite(value.flow)) {
-    brush.flow = Math.max(0, Math.min(100, Math.round(value.flow)));
-  }
-  if (Number.isFinite(value.hardness)) {
-    brush.hardness = Math.max(0, Math.min(100, Math.round(value.hardness)));
-  }
-  if (Number.isFinite(value.thickness)) {
-    brush.thickness = Math.max(10, Math.min(500, Math.round(value.thickness)));
-  }
+  // How far apart the dabs are.
   if (Number.isFinite(value.spacing)) {
     brush.spacing = Math.max(1, Math.min(200, Math.round(value.spacing)));
   }
   // A hard edge, the way binarize paints: every pixel is paint or paper.
   if (value.binarize === true) brush.binarize = true;
 
-  const grain = normalizeGrain(value.grain, maxBase64, `${label}.grain`);
-  if (grain) brush.grain = grain;
+  // Flow: how much paint one dab leaves (1..100).
+  if (Number.isFinite(value.flow)) {
+    brush.flow = Math.max(1, Math.min(100, Math.round(value.flow)));
+  }
+  // Flow pressure curve: points {x,y} where x=pressure 0..1, y=flow 0..1.
+  if (Array.isArray(value.flowCurvePts)) {
+    brush.flowCurvePts = value.flowCurvePts.map(pt => ({
+      x: Math.max(0, Math.min(1, Number(pt.x))),
+      y: Math.max(0, Math.min(1, Number(pt.y))),
+    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    if (brush.flowCurvePts.length < 2) delete brush.flowCurvePts;
+  }
+  // Flow random jitter: percentage of alpha drop (0..100).
+  if (Number.isFinite(value.flowJitter)) {
+    brush.flowJitter = Math.max(0, Math.min(100, Math.round(value.flowJitter)));
+  }
+
+  // Hardness: edge hardness of the tip (0..100, mapped to AntiAlias 0..3).
+  if (Number.isFinite(value.hardness)) {
+    brush.hardness = Math.max(0, Math.min(100, Math.round(value.hardness)));
+  }
+
+  // Thickness: how thick the tip is (1..100).
+  if (Number.isFinite(value.thickness)) {
+    brush.thickness = Math.max(1, Math.min(100, Math.round(value.thickness)));
+  }
+  // Vertical thickness: whether thickness applies to vertical axis.
+  if (value.verticalThickness === true) brush.verticalThickness = true;
+  // Thickness pressure curve.
+  if (Array.isArray(value.thicknessCurvePts)) {
+    brush.thicknessCurvePts = value.thicknessCurvePts.map(pt => ({
+      x: Math.max(0, Math.min(1, Number(pt.x))),
+      y: Math.max(0, Math.min(1, Number(pt.y))),
+    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    if (brush.thicknessCurvePts.length < 2) delete brush.thicknessCurvePts;
+  }
+  // Thickness random jitter.
+  if (Number.isFinite(value.thicknessJitter)) {
+    brush.thicknessJitter = Math.max(0, Math.min(100, Math.round(value.thicknessJitter)));
+  }
+
+  // Auto spacing type: 0=fixed, 1=wide, 2=normal, 3=narrow.
+  if (Number.isFinite(value.autoInterval)) {
+    brush.autoInterval = Math.max(0, Math.min(3, Math.round(value.autoInterval)));
+  }
+
+  // Paper texture (grain).
+  if (value.paperTexId) brush.paperTexId = String(value.paperTexId);
+  if (Number.isFinite(value.paperTexScale)) {
+    brush.paperTexScale = Math.max(10, Math.min(400, Math.round(value.paperTexScale)));
+  }
+  if (Number.isFinite(value.paperTexDepth)) {
+    brush.paperTexDepth = Math.max(0, Math.min(100, Math.round(value.paperTexDepth)));
+  }
+  if (Number.isFinite(value.paperTexRotate)) {
+    brush.paperTexRotate = Math.round(value.paperTexRotate) % 360;
+  }
+  if (Number.isFinite(value.paperTexMode)) {
+    brush.paperTexMode = Math.max(0, Math.min(4, Math.round(value.paperTexMode)));
+  }
+  if (value.paperTexPerDab === true) brush.paperTexPerDab = true;
+  // Paper texture pressure curve.
+  if (Array.isArray(value.paperTexDepthCurvePts)) {
+    brush.paperTexDepthCurvePts = value.paperTexDepthCurvePts.map(pt => ({
+      x: Math.max(0, Math.min(1, Number(pt.x))),
+      y: Math.max(0, Math.min(1, Number(pt.y))),
+    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    if (brush.paperTexDepthCurvePts.length < 2) delete brush.paperTexDepthCurvePts;
+  }
+
+  // Dual brush.
+  if (value.dualMask) brush.dualMask = String(value.dualMask);
+  if (Number.isFinite(value.dualSize)) {
+    brush.dualSize = Math.max(1, Math.min(2000, Math.round(value.dualSize)));
+  }
+  if (Number.isFinite(value.dualFlow)) {
+    brush.dualFlow = Math.max(1, Math.min(100, Math.round(value.dualFlow)));
+  }
+  if (Number.isFinite(value.dualSpacing)) {
+    brush.dualSpacing = Math.max(0.01, Math.min(5, Number(value.dualSpacing)));
+  }
+  if (Number.isFinite(value.dualAa)) {
+    brush.dualAa = Math.max(0, Math.min(3, Math.round(value.dualAa)));
+  }
+
+  // Rotation.
+  if (Number.isFinite(value.tipAngle)) {
+    brush.tipAngle = Math.round(value.tipAngle) % 360;
+  }
+  if (value.tipRotate) brush.tipRotate = String(value.tipRotate);
+  if (value.tipDirCsp === true) brush.tipDirCsp = true;
+  if (Number.isFinite(value.tipJitAngle)) {
+    brush.tipJitAngle = Math.max(0, Math.min(180, Math.round(value.tipJitAngle)));
+  }
+
+  // Stabilizer (hand shake correction).
+  if (Number.isFinite(value.stabilizer)) {
+    brush.stabilizer = Math.max(0, Math.min(10, Math.round(value.stabilizer)));
+  }
+
+  // Taper (start/end).
+  if (Number.isFinite(value.taperIn)) {
+    brush.taperIn = Math.max(0, Math.round(value.taperIn));
+  }
+  if (Number.isFinite(value.taperOut)) {
+    brush.taperOut = Math.max(0, Math.round(value.taperOut));
+  }
+  if (value.taperBySpeed === true) brush.taperBySpeed = true;
+
+  // Watercolor edge.
+  if (value.waterEdge === true) brush.waterEdge = true;
+  if (Number.isFinite(value.waterEdgeRadius)) {
+    brush.waterEdgeRadius = Math.max(0.5, Math.min(20, Number(value.waterEdgeRadius)));
+  }
+  if (Number.isFinite(value.waterEdgePower)) {
+    brush.waterEdgePower = Math.max(1, Math.min(100, Math.round(value.waterEdgePower)));
+  }
+  if (value.waterEdgeCsp === true) brush.waterEdgeCsp = true;
+  if (Number.isFinite(value.waterEdgeValue)) {
+    brush.waterEdgeValue = Math.max(0, Math.min(100, Math.round(value.waterEdgeValue)));
+  }
+  if (Number.isFinite(value.waterEdgeBlur)) {
+    brush.waterEdgeBlur = Math.max(0, Math.min(20, Math.round(value.waterEdgeBlur)));
+  }
+
+  // Composite mode / blend mode.
+  if (value.blendMode) brush.blendMode = String(value.blendMode);
+
+  // Anti-alias grade (0..3).
+  if (Number.isFinite(value.antiAlias)) {
+    brush.antiAlias = Math.max(0, Math.min(3, Math.round(value.antiAlias)));
+  }
+  if (value.tipSampling) brush.tipSampling = String(value.tipSampling);
+
+  // Tip order for multi-tip brushes.
+  if (value.tipIds) brush.tipIds = String(value.tipIds);
+  if (value.tipOrder) brush.tipOrder = String(value.tipOrder);
+  if (value.tipRibbon === true) brush.tipRibbon = true;
+  if (value.tipRibbonFlip) brush.tipRibbonFlip = String(value.tipRibbonFlip);
+  if (value.tipDarken === true) brush.tipDarken = true;
+
+  // Color jitter.
+  if (Number.isFinite(value.hueJitter)) {
+    brush.hueJitter = Math.max(0, Math.min(100, Math.round(value.hueJitter)));
+  }
+  if (Number.isFinite(value.saturationJitter)) {
+    brush.saturationJitter = Math.max(0, Math.min(100, Math.round(value.saturationJitter)));
+  }
+  if (Number.isFinite(value.valueJitter)) {
+    brush.valueJitter = Math.max(0, Math.min(100, Math.round(value.valueJitter)));
+  }
+
+  // Mixing (watercolor/running color).
+  if (value.mixOn === true) brush.mixOn = true;
+  if (value.mixModel) brush.mixModel = String(value.mixModel);
+  if (Number.isFinite(value.mixAmount)) {
+    brush.mixAmount = Math.max(0, Math.min(100, Math.round(value.mixAmount)));
+  }
+  if (Number.isFinite(value.mixExtend)) {
+    brush.mixExtend = Math.max(0, Math.min(100, Math.round(value.mixExtend)));
+  }
+  if (Number.isFinite(value.mixDensity)) {
+    brush.mixDensity = Math.max(0, Math.min(100, Math.round(value.mixDensity)));
+  }
+  if (value.mixAmtPressure === true) brush.mixAmtPressure = true;
+  if (Array.isArray(value.mixAmtCurvePts)) {
+    brush.mixAmtCurvePts = value.mixAmtCurvePts.map(pt => ({
+      x: Math.max(0, Math.min(1, Number(pt.x))),
+      y: Math.max(0, Math.min(1, Number(pt.y))),
+    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    if (brush.mixAmtCurvePts.length < 2) delete brush.mixAmtCurvePts;
+  }
+  if (Array.isArray(value.mixDensCurvePts)) {
+    brush.mixDensCurvePts = value.mixDensCurvePts.map(pt => ({
+      x: Math.max(0, Math.min(1, Number(pt.x))),
+      y: Math.max(0, Math.min(1, Number(pt.y))),
+    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+    if (brush.mixDensCurvePts.length < 2) delete brush.mixDensCurvePts;
+  }
 
   return brush;
-}
-
-/**
- * Check the grain of a brush.
- *
- * The grain is a picture whose alpha is the pattern of the paper, with the
- * settings that say how strongly and how large it is drawn. It is kept the
- * same way as the picture of the tip: base64 text of a PNG.
- */
-function normalizeGrain(value, maxBase64, label) {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new ValidationError(`${label} must be an object`);
-  }
-  if (typeof value.data !== "string" || value.data.length === 0) {
-    throw new ValidationError(`${label}.data must be base64 text`);
-  }
-  if (value.data.length > maxBase64) {
-    throw new ValidationError(`${label}.data is too large`);
-  }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) {
-    throw new ValidationError(`${label}.data must be base64 text`);
-  }
-  const bytes = Buffer.from(value.data, "base64");
-  if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47) {
-    throw new ValidationError(`${label}.data must be a PNG`);
-  }
-  return {
-    data: value.data,
-    width: bytes.readUInt32BE(16),
-    height: bytes.readUInt32BE(20),
-    density: Number.isFinite(value.density) ? Math.max(0, Math.min(100, value.density)) : 100,
-    scale: Number.isFinite(value.scale) ? Math.max(1, Math.min(400, value.scale)) : 100,
-    rotate: Number.isFinite(value.rotate) ? Math.max(-360, Math.min(360, value.rotate)) : 0,
-    reverse: value.reverse === true,
-  };
 }
 
 

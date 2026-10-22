@@ -8,7 +8,6 @@ import {
   sampleEllipse,
   strokeRadii as sharedStrokeRadii,
 } from "./paint.js";
-import { grainSampler } from "./grain.js";
 import { deflateSync, inflateSync } from "./zlib.js";
 
 function parseHex(hex) {
@@ -44,40 +43,12 @@ const stampCache = new Map();
 /**
  * The way the paint of the stroke in hand goes down.
  *
- * A brush says how much paint one dab leaves (its flow), how hard the edge of
- * its tip is (its hardness), how thick the tip is (its thickness) and how far
- * apart the dabs are (its spacing). A round brush carries the same settings
- * without a picture.
+ * A brush says how far apart the dabs are (its spacing) and whether the soft
+ * edge of its tip is taken away (its binarize). A round brush carries the
+ * same settings without a picture.
  */
-const DEFAULT_STYLE = { flow: 1, hardness: 1, thickness: 1, spacing: 0.25, binarize: false };
+const DEFAULT_STYLE = { spacing: 0.25, binarize: false };
 let strokeStyle = DEFAULT_STYLE;
-
-/** The grain of the paper of the stroke in hand, unpacked. */
-let grainPicture = null;
-
-/** The pictures of the grains, unpacked, so a stroke does not unpack it again. */
-const grainCache = new Map();
-
-/** Unpack the picture of a grain into the plane of its alpha. */
-function grainPictureFor(grain) {
-  if (!grain?.data) return null;
-  const key = grain.data;
-  if (grainCache.has(key)) return grainCache.get(key);
-  let picture = null;
-  try {
-    const image = decodePng(Buffer.from(key, "base64"));
-    const alpha = new Uint8Array(image.width * image.height);
-    for (let index = 0; index < alpha.length; index += 1) {
-      alpha[index] = image.data[index * 4 + 3];
-    }
-    picture = { width: image.width, height: image.height, alpha };
-  } catch {
-    picture = null;
-  }
-  if (grainCache.size > 8) grainCache.clear();
-  grainCache.set(key, picture);
-  return picture;
-}
 
 /** The settings that shape the paint of a brush. */
 function styleOfBrush(brush) {
@@ -87,9 +58,6 @@ function styleOfBrush(brush) {
     return Math.max(low, Math.min(high, number));
   };
   return {
-    flow: percent(brush?.flow, 100, 0, 100) / 100,
-    hardness: percent(brush?.hardness, 100, 0, 100) / 100,
-    thickness: percent(brush?.thickness, 100, 10, 500) / 100,
     spacing: percent(brush?.spacing, 25, 1, 200) / 100,
     // Binarize takes the soft edge of the tip away: a pixel is either paint
     // or paper, the way Clip Studio Paint draws a hard edge.
@@ -125,7 +93,16 @@ function stampFor(brush) {
   return stamp;
 }
 
-/** Paint one pixel of the mask with a coverage that is not full. */
+/**
+ * Paint one pixel of the mask with a coverage that is not full.
+ *
+ * The dabs of a stroke lie on top of each other, and the paint of a pixel is
+ * the strongest of the dabs that touch it: a pixel that two dabs both cover
+ * is not covered twice, it is covered once. Adding the coverages up instead
+ * would make every stroke fatter than the brush is, and a thin stroke fatter
+ * than it is by a long way, because a thin stroke is made of many dabs that
+ * all touch the same pixel.
+ */
 function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
   const px = Math.round(x);
   const py = Math.round(y);
@@ -140,24 +117,19 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
   }
 
   if (erase) {
-    layer[index + 3] = 0;
+    // The eraser takes the paint away in the share of the pixel the tip
+    // covers, the way the browser's canvas takes it away: a pixel the tip
+    // only grazes keeps most of its paint.
+    const strength = alpha / 255;
+    layer[index + 3] = Math.round(layer[index + 3] * (1 - strength));
     return;
   }
 
   layer[index] = rgb[0];
   layer[index + 1] = rgb[1];
   layer[index + 2] = rgb[2];
-  if (strokeStyle.flow >= 1) {
-    // Full flow: one dab is as strong as another, so the strongest one wins.
-    if (alpha > layer[index + 3]) layer[index + 3] = alpha;
-    return;
-  }
-  // A brush with a flow below 100 leaves part of its paint with every dab,
-  // and the dabs build up on each other, the way they do in Clip Studio
-  // Paint. What is already there stays, and the dab adds to it.
-  const under = layer[index + 3] / 255;
-  const cover = (alpha / 255) * strokeStyle.flow;
-  layer[index + 3] = Math.round((under + cover * (1 - under)) * 255);
+  // The strongest dab wins: the dabs of a stroke lie on top of each other.
+  if (alpha > layer[index + 3]) layer[index + 3] = alpha;
 }
 
 /**
@@ -166,11 +138,10 @@ function setPixelAlpha(layer, width, height, x, y, rgb, alpha, erase) {
  * The image is fitted to the size of the brush, the way Clip Studio Paint
  * fits a brush texture, and its alpha is the coverage of every pixel. The
  * image keeps its own shape: it is as tall as the brush is wide, and its
- * width follows from that. A brush whose tip is thick is drawn flatter: the
- * thickness of the brush is the part of the height of the tip that is used.
+ * width follows from that.
  */
 function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
-  const boxHeight = Math.max(1, radius * 2 * strokeStyle.thickness);
+  const boxHeight = Math.max(1, radius * 2);
   const boxWidth = boxHeight * (brush.width / Math.max(1, brush.height));
   const x0 = Math.max(0, Math.floor(cx - boxWidth / 2));
   const x1 = Math.min(width - 1, Math.ceil(cx + boxWidth / 2));
@@ -193,43 +164,67 @@ function stamp(layer, width, height, cx, cy, radius, rgb, erase, brush) {
 }
 
 /**
- * Paint or erase a disc with hard edges (distance test) inside a bounding box.
+ * The share of a pixel that the tip of the brush covers.
  *
- * The tip of a round brush is a disc, flattened across the stroke by the
- * thickness of the brush, and its edge is soft when the brush is not hard: a
- * brush with a hardness of 100 paints up to its edge and stops, and one with
- * a hardness of 0 fades out from the middle.
+ * The tip of a round brush is a disc. How far the middle of the pixel is from
+ * the edge of the tip says how much of it the tip covers: a pixel the tip
+ * covers whole is full of paint, one it only grazes is barely touched, and the
+ * pixels in between carry the share in between.
+ *
+ * This is the soft edge the browser's canvas puts on a stroke, and the export
+ * has to paint it too. A file whose strokes are full pixels and empty pixels
+ * holds steps where the screen shows a curve, and Clip Studio Paint draws
+ * those steps as a staircase.
+ *
+ * `away` is the distance to the middle of the tip in the tip's own units, `dx`
+ * and `dy` the same distance in x and in y.
+ */
+function coverageOfTip(away, dx, dy, radius) {
+  // The gradient of the shape is the normal of its edge, so the distance to
+  // the edge in pixels is the distance in the shape's own units divided by it.
+  // The shape is `distance / radius`, so its gradient is the distance divided
+  // by the radius once more.
+  const gx = dx / radius;
+  const gy = dy / radius;
+  const gradient = Math.sqrt(gx * gx + gy * gy);
+  if (gradient < 1e-9) {
+    // The pixel is at the middle of the tip, so it is covered by the tip
+    // whole, unless the tip is smaller than a pixel.
+    return Math.min(1, Math.PI * radius * radius);
+  }
+  // Negative inside the tip, positive outside it.
+  const distance = (away - 1) / gradient;
+  return Math.max(0, Math.min(1, 0.5 - distance));
+}
+
+/**
+ * Paint or erase a disc inside a bounding box.
+ *
+ * The tip of a round brush is a disc, and the edge of the tip is soft: the
+ * pixel the edge falls in carries the share of it that the tip covers, the
+ * way the browser's canvas paints the same stroke.
  */
 function disc(layer, width, height, cx, cy, radius, rgb, erase) {
   if (brushStamp) {
     stamp(layer, width, height, cx, cy, radius, rgb, erase, brushStamp);
     return;
   }
-  const radiusX = radius;
-  const radiusY = Math.max(0.25, radius * strokeStyle.thickness);
-  const x0 = Math.max(0, Math.floor(cx - radiusX));
-  const x1 = Math.min(width - 1, Math.ceil(cx + radiusX));
-  const y0 = Math.max(0, Math.floor(cy - radiusY));
-  const y1 = Math.min(height - 1, Math.ceil(cy + radiusY));
-  const hard = strokeStyle.hardness >= 1;
-  const hardness = strokeStyle.hardness;
+  // The tip reaches a little past its own radius: the pixel the edge of the
+  // tip falls in is painted with the share of it that the tip covers.
+  const x0 = Math.max(0, Math.floor(cx - radius) - 1);
+  const x1 = Math.min(width - 1, Math.ceil(cx + radius) + 1);
+  const y0 = Math.max(0, Math.floor(cy - radius) - 1);
+  const y1 = Math.min(height - 1, Math.ceil(cy + radius) + 1);
 
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
-      const dx = (x + 0.5 - cx) / radiusX;
-      const dy = (y + 0.5 - cy) / radiusY;
+      const dx = (x + 0.5 - cx) / radius;
+      const dy = (y + 0.5 - cy) / radius;
       const away = Math.sqrt(dx * dx + dy * dy);
-      if (away > 1) continue;
-      if (hard) {
-        // A flow below 100 leaves part of the paint with this dab, so even a
-        // hard tip goes through the same door as a soft one.
-        setPixelAlpha(layer, width, height, x, y, rgb, 255, erase);
-        continue;
-      }
-      // The edge of a soft brush is a fade from the hardness of the brush out
-      // to its edge.
-      const cover = away <= hardness ? 1 : (1 - away) / Math.max(1e-6, 1 - hardness);
-      setPixelAlpha(layer, width, height, x, y, rgb, Math.round(255 * Math.min(1, cover)), erase);
+      // The share of the pixel the tip covers.
+      const cover = coverageOfTip(away, dx, dy, radius);
+      if (cover <= 0) continue;
+      setPixelAlpha(layer, width, height, x, y, rgb, Math.round(255 * cover), erase);
     }
   }
 }
@@ -240,11 +235,11 @@ export const MIN_PRESSURE_SCALE = 0.2;
 /**
  * The width of a stroke at every one of its points.
  *
- * The ends of the stroke are thin, the way the brush of Clip Studio Paint
- * tapers in and out.
+ * The width follows the pressure of the hand, the way the brush of Clip Studio
+ * Paint does.
  */
 function strokeRadii(stroke) {
-  return sharedStrokeRadii(stroke, stroke.taper ?? 0);
+  return sharedStrokeRadii(stroke);
 }
 
 /** Paint or erase a segment by sampling discs with linearly interpolated radius. */
@@ -445,7 +440,6 @@ function paintStrokeInto(target, width, height, stroke, rgb, asMask = false) {
   const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
   brushStamp = stampFor(brush);
   strokeStyle = styleOfBrush(brush);
-  grainPicture = grainPictureFor(brush?.grain);
 
   if (stroke.kind === "line") {
     segment(
@@ -504,28 +498,7 @@ function paintStrokeInto(target, width, height, stroke, rgb, asMask = false) {
 function needsMaskPass(stroke) {
   if (stroke.opacity !== undefined && stroke.opacity < 1) return true;
   if (stroke.blend !== undefined && stroke.blend !== "normal") return true;
-  // A stroke that is drawn on paper with a grain is painted into a mask of
-  // its own, so that the grain can be taken out of it in one place.
-  const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
-  return Boolean(brush?.grain?.data);
-}
-
-/**
- * Take the grain of the paper out of a stroke that has been painted into a
- * mask: the paint is kept where the grain holds ink, and is taken away where
- * the paper is clear.
- */
-function applyGrainToMask(mask, width, height, grain) {
-  const picture = grainPictureFor(grain);
-  if (!picture) return;
-  const ink = grainSampler(picture, grain);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const at = (y * width + x) * 4 + 3;
-      if (mask[at] === 0) continue;
-      mask[at] = Math.round(mask[at] * ink(x + 0.5, y + 0.5));
-    }
-  }
+  return false;
 }
 
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
@@ -587,8 +560,6 @@ function paintDrawingInner(width, height, drawing) {
     if (needsMaskPass(stroke)) {
       const mask = new Uint8Array(width * height * 4);
       paintStrokeInto(mask, width, height, stroke, rgb, true);
-      const brush = "brush" in stroke ? stroke.brush ?? null : drawingBrush;
-      if (brush?.grain?.data) applyGrainToMask(mask, width, height, brush.grain);
       if (stroke.eraser === true) eraseStrokeFrom(paint, mask, stroke.opacity ?? 1);
       else blendStrokeOver(paint, mask, stroke.opacity ?? 1, stroke.blend ?? "normal");
       continue;
@@ -714,6 +685,26 @@ export function cropToCamera(rgba, project, frame = project.currentFrame) {
     }
   }
   return buffer;
+}
+
+/**
+ * The transforms that move a layer: the ones of the folders above it, and
+ * its own.
+ *
+ * A cell that is a folder of layers is moved as a whole, so the layers
+ * inside it are moved with it.
+ */
+export function transformsOf(project, index) {
+  const transforms = [];
+  const seen = new Set();
+  let at = index;
+  while (at >= 0 && at < project.layers.length && !seen.has(at)) {
+    seen.add(at);
+    const layer = project.layers[at];
+    if (layer?.transform) transforms.unshift(layer.transform);
+    at = Number.isInteger(layer?.parent) ? layer.parent : -1;
+  }
+  return transforms;
 }
 
 /**
@@ -887,10 +878,8 @@ export function scaleRgb(rgb, width, height, outWidth, outHeight) {
 /**
  * Scale a straight-alpha RGBA picture.
  *
- * The grain of a brush is kept small: a paper grain repeats over the canvas,
- * so a picture of a couple of hundred pixels is enough, and a small picture
- * keeps the file of a drawing small. The picture is sampled with a bilinear
- * filter, so a grain that is made smaller keeps its speckle.
+ * The picture is sampled with a bilinear filter, so a picture that is made
+ * smaller keeps its speckle.
  */
 export function scaleRgba(rgba, width, height, outWidth, outHeight) {
   if (outWidth === width && outHeight === height) return rgba;
@@ -964,7 +953,6 @@ export function renderLayerRgba(project, layer, frame = project.currentFrame) {
 export function renderDrawingRgba(project, drawing) {
   return paintDrawing(project.width, project.height, drawing);
 }
-
 /** Encode an RGBA buffer as a PNG (colour type 6, 8 bits per channel). */
 export function encodeRgbaPng(width, height, data) {
   if (data.length !== width * height * 4) {

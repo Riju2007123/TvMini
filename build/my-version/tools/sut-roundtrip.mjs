@@ -33,9 +33,6 @@ const bytes = await writeSutBrush({
   name: "TVMini round brush",
   size: 24,
   opacity: 80,
-  flow: 60,
-  hardness: 50,
-  thickness: 90,
   texture: { data: png.toString("base64") },
 });
 
@@ -47,7 +44,7 @@ const brush = await readSutBrush(bytes);
 console.log("read back:");
 console.log(`  name: ${brush.name}`);
 console.log(`  size: ${brush.size}`);
-console.log(`  flow: ${brush.flow}, hardness: ${brush.hardness}, thickness: ${brush.thickness}`);
+console.log(`  opacity: ${brush.opacity}`);
 console.log(`  the picture: ${brush.texture.width} by ${brush.texture.height}`);
 
 // A brush with no picture at all is still a brush.

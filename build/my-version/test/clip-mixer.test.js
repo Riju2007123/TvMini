@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "../public/core/bytes.js";
-import { readActionBlob, readCelCurve, readTrackRange } from "../public/core/clip-animation.js";
+import { readActionBlob, readCameraCurves, readCelCurve, readTrackRange } from "../public/core/clip-animation.js";
 import {
   buildCurveRecord,
   buildDocument,
@@ -17,6 +17,7 @@ import {
   replaceCurve,
   setTrackEnd,
   setTrackRange,
+  spliceCameraPlan,
   spliceCelPlan,
   withStrings,
 } from "../public/core/clip-mixer.js";
@@ -88,6 +89,51 @@ function oldDocumentWith(keys, { end = 32 } = {}) {
     rangeRecord(pool, "Rate", 30),
   ]);
   return buildDocument({ version: "0100", pool, body: Buffer.concat([range, curve]) });
+}
+
+/**
+ * A camera track document: the six curves a camera carries.
+ *
+ * A camera track is a track document like any other, but its curves are the
+ * half size of the frame (`ImageCenter`), where that frame sits
+ * (`ImagePosition`), the turn of the camera (`ImageRotation`) and its zoom
+ * (`ImageScale`).
+ */
+function cameraDocument(keys, { end = 60, old = false } = {}) {
+  const pool = withStrings(POOL, [
+    "Axis", "ImageCenter", "ImagePosition", "ImageRotation", "ImageScale", "X", "Y",
+  ]);
+  const type = old ? "Single[]" : "Double[]";
+  const series = [
+    ["ImageCenter", "X", keys.map((key) => key.width / 2)],
+    ["ImageCenter", "Y", keys.map((key) => key.height / 2)],
+    ["ImagePosition", "X", keys.map((key) => key.x + key.width / 2)],
+    ["ImagePosition", "Y", keys.map((key) => key.y + key.height / 2)],
+    ["ImageRotation", null, keys.map((key) => key.rotation)],
+    ["ImageScale", null, keys.map((key) => key.scale)],
+  ];
+  const records = series.map(([kind, axis, values]) =>
+    buildCurveRecord({
+      pool,
+      kind,
+      axis,
+      fields: [
+        { name: "Frame", type, values: keys.map((key) => key.time) },
+        { name: "Value", type, values },
+      ],
+      meta: !old,
+    }),
+  );
+  const range = Buffer.concat([
+    rangeRecord(pool, "Start", 0),
+    rangeRecord(pool, "End", end),
+    rangeRecord(pool, "Rate", 60),
+  ]);
+  return buildDocument({
+    version: old ? "0100" : "0110",
+    pool,
+    body: Buffer.concat([range, ...records]),
+  });
 }
 
 function rangeRecord(pool, name, value) {
@@ -367,4 +413,114 @@ test("a plan is written into a track that has no curve yet", () => {
   const found = locateCurve(parseActionDocument(spliced), "ImageCelName");
   assert.ok(found);
   assert.deepEqual(found.fields.get("Frame").values, [0, 10]);
+});
+
+/** The camera of a project, kept as a window: what the six curves fold into. */
+const CAMERA_KEYS = [
+  { time: 0, x: 10, y: 20, width: 100, height: 50, rotation: 0, scale: 100 },
+  { time: 50, x: 60, y: 30, width: 200, height: 100, rotation: 15, scale: 100 },
+];
+
+test("a camera plan is written as the six curves of a camera", () => {
+  const document = parseActionDocument(cameraDocument(CAMERA_KEYS));
+  const spliced = parseActionDocument(
+    spliceCameraPlan(document, {
+      keys: [
+        { frame: 1, x: 10, y: 20, width: 100, height: 50, rotation: 0 },
+        { frame: 11, x: 60, y: 30, width: 200, height: 100, rotation: 15 },
+      ],
+      frameRate: 12,
+      startFrame: 1,
+    }),
+  );
+
+  const camera = readCameraCurves(spliced);
+  assert.ok(camera, "the written track is a camera track");
+  // Twelve frames a second, so a frame is five ticks: frame 11 is tick 50.
+  assert.deepEqual(camera.keys.map((key) => key.time), [0, 50]);
+  // The frame the camera looks through is the window itself at 100%.
+  assert.deepEqual(camera.keys.map((key) => key.centreX), [50, 100]);
+  assert.deepEqual(camera.keys.map((key) => key.centreY), [25, 50]);
+  assert.deepEqual(camera.keys.map((key) => key.positionX), [60, 160]);
+  assert.deepEqual(camera.keys.map((key) => key.positionY), [45, 80]);
+  assert.deepEqual(camera.keys.map((key) => key.rotation), [0, 15]);
+  assert.deepEqual(camera.keys.map((key) => key.scale), [100, 100]);
+});
+
+test("a camera writes back the window the reader folded it into", () => {
+  // The reader folds centre and zoom into a window; the writer picks a zoom
+  // of 100%, where the fold gives the same window back.
+  const written = parseActionDocument(
+    spliceCameraPlan(parseActionDocument(cameraDocument(CAMERA_KEYS)), {
+      keys: [
+        { frame: 1, x: 10, y: 20, width: 100, height: 50, rotation: 0 },
+        { frame: 11, x: 60, y: 30, width: 200, height: 100, rotation: 15 },
+      ],
+      frameRate: 12,
+    }),
+  );
+  const camera = readCameraCurves(written);
+  const windows = camera.keys.map((key) => {
+    const zoom = key.scale / 100;
+    return {
+      x: key.positionX - key.centreX * zoom,
+      y: key.positionY - key.centreY * zoom,
+      width: key.centreX * 2 * zoom,
+      height: key.centreY * 2 * zoom,
+      rotation: key.rotation,
+    };
+  });
+  assert.deepEqual(windows.map((window) => window.x), [10, 60]);
+  assert.deepEqual(windows.map((window) => window.y), [20, 30]);
+  assert.deepEqual(windows.map((window) => window.width), [100, 200]);
+  assert.deepEqual(windows.map((window) => window.height), [50, 100]);
+  assert.deepEqual(windows.map((window) => window.rotation), [0, 15]);
+});
+
+test("a camera plan is written into the older flavour of a track too", () => {
+  const document = parseActionDocument(cameraDocument(CAMERA_KEYS, { old: true }));
+  const spliced = parseActionDocument(
+    spliceCameraPlan(document, {
+      keys: [
+        { frame: 1, x: 10, y: 20, width: 100, height: 50 },
+        { frame: 11, x: 60, y: 30, width: 200, height: 100 },
+      ],
+      frameRate: 12,
+    }),
+  );
+  // The older flavour keeps single precision arrays, and its records carry no
+  // size words, so the reader of the newer flavour cannot read it; the curve
+  // locator can find it either way.
+  const centre = locateCurve(spliced, "ImageCenter", "X");
+  assert.ok(centre);
+  assert.equal(centre.fields.get("Frame").type, "Single[]");
+  assert.deepEqual(centre.fields.get("Frame").values, [0, 50]);
+  assert.deepEqual(centre.fields.get("Value").values, [50, 100]);
+  const scale = locateCurve(spliced, "ImageScale");
+  assert.deepEqual(scale.fields.get("Value").values, [100, 100]);
+});
+
+test("a camera plan without any key is refused", () => {
+  const document = parseActionDocument(cameraDocument(CAMERA_KEYS));
+  assert.throws(
+    () => spliceCameraPlan(document, { keys: [], frameRate: 12 }),
+    /at least one key/,
+  );
+});
+
+test("a camera plan is written into a track that has no camera curve yet", () => {
+  const pool = withStrings(POOL, [
+    "Axis", "ImageCenter", "ImagePosition", "ImageRotation", "ImageScale", "X", "Y",
+  ]);
+  const empty = buildDocument({ pool, body: rangeRecord(pool, "End", 0) });
+  const written = parseActionDocument(
+    spliceCameraPlan(parseActionDocument(empty), {
+      keys: [{ frame: 1, x: 4, y: 6, width: 20, height: 10 }],
+      frameRate: 12,
+    }),
+  );
+  const camera = readCameraCurves(written);
+  assert.ok(camera);
+  assert.deepEqual(camera.keys.map((key) => key.centreX), [10]);
+  assert.deepEqual(camera.keys.map((key) => key.positionX), [14]);
 });

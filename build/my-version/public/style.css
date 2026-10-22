@@ -1227,16 +1227,6 @@ body.hide-inspector.hide-stage .workspace {
   color: var(--muted);
 }
 
-/* A row that does nothing right now (the size of a grain that is off) is
-   greyed and its control is asleep, the way MoArt greys a row. */
-.prop-row.prop-disabled .field {
-  opacity: 0.45;
-}
-
-.prop-row.prop-disabled input {
-  cursor: default;
-}
-
 /* The bar that opens the drawer of put-away rows. */
 .prop-adv-bar button {
   display: flex;
@@ -2441,6 +2431,35 @@ body.pane-dragging .pane-header {
   line-height: var(--tl-row-h);
   text-align: center;
   cursor: pointer;
+  /* The handle of the cell sits on its right edge. */
+  position: relative;
+}
+
+/* The handle on the right of a cell: it makes the cell longer or shorter,
+   the way the edge of a cell is pulled in Clip Studio Paint. */
+.tl-cell-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.tl-cell-handle:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* The first frame of a cell is the handle that moves it. */
+.tl-cell.movable {
+  cursor: grab;
+}
+
+body.cell-dragging,
+body.cell-dragging .tl-cell.movable {
+  cursor: grabbing;
 }
 
 .tl-cell.empty:hover {
