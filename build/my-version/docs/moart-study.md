@@ -100,6 +100,16 @@ shipped earlier. Includes eraser touch-draw toggle.
   the file is kept. Every brush in the panel can be written out again as a
   Clip Studio Paint brush, which is a file of its own (the format is
   written down in `docs/sut-format-study.md`).
+- **A stroke remembers its own brush** (2026-10-22). A brush belongs to the
+  stroke that was made with it, the way it does in Clip Studio Paint, so
+  picking another brush does not repaint the strokes that are already on the
+  paper. A stroke that was made without a picture says so, so that it is not
+  given one later.
+- **Every tool has a section of its own in the property panel** (2026-10-22),
+  the way MoArt has: the brush shows the brush, the pencil shows the pencil,
+  the eraser shows the eraser, and so on, with a note under the settings
+  that says what the tool does. The settings of each tool are kept apart,
+  so the width of the pencil does not change the width of the brush.
 
 Still not adopted: the **per-preset preview magnification** (`previewSizeMul`,
 0.25–2.0) of the brush thumbnails in the library, and building the paint
@@ -401,6 +411,18 @@ This batch put the shell on the recorded tokens.
   used to keep the wheel behind a button that opened a floating panel.
   The wheel sits in the panel now, at 176px, and follows the colour from
   the start.
+- **The wheel follows the cursor, and it follows the colour.** The ring is
+  drawn with the arc of a hue at the angle of that hue, and the point that
+  is picked reads the hue at that same angle, so the marker of the ring
+  lands on the arc that was clicked and the colour that comes out is the
+  colour of that arc — the marker is never a quarter turn away from the
+  cursor. The square is asked before the ring, so its corner, which
+  reaches the inner edge of the ring, is a click in the square and not a
+  change of the hue. The wheel also follows the colour of the strokes
+  wherever that is changed — the colour picker of the browser, the
+  eyedropper or the hex field — so the marker of the ring and the dot of
+  the square always stand for the colour that is in use. A grey has no hue
+  of its own, so the ring keeps the hue it had instead of jumping to red.
 - **The stage zooms around the pointer.** The point of the document under
   the pointer is worked out before the zoom, and the document is placed
   afterwards so that the same point lands under the pointer again. Each

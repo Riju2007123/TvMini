@@ -306,33 +306,33 @@
             </button>
           </div>
 
-          <div class="tool-section-title">Brush</div>
+          <div class="tool-section-title" id="toolPropsTitle">Brush</div>
           <div class="tool-props">
-            <div class="brush-image-row">
+            <div class="brush-image-row" id="toolBrushRow">
               <span id="brushImageName" class="brush-image-name">the round tip</span>
               <select id="brushLibrary" title="The brushes you have saved"></select>
             </div>
-            <div class="brush-actions">
+            <div class="brush-actions" id="toolBrushActionsRow">
               <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
               <button id="brushPanelButton" type="button" title="Open the brush panel: bring in a brush, look at the brushes you have and write one out again">Brushes…</button>
             </div>
-            <label class="field">
+            <label class="field" id="toolWidthRow">
               <span>Width <output id="widthValue">6</output></span>
               <input id="width" type="range" min="1" max="300" value="6" />
             </label>
-            <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
+            <label class="field" id="toolStabilizerRow" title="Smooths shaky lines into calmer curves (0 = off)">
               <span>Stabiliser <output id="stabilizerValue">0</output></span>
               <input id="stabilizer" type="range" min="0" max="100" step="1" value="0" />
             </label>
-            <label class="field" title="Takes the tremble out of the line: the points that do not bend it are taken away, the way the pencil of Flash does it (0 = off)">
+            <label class="field" id="toolSmoothRow" title="Takes the tremble out of the line: the points that do not bend it are taken away, the way the pencil of Flash does it (0 = off)">
               <span>Smooth <output id="smoothValue">50</output></span>
               <input id="smooth" type="range" min="0" max="100" step="1" value="50" />
             </label>
-            <label class="field" title="Transparency of the whole stroke (100 = solid)">
+            <label class="field" id="toolOpacityRow" title="Transparency of the whole stroke (100 = solid)">
               <span>Stroke opacity</span>
               <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />
             </label>
-            <label class="field" title="How new strokes mix with the paint under them">
+            <label class="field" id="toolBlendRow" title="How new strokes mix with the paint under them">
               <span>Blend</span>
               <select id="strokeBlend">
                 <option value="normal" selected>Normal</option>
@@ -340,10 +340,11 @@
                 <option value="screen">Screen</option>
               </select>
             </label>
+            <p class="tool-note" id="toolNote" hidden></p>
           </div>
 
-          <div class="tool-section-title">Pen</div>
-          <div class="tool-props">
+          <div class="tool-section-title" id="penSectionTitle">Pen</div>
+          <div class="tool-props" id="penSection">
             <label class="field checkbox">
               <input id="pressure" type="checkbox" checked />
               <span>Pen pressure</span>

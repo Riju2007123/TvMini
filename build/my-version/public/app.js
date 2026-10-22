@@ -3,10 +3,18 @@ import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { decodeSound, soundPeaks } from "./audio.js";
-import { floodFillRgba, parseHexColor, smoothPoint, strokePathGroups } from "./core/paint.js";
+import { floodFillRgba, parseHexColor, smoothPoint, strokeOutline, strokePathGroups } from "./core/paint.js";
 import { smoothRadius, smoothStroke } from "./core/smooth.js";
 import { brushImageFromBytes } from "./core/brush.js";
 import { readSutBrush } from "./core/sut.js";
+import {
+  WHEEL_SIZE,
+  hsvToRgb,
+  huePoint,
+  rgbToHsv,
+  wheelLayout,
+  wheelPick,
+} from "./core/wheel.js";
 import {
   cameraAt,
   cameraCorners,
@@ -236,13 +244,21 @@ const state = {
   audioPeaks: null,
   audioElement: null,
   // Line smoothing while drawing (0 = off, up to 10 = very smooth).
-  stabilizer: 0,
   smoothedPoint: null,
-  // The smoothing of the line itself: the points that do not bend the line
-  // are taken away, the way the pencil of Flash does it (0 = off).
-  smooth: 50,
   // The raw points of the stroke in hand, before the smoothing.
   rawPoints: [],
+  // The settings of each tool, so that one tool does not change the other:
+  // how wide it draws, how steady the line is, how strong it paints and how
+  // it mixes with the paint under it.
+  toolSettings: {
+    brush: { width: 6, stabilizer: 0, smooth: 50, opacity: 100, blend: "normal" },
+    pencil: { width: 3, stabilizer: 0, smooth: 70, opacity: 100, blend: "normal" },
+    eraser: { width: 30, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+    line: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+    rect: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+    ellipse: { width: 3, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+    fill: { width: 6, stabilizer: 0, smooth: 0, opacity: 100, blend: "normal" },
+  },
   homeDir: ".",
   playing: false,
   playTimer: null,
@@ -399,6 +415,7 @@ quickSwatch?.addEventListener("click", () => {
 quickWidth?.addEventListener("input", () => {
   widthInput.value = quickWidth.value;
   widthValue.textContent = quickWidth.value;
+  toolSettings().width = Number(quickWidth.value);
   syncQuickBar();
 });
 
@@ -951,6 +968,19 @@ function strokeRadius(stroke, point) {
 }
 
 /**
+ * The brush of a stroke.
+ *
+ * A stroke remembers the brush it was made with, so that changing the brush
+ * does not change the strokes that are already on the paper. A stroke that
+ * was made before strokes remembered their brush takes the brush of the
+ * drawing.
+ */
+function brushOfStroke(stroke, fallback) {
+  if ("brush" in stroke) return stroke.brush ?? null;
+  return fallback ?? null;
+}
+
+/**
  * Paint strokes into a context.
  *
  * `brush` is the brush the strokes were made with. A brush that has a
@@ -981,7 +1011,7 @@ function drawStrokesInto(ctx, strokes, brush = null) {
         blendCanvas.height = canvasHeight;
       }
       blendCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight, brush);
+      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight, brushOfStroke(stroke, brush));
       ctx.globalAlpha = opacity;
       ctx.globalCompositeOperation =
         stroke.eraser === true ? "destination-out" : blend === "normal" ? "source-over" : blend;
@@ -991,7 +1021,7 @@ function drawStrokesInto(ctx, strokes, brush = null) {
       continue;
     }
 
-    drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush);
+    drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brushOfStroke(stroke, brush));
   }
 
   ctx.globalCompositeOperation = "source-over";
@@ -1195,19 +1225,29 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null) 
     return;
   }
 
-  // Pressure strokes are drawn segment by segment with an interpolated
-  // width. Segments that end up with the same width are drawn as one
-  // path: a draw call for every segment is what makes the brush slow on
-  // a big canvas, and a mouse gives the same pressure to every point, so
-  // the whole stroke is one path in that case.
-  for (const group of strokePathGroups(stroke.points, radii)) {
-    ctx.lineWidth = group.width;
+  // A pressure stroke is one shape: the left side of the line and the
+  // right side of it, filled together. The width then changes the way the
+  // width of a pen changes, instead of in steps, and the edge of the line
+  // is one clean edge. The export draws the same line the same way, so
+  // what is on the stage is what is written in the file.
+  const { left, right } = strokeOutline(stroke.points, radii);
+  ctx.beginPath();
+  ctx.moveTo(left[0][0], left[0][1]);
+  for (const point of left.slice(1)) ctx.lineTo(point[0], point[1]);
+  for (const point of right.reverse()) ctx.lineTo(point[0], point[1]);
+  ctx.closePath();
+  ctx.fill();
+  // The ends of the line are round, the way the end of a pen stroke is.
+  for (const index of [0, stroke.points.length - 1]) {
     ctx.beginPath();
-    ctx.moveTo(stroke.points[group.from][0], stroke.points[group.from][1]);
-    for (let i = group.from + 1; i <= group.to; i += 1) {
-      ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
-    }
-    ctx.stroke();
+    ctx.arc(
+      stroke.points[index][0],
+      stroke.points[index][1],
+      radii[index],
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
   }
   ctx.globalCompositeOperation = "source-over";
 }
@@ -4403,6 +4443,19 @@ canvasScroll.addEventListener("pointerdown", (event) => {
   panStage(event);
 });
 
+/**
+ * The readings of the pen, the last few of them.
+ *
+ * The pen tells how hard it is pressed many times a second, and the
+ * readings jump about by a little every time. The width of the line would
+ * jump with them, so the last few readings are averaged, the way the line
+ * itself is smoothed.
+ */
+const pressureReadings = [];
+
+/** How many readings are averaged. */
+const PRESSURE_WINDOW = 4;
+
 function pressureFor(event) {
   if (!state.pressureEnabled) return null;
   if (event.pointerType !== "pen") return null;
@@ -4411,7 +4464,18 @@ function pressureFor(event) {
   if (!Number.isFinite(value)) return null;
   // A pen touching the tablet can briefly report 0; keep a visible hairline.
   // The remembered gain scales the recorded pressure; 100% is neutral.
-  return Math.min(1, Math.max(0.05, value * state.pressureGain));
+  const scaled = Math.min(1, Math.max(0.05, value * state.pressureGain));
+
+  pressureReadings.push(scaled);
+  if (pressureReadings.length > PRESSURE_WINDOW) pressureReadings.shift();
+  let sum = 0;
+  for (const reading of pressureReadings) sum += reading;
+  return sum / pressureReadings.length;
+}
+
+/** The readings of the pen are forgotten when a stroke ends. */
+function forgetPressure() {
+  pressureReadings.length = 0;
 }
 
 function drawPoint(event) {
@@ -4491,9 +4555,10 @@ canvas.addEventListener("pointerdown", (event) => {
   const before = snapshot();
   const existing = drawingAt(layer, state.project.currentFrame);
   const drawing = existing || ensureDrawing(layer, state.project.currentFrame);
+  const settings = toolSettings();
   const stroke = {
     color: colorInput.value,
-    width: Number(widthInput.value),
+    width: settings.width,
     points: [drawPoint(event)],
   };
   if (state.tool === "eraser") stroke.eraser = true;
@@ -4510,12 +4575,26 @@ canvas.addEventListener("pointerdown", (event) => {
     stroke.points.push(drawPoint(event));
   } else if (state.tool === "fill") {
     stroke.kind = "fill";
-  } else if (state.tool === "brush") {
-    // Per-stroke finish applies to painted strokes (not eraser/fill).
-    if (Number(strokeOpacityInput.value) < 100) {
-      stroke.opacity = Number(strokeOpacityInput.value) / 100;
-    }
-    if (strokeBlendSelect.value !== "normal") stroke.blend = strokeBlendSelect.value;
+  }
+  if (state.tool === "brush") {
+    // A stroke remembers the brush it was made with, the way Clip Studio
+    // Paint does. Changing the brush afterwards therefore does not change
+    // the strokes that are already on the paper. A stroke that was made
+    // without a picture says so, so that it is not given one later.
+    const brush = currentBrush();
+    stroke.brush = brush
+      ? {
+          data: brush.data,
+          size: brush.size ?? null,
+          opacity: brush.opacity ?? null,
+        }
+      : null;
+  }
+  // The opacity and the blend belong to every tool that paints, and not to
+  // the fill, which floods the region with the colour as it is.
+  if (state.tool !== "fill") {
+    if (settings.opacity < 100) stroke.opacity = settings.opacity / 100;
+    if (settings.blend !== "normal") stroke.blend = settings.blend;
   }
   state.smoothedPoint = stroke.points[stroke.points.length - 1];
   // The raw points of the stroke in hand, so the smoothing can be laid
@@ -4560,7 +4639,7 @@ canvas.addEventListener("pointermove", (event) => {
     // point so shaky input becomes a smoother path (higher = smoother).
     // The slider runs from 0 to 100; the strength of the easing runs from
     // 0 to 10, so the slider has a tenth of the steps of the old one.
-    const smoothed = smoothPoint(state.smoothedPoint, point, state.stabilizer / 10);
+    const smoothed = smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10);
     state.smoothedPoint = smoothed;
 
     const last = state.drawing.points[state.drawing.points.length - 1];
@@ -4573,7 +4652,7 @@ canvas.addEventListener("pointermove", (event) => {
     // of Flash does it: the shape of the line stays, only the trembling of
     // the hand is gone. The line that is shown is the line that will be
     // left behind.
-    state.drawing.points = smoothStroke(state.rawPoints, smoothRadius(state.smooth));
+    state.drawing.points = smoothStroke(state.rawPoints, smoothRadius(toolSettings().smooth));
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
@@ -4593,6 +4672,7 @@ function endStroke() {
   if (!state.drawing) return;
   state.drawing = null;
   state.rawPoints = [];
+  forgetPressure();
 
   const before = state.strokeBefore;
   const wasNew = state.strokeWasNew;
@@ -4614,14 +4694,20 @@ canvas.addEventListener("pointercancel", endStroke);
 
 widthInput.addEventListener("input", () => {
   widthValue.textContent = widthInput.value;
+  // The width belongs to the tool in the hand, so the pencil keeps its own.
+  toolSettings().width = Number(widthInput.value);
   syncQuickBar();
   // The shape of the brush under the pointer grows and shrinks with the
   // width, so it is drawn again at once.
   drawOverlay();
 });
 
-colorInput.addEventListener("input", () => {
-  syncQuickBar();
+strokeOpacityInput.addEventListener("input", () => {
+  toolSettings().opacity = Number(strokeOpacityInput.value) || 100;
+});
+
+strokeBlendSelect.addEventListener("change", () => {
+  toolSettings().blend = strokeBlendSelect.value;
 });
 
 pressureInput.addEventListener("change", () => {
@@ -4657,6 +4743,125 @@ const TOOL_STATUS = {
   camera: "Camera — drag the frame to aim the shot, drag a corner to resize (C)",
 };
 
+/**
+ * What each tool is called in the property panel, and what it shows there.
+ *
+ * Every tool has a section of its own, the way MoArt has: the brush shows
+ * the brush, the pencil shows the pencil, and so on. The settings of each
+ * tool are kept apart, so the width of the pencil does not change the width
+ * of the brush.
+ */
+const TOOL_PROPS = {
+  brush: {
+    title: "Brush",
+    rows: ["brush", "width", "stabilizer", "smooth", "opacity", "blend"],
+    note: "",
+  },
+  pencil: {
+    title: "Pencil",
+    rows: ["width", "smooth", "opacity", "blend"],
+    note: "A thin line with a hard edge, the way the pencil of Flash draws it.",
+  },
+  eraser: {
+    title: "Eraser",
+    rows: ["width"],
+    note: "The eraser takes the paint away and shows the layer below.",
+  },
+  line: {
+    title: "Line",
+    rows: ["width", "opacity", "blend"],
+    note: "Drag from one point to another.",
+  },
+  rect: {
+    title: "Rectangle",
+    rows: ["width", "opacity", "blend"],
+    note: "Drag from one corner to the opposite one.",
+  },
+  ellipse: {
+    title: "Ellipse",
+    rows: ["width", "opacity", "blend"],
+    note: "Drag the outline of the ellipse.",
+  },
+  fill: {
+    title: "Fill",
+    rows: [],
+    note: "Click a region to fill it with the colour.",
+  },
+  pick: {
+    title: "Pick a colour",
+    rows: [],
+    note: "Click the canvas to take the colour that is there.",
+  },
+  camera: {
+    title: "Camera",
+    rows: [],
+    note: "The frame of the camera is in the Inspector on the right.",
+  },
+};
+
+const toolPropsTitle = document.getElementById("toolPropsTitle");
+const toolNote = document.getElementById("toolNote");
+const penSectionTitle = document.getElementById("penSectionTitle");
+const penSection = document.getElementById("penSection");
+const toolPropRows = {
+  brush: [document.getElementById("toolBrushRow"), document.getElementById("toolBrushActionsRow")],
+  width: document.getElementById("toolWidthRow"),
+  stabilizer: document.getElementById("toolStabilizerRow"),
+  smooth: document.getElementById("toolSmoothRow"),
+  opacity: document.getElementById("toolOpacityRow"),
+  blend: document.getElementById("toolBlendRow"),
+};
+
+/** The settings of the tool in the hand. */
+function toolSettings() {
+  return state.toolSettings[state.tool] ?? state.toolSettings.brush;
+}
+
+/**
+ * Put the settings of the tool in the hand into the panel.
+ *
+ * The panel shows the section of the tool that is in the hand, so the brush
+ * shows the brush and the pencil shows the pencil.
+ */
+function showToolProps() {
+  const props = TOOL_PROPS[state.tool] ?? TOOL_PROPS.brush;
+  const settings = toolSettings();
+
+  toolPropsTitle.textContent = props.title;
+  widthInput.value = String(settings.width);
+  widthValue.textContent = String(settings.width);
+  stabilizerInput.value = String(settings.stabilizer);
+  stabilizerValue.textContent = String(settings.stabilizer);
+  smoothInput.value = String(settings.smooth);
+  smoothValue.textContent = String(settings.smooth);
+  strokeOpacityInput.value = String(settings.opacity);
+  strokeBlendSelect.value = settings.blend;
+
+  for (const [name, row] of Object.entries(toolPropRows)) {
+    const shown = props.rows.includes(name);
+    for (const element of Array.isArray(row) ? row : [row]) {
+      if (element) element.hidden = !shown;
+    }
+  }
+  toolNote.hidden = !props.note;
+  toolNote.textContent = props.note;
+  // The stylus is only of use to the tools that draw a line.
+  const draws = state.tool !== "pick" && state.tool !== "camera" && state.tool !== "fill";
+  penSectionTitle.hidden = !draws;
+  penSection.hidden = !draws;
+  syncQuickBar();
+}
+
+/** Take the settings from the panel into the tool in the hand. */
+function saveToolProps() {
+  const settings = toolSettings();
+  settings.width = Math.max(1, Math.min(300, Number(widthInput.value) || settings.width));
+  settings.stabilizer = Math.max(0, Math.min(100, Number(stabilizerInput.value) || 0));
+  settings.smooth = Math.max(0, Math.min(100, Number(smoothInput.value) || 0));
+  settings.opacity = Math.max(1, Math.min(100, Number(strokeOpacityInput.value) || 100));
+  settings.blend = strokeBlendSelect.value;
+}
+
 function selectTool(tool) {
   state.tool = tool;
   const picking = tool === "pick";
@@ -4670,6 +4875,9 @@ function selectTool(tool) {
   canvas.classList.toggle("picking", picking);
   canvas.classList.toggle("camera-tool", tool === "camera");
   setStatus(TOOL_STATUS[tool] ?? "Tool ready");
+  // The tool in the hand has a section of its own in the property panel, so
+  // the panel is filled with the settings of that tool.
+  showToolProps();
   // The shape of the brush under the pointer belongs to the tool, so it is
   // drawn again when another tool is taken in the hand.
   drawOverlay();
@@ -4712,6 +4920,9 @@ function pickColourAt(event) {
   const py = Math.min(canvas.height - 1, Math.max(0, Math.round(y * matrix.d)));
   const [red, green, blue] = ctx.getImageData(px, py, 1, 1).data;
   colorInput.value = rgbToHex(red, green, blue);
+  // The event tells the panel of the tools and the wheel that the colour
+  // changed, so the wheel follows the colour that was picked up.
+  colorInput.dispatchEvent(new Event("input", { bubbles: true }));
   selectTool("brush");
   setStatus(`Picked colour ${colorInput.value}`);
 }
@@ -4787,10 +4998,34 @@ function loadSettings() {
       // the number that was remembered is put ten times further along.
       const remembered =
         data.stabilizerScale === 100 ? data.stabilizer : data.stabilizer * 10;
-      state.stabilizer = Math.max(0, Math.min(100, Math.round(remembered)));
+      state.toolSettings.brush.stabilizer = Math.max(
+        0,
+        Math.min(100, Math.round(remembered)),
+      );
     }
     if (Number.isFinite(data.smooth)) {
-      state.smooth = Math.max(0, Math.min(100, Math.round(data.smooth)));
+      state.toolSettings.brush.smooth = Math.max(0, Math.min(100, Math.round(data.smooth)));
+    }
+    // The settings of each tool are remembered, so the pencil keeps its own
+    // width and the brush keeps its own.
+    if (data.toolSettings && typeof data.toolSettings === "object") {
+      for (const [name, settings] of Object.entries(data.toolSettings)) {
+        const known = state.toolSettings[name];
+        if (!known || !settings || typeof settings !== "object") continue;
+        if (Number.isFinite(settings.width)) {
+          known.width = Math.max(1, Math.min(300, Math.round(settings.width)));
+        }
+        if (Number.isFinite(settings.stabilizer)) {
+          known.stabilizer = Math.max(0, Math.min(100, Math.round(settings.stabilizer)));
+        }
+        if (Number.isFinite(settings.smooth)) {
+          known.smooth = Math.max(0, Math.min(100, Math.round(settings.smooth)));
+        }
+        if (Number.isFinite(settings.opacity)) {
+          known.opacity = Math.max(1, Math.min(100, Math.round(settings.opacity)));
+        }
+        if (typeof settings.blend === "string") known.blend = settings.blend;
+      }
     }
     state.compactTimeline = data.compactTimeline !== false;
   } catch {
@@ -4807,9 +5042,10 @@ function saveSettings() {
         touchDraw: state.touchDraw,
         showStart: state.showStart,
         playSpeed: state.playSpeed,
-        stabilizer: state.stabilizer,
+        stabilizer: state.toolSettings.brush.stabilizer,
         stabilizerScale: 100,
-        smooth: state.smooth,
+        smooth: state.toolSettings.brush.smooth,
+        toolSettings: state.toolSettings,
         compactTimeline: state.compactTimeline,
         onion: { ...state.onion },
       }),
@@ -4826,10 +5062,11 @@ function syncSettingsUI() {
   touchDrawInput.checked = state.touchDraw;
   showStartInput.checked = state.showStart;
   speedInput.value = String(state.playSpeed);
-  stabilizerInput.value = String(state.stabilizer);
-  stabilizerValue.textContent = String(state.stabilizer);
-  smoothInput.value = String(state.smooth);
-  smoothValue.textContent = String(state.smooth);
+  const settings = toolSettings();
+  stabilizerInput.value = String(settings.stabilizer);
+  stabilizerValue.textContent = String(settings.stabilizer);
+  smoothInput.value = String(settings.smooth);
+  smoothValue.textContent = String(settings.smooth);
   onionInput.checked = state.onion.enabled;
   onionBeforeInput.value = String(state.onion.before);
   onionAfterInput.value = String(state.onion.after);
@@ -4866,7 +5103,7 @@ showStartInput.addEventListener("change", () => {
 
 stabilizerInput.addEventListener("input", () => {
   const value = Math.max(0, Math.min(100, Math.round(Number(stabilizerInput.value))));
-  state.stabilizer = value;
+  toolSettings().stabilizer = value;
   stabilizerValue.textContent = String(value);
   setStatus(value === 0 ? "Stabiliser off" : `Stabiliser ${value} — new strokes get smoother`);
 });
@@ -4874,7 +5111,7 @@ stabilizerInput.addEventListener("change", saveSettings);
 
 smoothInput.addEventListener("input", () => {
   const value = Math.max(0, Math.min(100, Math.round(Number(smoothInput.value))));
-  state.smooth = value;
+  toolSettings().smooth = value;
   smoothValue.textContent = String(value);
   setStatus(
     value === 0
@@ -6153,57 +6390,30 @@ const onionAfterInput = document.getElementById("onionAfter");
 
 /* Matches the reference layout: hue ring around an inscribed SV square.
    The wheel sits in the tool property panel, the way MoArt's colour circle
-   does, so it is always there and needs no button to open it. */
-const WHEEL_SIZE = 176;
+   does, so it is always there and needs no button to open it.
+
+   The maths of the wheel lives in core/wheel.js, because the ring is drawn
+   with the arc of a hue at the angle of that hue and the point that is
+   picked has to read the hue at that same angle. When the two disagree the
+   marker of the ring lands a quarter turn away from the arc under the
+   cursor, and the colour that comes out is not the colour of the arc that
+   was clicked. */
+const wheelShape = wheelLayout(WHEEL_SIZE);
 
 const wheel = { hue: 222, saturation: 0.8, value: 0.6 };
 
-function hsvToRgb(h, s, v) {
-  const sector = ((h % 360) + 360) % 360 / 60;
-  const c = v * s;
-  const x = c * (1 - Math.abs((sector % 2) - 1));
-  const m = v - c;
-  const [r, g, b] = [
-    [c, x, 0],
-    [x, c, 0],
-    [0, c, x],
-    [0, x, c],
-    [x, 0, c],
-    [c, 0, x],
-  ][Math.floor(sector) % 6];
-  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
-}
-
-function rgbToHsv(r, g, b) {
-  const red = r / 255;
-  const green = g / 255;
-  const blue = b / 255;
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-  let h = 0;
-  if (delta > 0) {
-    if (max === red) h = 60 * (((green - blue) / delta) % 6);
-    else if (max === green) h = 60 * ((blue - red) / delta + 2);
-    else h = 60 * ((red - green) / delta + 4);
-  }
-  return [((h % 360) + 360) % 360, max === 0 ? 0 : delta / max, max];
-}
+/* True while the wheel is the one writing the colour, so that the wheel and
+   the colour of the strokes do not chase each other. */
+let wheelOwnsColour = false;
 
 function renderWheel() {
   const ctx = wheelCanvas.getContext("2d");
-  const centre = WHEEL_SIZE / 2;
-  const ringOuter = centre - 0;
-  const ringInner = centre - 24;
-  const ringMiddle = (ringOuter + ringInner) / 2;
-  const svHalf = Math.floor(ringInner * Math.SQRT1_2) - 1;
-  const side = svHalf * 2;
-  const squareX = centre - svHalf;
-  const squareY = centre - svHalf;
+  const { centre, ringOuter, ringInner, ringMiddle, side, squareX, squareY } = wheelShape;
 
   ctx.clearRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
 
-  // Hue ring: one thin arc per degree.
+  // Hue ring: one thin arc per degree. The arc of a hue sits at the angle of
+  // that hue, so the marker of the ring lands on the arc it was picked from.
   for (let angle = 0; angle < 360; angle += 1) {
     ctx.beginPath();
     ctx.strokeStyle = `hsl(${angle}, 100%, 50%)`;
@@ -6227,9 +6437,9 @@ function renderWheel() {
   ctx.fillRect(squareX, squareY, side, side);
 
   // Markers: ring dot at the hue, crosshair in the square.
-  const hueAngle = wheel.hue * (Math.PI / 180);
+  const ring = huePoint(wheel.hue, wheelShape);
   ctx.beginPath();
-  ctx.arc(centre + ringMiddle * Math.cos(hueAngle), centre + ringMiddle * Math.sin(hueAngle), 4, 0, Math.PI * 2);
+  ctx.arc(ring.x, ring.y, 4, 0, Math.PI * 2);
   ctx.strokeStyle = "#fff";
   ctx.lineWidth = 2;
   ctx.stroke();
@@ -6246,35 +6456,22 @@ function renderWheel() {
   ctx.stroke();
 }
 
+/** Put the colour of the wheel into the strokes and into the hex field. */
 function wheelApply() {
   const [red, green, blue] = hsvToRgb(wheel.hue, wheel.saturation, wheel.value);
   const hex = rgbToHex(red, green, blue);
+  wheelOwnsColour = true;
   colorInput.value = hex;
   wheelHex.value = hex;
   colorInput.dispatchEvent(new Event("input", { bubbles: true }));
+  wheelOwnsColour = false;
   renderWheel();
 }
 
-function wheelFromEvent(event) {
-  const rect = wheelCanvas.getBoundingClientRect();
-  const scale = WHEEL_SIZE / rect.width;
-  const x = (event.clientX - rect.left) * scale;
-  const y = (event.clientY - rect.top) * scale;
-  const dx = x - WHEEL_SIZE / 2;
-  const dy = y - WHEEL_SIZE / 2;
-  const radius = Math.hypot(dx, dy);
-  const ringInner = WHEEL_SIZE / 2 - 24;
-  const svHalf = Math.floor(ringInner * Math.SQRT1_2) - 1;
-
-  if (radius >= ringInner - 2 && radius <= WHEEL_SIZE / 2 + 2) {
-    wheel.hue = ((Math.atan2(dy, dx) * 180) / Math.PI + 450) % 360;
-  } else if (Math.abs(dx) <= svHalf + 2 && Math.abs(dy) <= svHalf + 2) {
-    wheel.saturation = Math.min(1, Math.max(0, dx / (svHalf * 2) + 0.5));
-    wheel.value = Math.min(1, Math.max(0, 1 - (dy / (svHalf * 2) + 0.5)));
-  }
-  wheelApply();
-}
-
+/**
+ * Take the colour of the strokes into the wheel, so the marker of the ring
+ * and the dot of the square always stand for the colour that is in use.
+ */
 function wheelSyncFromColor() {
   const match = /^#?([0-9a-f]{6})$/i.exec(colorInput.value.trim());
   if (!match) return;
@@ -6284,8 +6481,41 @@ function wheelSyncFromColor() {
     parseInt(hex.slice(2, 4), 16),
     parseInt(hex.slice(4, 6), 16),
   ];
-  [wheel.hue, wheel.saturation, wheel.value] = rgbToHsv(...rgb);
+  const [hue, saturation, value] = rgbToHsv(...rgb);
+  wheel.saturation = saturation;
+  wheel.value = value;
+  // A grey has no hue of its own, so the ring keeps the hue it had instead
+  // of jumping to red every time a grey is picked.
+  if (saturation > 0) wheel.hue = hue;
+  wheelHex.value = `#${hex}`;
 }
+
+function wheelFromEvent(event) {
+  const rect = wheelCanvas.getBoundingClientRect();
+  const scale = WHEEL_SIZE / rect.width;
+  const x = (event.clientX - rect.left) * scale;
+  const y = (event.clientY - rect.top) * scale;
+  const pick = wheelPick(x, y, wheelShape);
+  if (pick.region === "ring") {
+    wheel.hue = pick.hue;
+  } else if (pick.region === "square") {
+    wheel.saturation = pick.saturation;
+    wheel.value = pick.value;
+  }
+  wheelApply();
+}
+
+colorInput.addEventListener("input", () => {
+  syncQuickBar();
+  // The colour of the strokes can also be changed with the colour picker of
+  // the browser or with the eyedropper, so the wheel follows it: the marker
+  // of the ring and the dot of the square always stand for the colour that
+  // is in use. When the wheel is the one that wrote the colour it already
+  // knows, and it must not be sent back to itself.
+  if (wheelOwnsColour) return;
+  wheelSyncFromColor();
+  renderWheel();
+});
 
 // The wheel is always on screen, so it follows the colour from the start.
 wheelSyncFromColor();
@@ -6812,6 +7042,8 @@ async function boot() {
 
   loadSettings();
   syncSettingsUI();
+  // The panel shows the section of the tool that is in the hand.
+  showToolProps();
   applyCompactView();
   syncQuickBar();
   wireNewProjectDialog();

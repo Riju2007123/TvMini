@@ -162,6 +162,15 @@ function normalizeStrokes(value, label) {
       if (stroke.blend !== "normal") clean.blend = stroke.blend;
     }
 
+    // A stroke remembers the brush it was made with, the way Clip Studio
+    // Paint does, so that changing the brush afterwards does not change the
+    // strokes that are already on the paper.
+    if (stroke.brush !== undefined) {
+      const brush = normalizeBrush(stroke.brush, 8_000_000, `${label}[${index}].brush`);
+      // A stroke that was made without a picture says so, and that is kept.
+      clean.brush = brush;
+    }
+
     return clean;
   });
 
@@ -301,11 +310,16 @@ function normalizeBrush(value, maxBase64, label) {
   if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47) {
     throw new ValidationError(`${label}.data must be a PNG`);
   }
-  return {
+  const brush = {
     data: value.data,
     width: bytes.readUInt32BE(16),
     height: bytes.readUInt32BE(20),
   };
+  // A brush that comes from Clip Studio Paint has a size and a strength of
+  // its own, and they are kept with it.
+  if (Number.isFinite(value.size) && value.size > 0) brush.size = value.size;
+  if (Number.isFinite(value.opacity) && value.opacity > 0) brush.opacity = value.opacity;
+  return brush;
 }
 
 function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
@@ -406,6 +420,16 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
     if (drawing.brush !== undefined) {
       const brush = normalizeBrush(drawing.brush, 8_000_000, `${dLabel}.brush`);
       if (brush) clean.brush = brush;
+    }
+    // A stroke remembers the brush it was made with, so that changing the
+    // brush does not change the strokes that are already on the paper. A
+    // drawing that was made before that was so gets the brush of the drawing
+    // put on its strokes, so that the strokes keep the brush they were made
+    // with from now on.
+    if (clean.brush) {
+      for (const stroke of clean.strokes) {
+        if (!("brush" in stroke)) stroke.brush = clean.brush;
+      }
     }
     return clean;
   });

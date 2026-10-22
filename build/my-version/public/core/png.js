@@ -38,6 +38,15 @@ function setPixel(layer, width, height, x, y, rgb, erase) {
  */
 let brushStamp = null;
 
+/**
+ * The brush of the drawing being painted.
+ *
+ * A stroke remembers the brush it was made with, and that one is used for
+ * the stroke; this is the brush of the drawing, and it is the one used by
+ * strokes that were made before strokes remembered their brush.
+ */
+let drawingBrush = null;
+
 /** The stamps that have been unpacked, so a stroke does not unpack it again. */
 const stampCache = new Map();
 
@@ -337,6 +346,9 @@ function directPicture(drawing, width, height) {
 function paintStrokeInto(target, width, height, stroke, rgb) {
   const erase = stroke.eraser === true;
   const radii = stroke.points.map((point) => pointRadius(stroke, point));
+  // The brush of the stroke itself, or the brush of the drawing for strokes
+  // that were made before a stroke remembered its brush.
+  brushStamp = stampFor("brush" in stroke ? stroke.brush ?? null : drawingBrush);
 
   if (stroke.kind === "line") {
     segment(
@@ -399,14 +411,17 @@ function needsMaskPass(stroke) {
 
 /** Paint a drawing (optional raster base + strokes) onto a transparent RGBA buffer. */
 function paintDrawing(width, height, drawing) {
-  // A drawing may carry a brush image; it is the shape of the brush for the
-  // time of this drawing. A layer can have no drawing at the frame that is
-  // being painted - an empty layer, or a frame the layer does not cover -
-  // and that paints nothing rather than failing.
-  brushStamp = drawing ? stampFor(drawing.brush) : null;
+  // A drawing may carry a brush image; it is the brush that is in the hand
+  // for the time of this drawing. A stroke remembers the brush it was made
+  // with, so changing the brush does not change the strokes that are already
+  // on the paper. A layer can have no drawing at the frame that is being
+  // painted - an empty layer, or a frame the layer does not cover - and that
+  // paints nothing rather than failing.
+  drawingBrush = drawing ? drawing.brush ?? null : null;
   try {
     return paintDrawingInner(width, height, drawing);
   } finally {
+    drawingBrush = null;
     brushStamp = null;
   }
 }

@@ -1138,6 +1138,15 @@ body.hide-inspector.hide-stage .workspace {
   padding: 4px 8px 10px;
 }
 
+/* The note under the settings of the tool in the hand. */
+.tool-note {
+  margin: 0;
+  padding: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(4, 24px);
@@ -1266,6 +1275,12 @@ body.hide-inspector.hide-stage .workspace {
   min-width: 0;
   color: var(--muted);
   font-size: var(--fs-sm);
+}
+
+/* A part of the panel that is put away stays put away, even when the rule
+   for it says it is shown. */
+[hidden] {
+  display: none !important;
 }
 
 .field > span {
