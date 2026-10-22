@@ -875,6 +875,25 @@ function buildTree(layers) {
   return { nodes, roots };
 }
 
+/**
+ * The transforms of the folders above a layer.
+ *
+ * A cell that is a folder of layers is moved as a whole, so the layers
+ * inside it are moved with it.
+ */
+function transformsAbove(tree, index) {
+  const transforms = [];
+  const seen = new Set();
+  let at = tree.nodes[index].parent;
+  while (at >= 0 && at < tree.nodes.length && !seen.has(at)) {
+    seen.add(at);
+    const layer = tree.nodes[at].layer;
+    if (layer?.transform) transforms.unshift(layer.transform);
+    at = tree.nodes[at].parent;
+  }
+  return transforms;
+}
+
 /** Link a list of layers as siblings, from the bottom of the canvas up. */
 function linkSiblings(database, ids) {
   for (let index = 0; index < ids.length; index += 1) {
@@ -1739,7 +1758,21 @@ export async function createClipBuffer(project, { name = "TVMini export", animat
         const rgba = drawing
           ? renderDrawingRgba(project, drawing)
           : renderLayerRgba(project, source);
-        setLayerPixels(database, target.layerId, rgba, pixels);
+        // A layer that is moved, made bigger or turned carries its picture
+        // with it, and so do the folders above it: a cell that is a folder
+        // of layers is moved as a whole. A `.clip` has no layer of its own
+        // for a turn or a size, so the picture is put where it belongs.
+        const placed = transformRgba(
+          rgba,
+          project.width,
+          project.height,
+          composeMatrix(
+            [...transformsAbove(tree, index), transformOf(source)],
+            project.width,
+            project.height,
+          ),
+        );
+        setLayerPixels(database, target.layerId, placed, pixels);
         currentLayerId = target.layerId;
       }
     }

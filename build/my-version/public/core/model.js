@@ -448,6 +448,16 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   }
 
   const clip = value.clip === undefined ? false : boolean(value.clip, `${label}.clip`);
+  // A folder can be the camera layer of a Clip Studio document. The camera
+  // keys live on the timeline (`project.camera`); this flag only says that the
+  // folder is the layer the camera track hangs on, so that an imported
+  // document gets its camera layer back on export.
+  const camera = value.camera === true && type === "group";
+  // A layer may carry a transform of its own. A cell of an animation folder
+  // that is a folder of layers is moved as a whole, and the transform of the
+  // cell belongs to the folder that holds it.
+  const transform =
+    value.transform === undefined ? null : normalizeTransform(value.transform, `${label}.transform`);
   const parent =
     value.parent === undefined
       ? -1

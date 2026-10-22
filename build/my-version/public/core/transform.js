@@ -81,7 +81,37 @@ export function pointToPicture(point, transform, width, height) {
 }
 
 /**
- * Put a picture where its transform says, in pixels.
+ * The matrix that says nothing at all.
+ */
+export function identityMatrix() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
+/**
+ * The matrix of several transforms, one after the other.
+ *
+ * A layer may have a transform of its own and a cell may have one as well,
+ * and the picture of the cell is moved by both.
+ */
+export function composeMatrix(transforms, width, height) {
+  let matrix = identityMatrix();
+  for (const transform of transforms) {
+    if (!transform || isPlain(transform)) continue;
+    const next = transformMatrix(transform, width, height);
+    matrix = {
+      a: matrix.a * next.a + matrix.c * next.b,
+      b: matrix.b * next.a + matrix.d * next.b,
+      c: matrix.a * next.c + matrix.c * next.d,
+      d: matrix.b * next.c + matrix.d * next.d,
+      e: matrix.a * next.e + matrix.c * next.f + matrix.e,
+      f: matrix.b * next.e + matrix.d * next.f + matrix.f,
+    };
+  }
+  return matrix;
+}
+
+/**
+ * Put a picture where a matrix says, in pixels.
  *
  * The exports have no canvas to draw on, so the picture is turned and grown
  * here: every pixel of the result takes the colour of the pixel of the
@@ -91,12 +121,13 @@ export function pointToPicture(point, transform, width, height) {
  * @param {Uint8Array} rgba The picture, four bytes a pixel.
  * @param {number} width The width of the picture.
  * @param {number} height The height of the picture.
- * @param {object} transform The transform of the cell.
- * @returns {Uint8Array} The picture, put where the transform says.
+ * @param {object} matrix The matrix, as `transformMatrix` gives it.
+ * @returns {Uint8Array} The picture, put where the matrix says.
  */
-export function transformRgba(rgba, width, height, transform) {
-  if (isPlain(transform)) return rgba;
-  const matrix = transformMatrix(transform, width, height);
+export function transformRgba(rgba, width, height, matrix) {
+  if (!matrix || (matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1 && !matrix.e && !matrix.f)) {
+    return rgba;
+  }
   const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
   if (!determinant) return rgba;
 

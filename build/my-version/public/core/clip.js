@@ -10,9 +10,11 @@ import {
   readCameraCurves,
   readCelCurve,
   readCelSequence,
+  readCellTransform,
   readTrackRange,
 } from "./clip-animation.js";
 import { frameOfCellName } from "../timeline.js";
+import { tickOfFrame } from "./clip-mixer.js";
 import { createProject, normalizeProject } from "./model.js";
 import { encodeRgbaPng } from "./png.js";
 
@@ -811,6 +813,8 @@ export async function readClipDocumentFromBytes(data) {
           celSequence: readCelSequence(document),
           // The curves of a camera, when this track is one.
           camera: readCameraCurves(document),
+          // Where the pictures of the cells of this track sit.
+          cellTransform: readCellTransform(document),
         };
       };
       return {

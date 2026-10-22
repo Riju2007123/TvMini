@@ -286,6 +286,18 @@ and grows around the middle of the canvas, the brush is put back into the
 picture before the ink is put down, and the export writes the picture where
 the transform says — a `.clip` has no layer-level scale or turn of its own.
 
+**The curves of a cell are read on import.** A track of `bleach (2)` carries
+`ImagePosition` (where the middle of the picture is), `ImageCenter` (where it
+is at home), `ImageScale` and `ImageRotation`, and the difference between
+the position and the centre is how far the picture is from its place. A
+document that is imported keeps the place of its cells, so the parts of a
+puppet animation are still where they were, and a cell that is a folder of
+layers is moved as a whole.
+
+The writer has no curve of its own for that, so the picture is put where the
+transform says instead. The document looks the same, but the turn and the
+size of a cell live in the picture rather than in the curves of its track.
+
 ### How a blob is found
 
 Three pieces fit together:

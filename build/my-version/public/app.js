@@ -1765,11 +1765,11 @@ function renderCanvas(frame = state.project.currentFrame) {
         drawDrawingToPaint(project, sourceResolved.drawing, sourceOpacity, maskCtx, maskCanvas);
         fitScratch(clipCanvas, clipCtx, width, height);
         clipCtx.globalCompositeOperation = "source-over";
-        withCellTransform(clipCtx, sourceTransform, width, height, () => {
+        withCellTransform(clipCtx, [transformOf(project.layers[source]), sourceTransform], width, height, () => {
           clipCtx.drawImage(maskCanvas, 0, 0);
         });
         clipCtx.globalCompositeOperation = "destination-in";
-        withCellTransform(clipCtx, transform, width, height, () => {
+        withCellTransform(clipCtx, [layerTransform, transform], width, height, () => {
           clipCtx.drawImage(paintCanvas, 0, 0);
         });
         clipCtx.globalCompositeOperation = "source-over";
@@ -1798,7 +1798,7 @@ function renderCanvas(frame = state.project.currentFrame) {
         : resolved.drawing.strokes;
     if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
-      withCellTransform(ctx, transform, width, height, () => {
+      withCellTransform(ctx, [layerTransform, transform], width, height, () => {
         ctx.drawImage(base, 0, 0, width, height);
       });
       ctx.globalAlpha = 1;
@@ -1815,7 +1815,7 @@ function renderCanvas(frame = state.project.currentFrame) {
     // away from its own layer only, and that is the work of the scratch
     // canvas.
     if (opacity === 1 && !strokes.some((stroke) => stroke.eraser)) {
-      withCellTransform(ctx, transform, width, height, () => {
+      withCellTransform(ctx, [layerTransform, transform], width, height, () => {
         if (base) ctx.drawImage(base, 0, 0, width, height);
         drawStrokesInto(ctx, strokes, resolved.drawing.brush);
       });
@@ -1831,7 +1831,7 @@ function renderCanvas(frame = state.project.currentFrame) {
     layerCtx.setTransform(1, 0, 0, 1, 0, 0);
 
     ctx.globalAlpha = opacity;
-    withCellTransform(ctx, transform, width, height, () => {
+    withCellTransform(ctx, [layerTransform, transform], width, height, () => {
       ctx.drawImage(layerCanvas, 0, 0);
     });
     ctx.globalAlpha = 1;
@@ -1988,16 +1988,23 @@ function cameraFromLocal(local, window) {
  *
  * The transform is a part of the cell, so the picture of the cell goes on
  * the stage with it: moved, made bigger or smaller, and turned around the
- * middle of the canvas.
+ * middle of the canvas. A layer may have a transform of its own as well -
+ * a cell that is a folder of layers is moved as a whole - and the two are
+ * put on the stage one after the other.
  */
-function withCellTransform(context, transform, width, height, draw) {
-  if (!transform || isPlain(transform)) {
+function withCellTransform(context, transforms, width, height, draw) {
+  const list = (Array.isArray(transforms) ? transforms : [transforms]).filter(
+    (transform) => transform && !isPlain(transform),
+  );
+  if (!list.length) {
     draw();
     return;
   }
-  const matrix = transformMatrix(transform, width, height);
   context.save();
-  context.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+  for (const transform of list) {
+    const matrix = transformMatrix(transform, width, height);
+    context.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+  }
   try {
     draw();
   } finally {

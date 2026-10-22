@@ -11,6 +11,8 @@ import { readClipLayersFromBytes } from "../public/core/clip.js";
 import { createClipBuffer } from "../src/clip-write.js";
 import {
   IDENTITY_TRANSFORM,
+  composeMatrix,
+  identityMatrix,
   isPlain,
   pointToPicture,
   transformMatrix,
@@ -123,7 +125,28 @@ test("a transform that says nothing is left out", () => {
 test("a picture that is not moved is the picture itself", () => {
   const rgba = new Uint8Array(4 * 4 * 4);
   rgba[0] = 200;
-  assert.equal(transformRgba(rgba, 4, 4, IDENTITY_TRANSFORM), rgba);
+  assert.equal(transformRgba(rgba, 4, 4, identityMatrix()), rgba);
+});
+
+test("two transforms are put on the stage one after the other", () => {
+  // A layer that is moved and a cell that is turned: the cell is turned
+  // first, and the layer is moved after it.
+  const width = 200;
+  const height = 100;
+  const matrix = composeMatrix(
+    [{ x: 40, y: 0, scale: 1, rotation: 0 }, { x: 0, y: 0, scale: 1, rotation: 90 }],
+    width,
+    height,
+  );
+  const picture = { x: 100, y: 50 };
+  const canvas = {
+    x: matrix.a * picture.x + matrix.c * picture.y + matrix.e,
+    y: matrix.b * picture.x + matrix.d * picture.y + matrix.f,
+  };
+  // The picture sits in the middle of the canvas, so the turn leaves it
+  // where it is, and the layer then moves it 40 to the right.
+  assert.ok(Math.abs(canvas.x - 140) < 0.001, `x came out as ${canvas.x}`);
+  assert.ok(Math.abs(canvas.y - 50) < 0.001, `y came out as ${canvas.y}`);
 });
 
 test("a project keeps the transform of its cells", () => {

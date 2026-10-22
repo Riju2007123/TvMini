@@ -1,6 +1,6 @@
 import { cameraAt, effectiveOpacity, layerIsVisible, resolveDrawing } from "../timeline.js";
 import { Buffer } from "./bytes.js";
-import { transformOf, transformRgba } from "./transform.js";
+import { transformOf, composeMatrix, transformRgba } from "./transform.js";
 import {
   blendStrokeOver,
   eraseStrokeFrom,
@@ -542,7 +542,12 @@ function paintDrawing(width, height, drawing) {
     // A cell may sit somewhere else than it was drawn: moved, made bigger or
     // smaller, and turned. There is no canvas to draw on here, so the
     // picture is put where the transform says in pixels.
-    return transformRgba(paint, width, height, transformOf(drawing));
+    return transformRgba(
+      paint,
+      width,
+      height,
+      composeMatrix([transformOf(drawing)], width, height),
+    );
   } finally {
     drawingBrush = null;
     brushStamp = null;
@@ -750,7 +755,20 @@ export function renderProject(project, frame = project.currentFrame) {
     // is. That saves a copy of the whole canvas for every imported layer.
     const paint = directPicture(resolved.drawing, width, height) ??
       paintDrawing(width, height, resolved.drawing);
-    composite(data, width, height, { width, height, data: paint }, opacity);
+    // A layer may be moved, made bigger or turned - a cell that is a folder
+    // of layers is moved as a whole - and the picture of the cell is moved
+    // with it.
+    const moved = transformRgba(
+      paint,
+      width,
+      height,
+      composeMatrix(
+        [...transformsOf(project, index), transformOf(resolved.drawing)],
+        width,
+        height,
+      ),
+    );
+    composite(data, width, height, { width, height, data: moved }, opacity);
   }
 
   // A camera track frames the shot: the exported image is what the camera

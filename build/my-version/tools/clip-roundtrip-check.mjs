@@ -23,6 +23,14 @@ const TEMP = path.join(os.tmpdir(), "tvmini-roundtrip");
 const KEEP = process.argv.includes("--keep");
 
 /** The things of a project that a person can see. */
+/**
+ * The things of a project that a person can see.
+ *
+ * The transform of a cell is not part of it: a `.clip` has no layer of its
+ * own for a turn or a size, so the writer puts the picture where the
+ * transform says. The two documents therefore look the same even though one
+ * of them carries the transform and the other does not.
+ */
 const shape = (project) => ({
   fps: project.fps,
   start: project.startFrame,

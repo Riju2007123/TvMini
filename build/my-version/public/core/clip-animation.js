@@ -448,6 +448,104 @@ export function readCameraCurves(document) {
   return keys.length ? { keys } : null;
 }
 
+/**
+ * Where the picture of a cell sits, and how it is turned.
+ *
+ * A track that shows cells may carry more curves than the names of the
+ * cells: `ImagePosition` says where the middle of the picture of the cell
+ * sits on the canvas, `ImageCenter` says where that middle is when the cell
+ * is at home, `ImageScale` how much of the canvas it shows and
+ * `ImageRotation` how far it is turned. A part of a puppet animation is
+ * moved with it from one frame to the next.
+ *
+ * The curves are keys of their own, so the place of a cell is worked out
+ * from the keys that surround it.
+ *
+ * @returns {{keys: object[]}|null} The keys of the transform, or null when
+ * the track does not move its cells.
+ */
+export function readCellTransform(document) {
+  const curves = readAnimationCurves(document);
+  const find = (kind, axis = null) =>
+    curves.find((curve) => curve.kind === kind && (curve.axis ?? null) === axis) ?? null;
+
+  const positionX = find("ImagePosition", "X");
+  const positionY = find("ImagePosition", "Y");
+  if (!positionX || !positionY) return null;
+
+  const centreX = find("ImageCenter", "X");
+  const centreY = find("ImageCenter", "Y");
+  const rotation = find("ImageRotation");
+  const scale = find("ImageScale");
+
+  const frames = positionX.fields.get("Frame")?.values ?? [];
+  const value = (curve, index) => {
+    const numbers = curve?.fields.get("Value")?.values ?? [];
+    return numbers[index] === undefined ? null : Number(numbers[index]);
+  };
+
+  const keys = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const x = value(positionX, index);
+    const y = value(positionY, index);
+    if (x === null || y === null) continue;
+    keys.push({
+      // The time of the key, in the 60 Hz ticks of the document.
+      time: Number(frames[index]),
+      // Where the middle of the picture sits on the canvas.
+      x,
+      y,
+      // Where that middle is when the cell is at home.
+      homeX: value(centreX, index),
+      homeY: value(centreY, index),
+      // How far the picture is turned, in degrees.
+      rotation: value(rotation, index) ?? 0,
+      // How much of the canvas the picture shows, in percent.
+      scale: value(scale, index) ?? 100,
+    });
+  }
+  return keys.length ? { keys } : null;
+}
+
+/**
+ * Where the picture of a cell sits at a time.
+ *
+ * The keys of the transform are keys of their own, so the place of a cell
+ * that starts between two of them is worked out from the two.
+ *
+ * @param {{keys: object[]}|null} transform The transform of the track.
+ * @param {number} time The time of the cell, in 60 Hz ticks.
+ * @returns {{x: number, y: number, rotation: number, scale: number}|null}
+ *   The place of the picture, or null when the track does not move its cells.
+ */
+export function cellTransformAt(transform, time) {
+  const keys = transform?.keys ?? [];
+  if (!keys.length) return null;
+  const at = Number(time);
+  if (!Number.isFinite(at)) return null;
+
+  let before = null;
+  let after = null;
+  for (const key of keys) {
+    if (key.time <= at && (!before || key.time > before.time)) before = key;
+    if (key.time > at && (!after || key.time < after.time)) after = key;
+  }
+  if (!before) before = keys[0];
+  if (!after) after = before;
+
+  const span = after.time - before.time;
+  const share = span > 0 ? Math.min(1, Math.max(0, (at - before.time) / span)) : 0;
+  const mix = (one, two) => (one ?? 0) + ((two ?? 0) - (one ?? 0)) * share;
+  return {
+    x: mix(before.x, after.x),
+    y: mix(before.y, after.y),
+    homeX: mix(before.homeX, after.homeX),
+    homeY: mix(before.homeY, after.homeY),
+    rotation: mix(before.rotation, after.rotation),
+    scale: mix(before.scale, after.scale) / 100,
+  };
+}
+
 /** A cell name: a frame number, with a letter for a second cell on it. */
 const CELL_NAME = /^\d{1,6}[a-z]?$/i;
 
