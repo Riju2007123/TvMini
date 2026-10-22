@@ -227,6 +227,23 @@ The children of an animation folder are the **cells** of the animation, and
 each one of them is a layer of its own. A cell can be a raster layer or a
 folder that holds several layers.
 
+**Which one a document uses is a choice of the document.** Measured with
+`tools/clip-cell-layers.mjs`:
+
+| document | the cells of its animation folders |
+|---|---|
+| `Animation15` | 4 raster layers, each with a picture |
+| `Animation5` | 8 raster layers, each with a picture |
+| `Animation2` | one folder of 7 raster cells, and one folder whose 5 cells are **folders** of 3 layers each |
+| `bleach (2)` | every cell is a **folder** of 2 to 6 layers - a puppet animation |
+| a `.clip` TVMini writes | raster cells, one picture each |
+
+So a simple animation is a row of bitmaps, and a puppet animation is a row
+of folders, each holding the parts that move together. The reader keeps both
+(shapes the same), and the writer writes a hand-drawn row as raster cells
+and leaves the puppet structure of an imported document alone - `bleach (2)`
+comes back with all 256 of its layers, the folders among them included.
+
 **A cell's name is not its frame.** The name is a number and an optional
 letter: `1`, `1a`, `1b`, `2`, `2a`. The letter tells which cell it is when a
 frame carries more than one of them, but the number is only the frame the
@@ -935,6 +952,42 @@ Measured on `Animation2.clip` and `Animation3.clip`:
   the first frame, `End` the tick of the frame behind the last one, `Rate` 60.
 - The mixer blobs become external chunks of their own, and the
   `ExternalChunk` offsets are written again.
+
+#### The camera
+
+The camera is written on the same rule as a cell track: its six curves are
+spliced into the two mixers of the camera track the skeleton carries, in the
+flavour each mixer uses, so everything of a camera track beyond its curves is
+copied rather than made up.
+
+- The track is a `Track` row of kind **2005**, and `LayerUuidWithTrack` names
+the camera layer: the folder of the project whose layer says `camera`, which
+is written as a layer of type 512 with `LayerFolder = 1`. The reader marks
+that folder when it imports a document, so a document that came from Clip
+Studio Paint gets its camera layer back.
+- The project stores a camera as a window (`x`, `y`, `width`, `height`,
+`rotation`), while the curves store the half size of the frame, its middle
+and the zoom. The writer picks the zoom of **100 %**, where the frame is the
+window itself, so the fold the reader does gives the same window back:
+`centreX = width / 2`, `positionX = x + width / 2`, and the same on Y. A
+camera written at another zoom would read back as the same window only to
+within the rounding of the fold.
+- The keys become the `Frame` ticks and the `Value`s of all six curves. The
+times are the 60 Hz ticks of the document, like the cells, and the range of
+the track runs from the first key to the boundary after the last one.
+- The camera curves carry no easing (`clip-format-study.md` above), so the
+`interp` of a key is not written; a camera read back travels at a constant
+speed between its keys.
+- A skeleton without a camera track has no tree to copy, and the bundled
+animation template has no camera, so a project exported from it gets no
+camera track. The camera of a document is written back when that document is
+the skeleton - which is the case that matters, because that is where the
+camera came from.
+
+`tools/clip-roundtrip-corpus.mjs` compares the cells of a round trip; the
+camera has its own test in `test/clip-camera-export.test.js`, which checks the
+layer of type 512, the track of kind 2005, the key it is bound to and the
+values that come back on import.
 
 #### Which layer is a row
 
