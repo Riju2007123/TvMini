@@ -363,6 +363,75 @@ This batch put the shell on the recorded tokens.
   header switches them to 34px rows and the choice is remembered.
 - **The ruler marks the playhead with a red triangle** in the key line, and
   the frame the playhead is on is the only number in the ruler that is red.
+- **The frame numbers are written the way MoArt writes them.** MoArt's ruler
+  puts a monospace digit at the *left* of every frame column, 9px, in the
+  muted colour, with the column's line standing on the left of the number
+  (`font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm);
+  position: absolute; top: 4px; left: 3px`). It writes **every** frame in
+  the window and hides the small labels when a column is narrower than 16px
+  (`--genga-minor-label: cellW < 16 ? 'none' : 'block'`). TVMini does the
+  same: the numbers are monospace and left-aligned, every frame is written,
+  and the column is never narrower than the number it has to hold — the
+  widest number of the ruler decides that width, so a project past frame 100
+  gets wider columns rather than clipped digits.
+- **Every frame gets a column of the same fixed width.** MoArt sizes the
+  timeline with `width: calc(var(--genga-cell-w, 22px) * frames)` — the
+  columns are fixed, and the timeline grows by scrolling, never by
+  stretching. TVMini was doing the opposite (`minmax(min, 1fr)`), so a short
+  scene spread its twelve frames across the whole window and every number
+  floated far away from the frame it named. The columns are fixed now: the
+  number of a frame stands directly above that frame, and a long scene
+  scrolls sideways.
+- **The strip is three hundred frames long** and is scrolled across. MoArt
+  reaches the same place with a zoom knob on a rail (`--genga-cell-w`, the
+  `.tl-zoom-knob` and the `.tl-vbar` beside the timeline); TVMini has no
+  zoom, so the strip is simply long and scrolls, which is the same idea
+  without a control to learn. The rail under the strip is thin, so it does
+  not eat a row of frames.
+- **The tool property panel is one tall column on the left**, the way
+  MoArt's is: the colour circle at the top, then the tools, then the
+  history, then the brush and the pen. The properties of the tool used to
+  live in a bar along the bottom of the window; they live in the panel
+  now, and the bottom of the window belongs to the stage and the timeline.
+  MoArt's panel is called *TOOL PROPERTY* and is headed by small captions
+  — *Color circle*, *Tools*, *ERASER* — so TVMini's is called the same and
+  its parts are captioned the same way.
+- **The colour circle is always on screen.** MoArt's panel holds the hue
+  ring with the saturation/value square inside it permanently, and TVMini
+  used to keep the wheel behind a button that opened a floating panel.
+  The wheel sits in the panel now, at 176px, and follows the colour from
+  the start.
+- **The stage zooms around the pointer.** The point of the document under
+  the pointer is worked out before the zoom, and the document is placed
+  afterwards so that the same point lands under the pointer again. Each
+  axis is worked out on its own — the horizontal point and the vertical one
+  are different points of the document, and using one for both slides the
+  picture away from the pointer. The pane is scrolled to move the
+  document, and what the scroll cannot take (because the document is
+  smaller than the pane and there is nothing to scroll) is left to a
+  shift of the sheet. The shift is a translation, so the picture stays
+  sharp, and the browser's own scroll anchoring is turned off so it
+  cannot move the picture behind our back. Measured: the pointer stays
+  on the same point of the document to within a tenth of a pixel, in
+  both directions, whether the document is larger or smaller than the
+  pane.
+- **The stage is a window onto a world, not a box.** MoArt keeps an explicit
+  pan (`state.gengaPanX`, `state.gengaPanY`) and a zoom
+  (`state.gengaZoom`, clamped to 0.1…8), and the paper is placed in the
+  workspace rather than filling the viewport — which is why its scrollbars
+  stay alive at 43% and the paper can be moved anywhere.
+  TVMini now does the same thing with the pane it already had: the document
+  sits in a **world** that is always a little larger than the pane, so the
+  bars of the pane keep their range at any zoom, and the document is
+  centred in the world. The zoom controls moved into the head of the stage
+  the way MoArt has them — the size as a percentage, a bar to make it
+  smaller, a bar to make it bigger, and a button to show the whole document.
+  The percentage is a button as well: it goes back to 100% and centres the
+  document, which is what MoArt's reset does.
+- **The wheel zooms over the whole stage**, not only over the document, and
+  the point of the document that is kept is the one under the pointer — or
+  the nearest edge of the document when the pointer is over the empty
+  stage beside it.
 - **Every mark is a shape, not a picture of a character.** The transport, the
   eye, the lock, the fold arrow, the camera key and the row buttons are
   drawn as SVG in one sprite at the top of the page, so the window looks the

@@ -69,9 +69,11 @@
   --r-panel: 0px;
   --seam-w: 1px;
   --timeline-h: 164px;
-  --properties-h: 100px;
-  --left-w: 64px;
+  --left-w: 196px;
   --right-w: 232px;
+  /* The room around the document inside the stage. It is what keeps the
+     bars of the stage alive when the document is zoomed right out. */
+  --world-pad: 120px;
 
   /* The timeline's geometry. Every row, cell and lane reads these, so the
      timeline keeps one rhythm from the ruler down to the empty area. */
@@ -80,8 +82,8 @@
   --tl-lane-h: 20px;
   --tl-keys-h: 11px;
   --tl-nums-h: 15px;
-  --tl-cell-min: 16px;
-  --tl-cell-base: 16px;
+  --tl-cell-min: 18px;
+  --tl-cell-base: 18px;
   --tl-head-pad-l: 4px;
   --tl-head-pad-r: 3px;
   --tl-head-gap: 3px;
@@ -122,8 +124,7 @@ body {
 body.shell {
   display: grid;
   grid-template-rows:
-    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) var(--properties-h) 5px
-    var(--timeline-h) 24px;
+    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 5px var(--timeline-h) 24px;
   height: 100vh;
   overflow: hidden;
   background: var(--ground);
@@ -148,20 +149,16 @@ body.shell {
   grid-row: 3;
 }
 
-.properties-pane {
+#timelineGrip {
   grid-row: 4;
 }
 
-#timelineGrip {
+.timeline-pane {
   grid-row: 5;
 }
 
-.timeline-pane {
-  grid-row: 6;
-}
-
 .statusbar {
-  grid-row: 7;
+  grid-row: 6;
 }
 
 /* hidden panes ---------------------------------------------------------- */
@@ -177,16 +174,7 @@ body.hide-timeline #timelineGrip {
 
 body.hide-timeline {
   grid-template-rows:
-    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) var(--properties-h) 0 0 24px;
-}
-
-body.hide-properties {
-  grid-template-rows:
-    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 0 5px var(--timeline-h) 24px;
-}
-
-body.hide-properties .properties-pane {
-  display: none;
+    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 0 0 24px;
 }
 
 body.hide-stage .workspace {
@@ -1123,28 +1111,43 @@ body.hide-inspector.hide-stage .workspace {
   overflow-x: hidden;
 }
 
-/* The heading of a part of the tool bar, written across it. */
+/* The heading of a part of the tool property panel. It is a small caption
+   at the left of the panel, the way MoArt writes the head of each part. */
 .tool-section-title {
   flex: none;
-  padding: 4px 4px 3px;
+  padding: 7px 8px 4px;
   border-top: 1px solid var(--seam);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  background: var(--surface-2);
   color: var(--muted);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  text-align: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-align: left;
 }
 
 .tool-section-title:first-child {
   border-top: 0;
 }
 
+/* The properties of the tool, under their heading. */
+.tool-props {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 4px 8px 10px;
+}
+
 .tool-grid {
   display: grid;
-  grid-template-columns: repeat(2, 24px);
-  justify-content: center;
+  grid-template-columns: repeat(4, 24px);
+  justify-content: start;
   gap: 3px;
-  padding: 5px 0 7px;
+  padding: 4px 8px 8px;
+}
+
+.tool-grid.pair {
+  grid-template-columns: repeat(2, 24px);
 }
 
 .tool-grid button {
@@ -1183,81 +1186,34 @@ body.hide-inspector.hide-stage .workspace {
   height: 15px;
 }
 
-/* The colour of the strokes, and the wheel that picks it. */
-.tool-swatches {
+/* The colour circle: the hue ring with the square inside it. */
+.wheel {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+
+.wheel-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 4px 0 8px;
-}
-
-.tool-swatch {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 1px solid var(--seam-strong);
-  border-radius: var(--r-btn);
-  background: var(--surface-3);
-  box-shadow: inset 0 1px 0 var(--edge);
-  cursor: pointer;
-}
-
-.tool-swatch canvas {
-  width: 40px;
-  height: 40px;
-}
-
-.tool-swatches input[type="color"] {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--seam-strong);
-  background: none;
-  cursor: pointer;
-}
-
-/* The properties of the tool, along the bottom of the window. */
-.properties-pane {
-  background: var(--surface);
-  min-height: 0;
-}
-
-.properties {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 18px;
-  padding: 6px 10px;
-  overflow: auto;
-}
-
-.property-group {
-  display: flex;
-  flex-direction: column;
   gap: 4px;
-  min-width: 168px;
-  padding-right: 14px;
-  border-right: 1px solid var(--seam);
+  padding: 4px 8px 8px;
 }
 
-.property-group:last-child {
-  border-right: 0;
+.wheel-row input[type="color"] {
+  flex: none;
+  width: 26px;
+  height: 22px;
 }
 
-.property-group .panel-title {
-  margin: 0;
+.wheel-row input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
 }
 
-.property-group .field {
-  margin: 0;
-}
-
-.tools {
-  gap: 9px;
-}
+/* The properties of the tool live in the tool property panel now, so the
+   old bar along the bottom of the window is gone. */
 
 .tool-row {
   display: grid;
@@ -1405,6 +1361,65 @@ body.hide-inspector.hide-stage .workspace {
   box-shadow: -1px 0 0 var(--edge);
 }
 
+/* The zoom of the stage, in the head of the stage, the way MoArt has it:
+   the size, a bar to make it smaller, a bar to make it bigger, and a
+   button to show the whole document. */
+.stage-zoom {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  padding-right: 8px;
+}
+
+.stage-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stage-zoom-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.stage-zoom-btn .tli {
+  width: 12px;
+  height: 12px;
+}
+
+.stage-zoom-label {
+  min-width: 44px;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  cursor: pointer;
+}
+
+.stage-zoom-label:hover {
+  background: var(--surface-3);
+}
+
 .frame-label {
   color: var(--muted);
   font-size: var(--fs-sm);
@@ -1432,9 +1447,23 @@ body.hide-inspector.hide-stage .workspace {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  display: flex;
   overflow: scroll;
-  padding: 18px;
+  padding: 0;
+  /* The zoom sets the scroll itself, so the browser must not move the
+     picture on its own when the canvas changes size. */
+  overflow-anchor: none;
+}
+
+/* The world the document sits in. It is always a little larger than the
+   pane, so the bars of the pane have somewhere to go at any zoom — a
+   document zoomed right out does not swallow them. */
+.canvas-world {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: calc(100% + var(--world-pad) * 2);
+  min-height: calc(100% + var(--world-pad) * 2);
+  box-sizing: border-box;
 }
 
 .canvas-scroll::-webkit-scrollbar {
@@ -1743,11 +1772,36 @@ canvas.picking {
   cursor: default;
 }
 
+/* The strip of frames. It is a long one — three hundred columns — and the
+   columns are a fixed width, so the timeline is scrolled across and the
+   names of the layers stay where they are. */
 .timeline-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   background: var(--well);
+}
+
+/* The rail under the strip is thin, so it does not eat a row of frames. */
+.timeline-scroll::-webkit-scrollbar {
+  height: 9px;
+  width: 9px;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: var(--well);
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-3);
+  background-clip: content-box;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
 }
 
 .timeline {
@@ -1802,11 +1856,15 @@ canvas.picking {
   background: var(--surface);
 }
 
+/* One column per frame, and every column is exactly as wide as the number
+   it has to hold. The columns do not stretch to fill the window — MoArt
+   gives every frame a fixed width too, and the ruler then reads as one
+   scale instead of a number scattered across the pane. */
 .tl-keys,
 .tl-numbers,
 .tl-cells {
   display: grid;
-  grid-template-columns: repeat(var(--frames), minmax(var(--tl-cell-min), 1fr));
+  grid-template-columns: repeat(var(--frames), var(--tl-cell-min));
 }
 
 .tl-keys {
@@ -1906,7 +1964,7 @@ canvas.picking {
 .tl-grid-lines {
   display: grid;
   grid-column: 2;
-  grid-template-columns: repeat(var(--frames), minmax(var(--tl-cell-min), 1fr));
+  grid-template-columns: repeat(var(--frames), var(--tl-cell-min));
 }
 
 .tl-grid-line {
@@ -2389,41 +2447,17 @@ input[type="range"] {
   cursor: pointer;
 }
 
-/* HSV colour wheel panel */
-
-.wheel-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px;
-  border-radius: var(--r-panel);
-  background: var(--well);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
-}
-
-.wheel-panel[hidden] {
-  display: none;
-}
+/* HSV colour wheel. It sits in the tool property panel and is always
+   drawn, so it needs no panel of its own. */
 
 #wheelCanvas {
-  width: 198px;
-  height: 198px;
+  width: 176px;
+  height: 176px;
   max-width: 100%;
   background: transparent;
   box-shadow: none;
   touch-action: none;
   cursor: crosshair;
-}
-
-.wheel-row {
-  display: flex;
-  gap: 4px;
-}
-
-.wheel-row input[type="text"] {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
 }
 
 /* scrollbars ------------------------------------------------------------- */
@@ -2819,41 +2853,34 @@ input[type="range"] {
 .tl-row.drop-target .tl-name {
   color: var(--accent);
 }
-/* The stage is clipped, and the zoom of the stage sits in its corner. */
+/* The stage is clipped, and the zoom of the stage sits in its head. */
 .canvas-wrap {
   overflow: hidden;
-}
-
-.zoom-label {
-  position: absolute;
-  /* Clear of the bars of the stage, which are in the corner of the pane. */
-  right: 24px;
-  bottom: 24px;
-  z-index: 3;
-  padding: 3px 10px;
-  border: 1px solid var(--edge);
-  border-radius: 4px;
-  background: var(--surface-1);
-  color: var(--text-1);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.zoom-label:hover {
-  border-color: var(--accent);
 }
 /* The brush picture and the brushes that were saved. */
 .brush-image-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 6px;
 }
 
 .brush-image-row select {
   flex: 1;
   min-width: 0;
+}
+
+.brush-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.brush-actions button {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--btn-h-mini);
+  padding: 0 6px;
+  font-size: var(--fs-sm);
 }
 
 .brush-image-name {
@@ -2862,8 +2889,8 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-2);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
 }
 
 /* The brush panel: bring a brush in, look at the brushes, write one out. */

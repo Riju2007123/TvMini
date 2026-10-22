@@ -8,9 +8,11 @@
  */
 
 const STORAGE_KEY = "tvmini.shell.v2";
-const PANES = ["tools", "stage", "layers", "inspector", "timeline", "properties"];
-const DEFAULT_HEIGHT = 132;
-const MIN_HEIGHT = 90;
+const PANES = ["tools", "stage", "layers", "inspector", "timeline"];
+// The timeline is the thinnest part of the window: its header, its toolbar
+// and a handful of rows of frames fit in this height.
+const DEFAULT_HEIGHT = 164;
+const MIN_HEIGHT = 84;
 
 function readState() {
   const fallback = { hidden: [], timelineHeight: DEFAULT_HEIGHT };

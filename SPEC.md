@@ -196,19 +196,39 @@ compatibility with either program.
 
 ### FR-22 The look of the timeline
 - The timeline is drawn the way Clip Studio Paint draws it.
+- The whole window is a **dark workbench**: three greys for the ground, the
+  wells and the panels, a hairline between the parts, one blue for everything
+  that is live and one red for the playhead.
+- The timeline is the densest part of the window and is sized for that. The
+  rows are **one line high** in the compact view, which is the default, and
+  the *Compact view* button in the header switches them to rows with room for
+  a name. One number states the height of a row and every part of it reads
+  that number, so the rows cannot drift apart.
 - The head of the timeline is a ruler with two lines: the keys of the
   animation above the frame numbers, and the frame numbers themselves.
-  The numbers are thinned out when there are many frames, so they do not run
-  into one another, and the number of the frame that is shown is always
-  written and is red.
+  The numbers are **monospace** and stand at the **left** of their own
+  column, so the row reads as one scale, and the number of every frame is
+  written. A column too narrow to hold the number leaves it out, and only
+  every fifth frame and the frame that is shown are written then.
+  The number of the frame that is shown is always written and is red.
+- Every frame gets a column of the **same fixed width** — the width the
+  widest number of the ruler needs — so the number of a frame stands
+  directly above that frame and the columns do not spread out when the
+  scene is short. A long scene scrolls sideways.
+- The strip is **three hundred frames** long by default, so there is room to
+  draw without the ruler having to grow, and the timeline is **scrolled
+  across** to reach a later frame. The names of the layers stay in place
+  while it scrolls. The strip grows past three hundred when the project
+  needs it to, up to a thousand frames.
+- A **red triangle** in the key line marks the frame the playhead is on, and
+  the column of that frame is tinted over every row. The column of the first
+  frame is marked with a line.
 - A key marker shows the frame of the key, and clicking it goes to that
   frame.
-- The column of the frame that is shown is tinted over every row, and the
-  column of the first frame is marked with a line.
 - The names of the layers stay in place when the timeline is scrolled
   sideways.
 - The head of a row shows a fold arrow for a folder, the eye, the kind of the
-  layer, the name, the lock and a **⊞** button that adds a layer next to it:
+  layer, the name, the lock and a **+** button that adds a layer next to it:
   inside the folder when the row is a folder, above the row otherwise.
 - The corner of the timeline reads *frame / first frame / last frame*, and
   the settings of the timeline — the frame rate, the first frame, the loop
@@ -216,6 +236,8 @@ compatibility with either program.
 - The names of the cells and the keys of the timeline can be hidden.
 - Under the rows there is an empty area with the columns of the frames in
   it.
+- Every mark in the timeline is drawn as a shape and not as a picture of a
+  character, so the whole window looks the same on every machine.
 
 ### FR-11 Eraser
 - The tools panel offers **Brush** and **Eraser**; `B` and `E` switch tools
@@ -307,9 +329,14 @@ compatibility with either program.
   layers.
 - If a `.clip` preview is present, a read-only image row is shown below the
   animation layers.
-- Toolbar actions: Play/Pause, Loop, FPS, Start, the keyframe buttons, + Layer,
-  + Folder, − Folder, − Layer, ↑, ↓, + Drawing, Duplicate, Hold +1, Delete,
-  Exposure.
+- The toolbar carries a **shape** for each thing it acts on: a **rectangle**
+  is a layer, a **circle** is a folder and a **triangle** is a drawing. The
+  action that takes a thing away is the same shape with a **bar in front of
+  it**. The six buttons are therefore: layer, folder, folder away, layer
+  away, drawing and drawing away — with no word on any of them.
+- The rest of the toolbar: Duplicate, Hold +1, the layer up and down
+  arrows, the *Cell names* and *Keys* switches, Play/Pause, Loop, FPS,
+  Start, the keyframe buttons and *Compact view*.
 - The current layer's name, opacity, pre/post behaviour and clip mask are
   edited in the tools panel.
 
@@ -537,10 +564,20 @@ text; it never fails silently.
 ### 4.2 UI
 - File menu: New, Open…, Import .clip preview…, Save, Save As…, Export current
   frame PNG…, Export layered .clip (current frame)…, Recent ▸.
-- Tools: Brush / Eraser / Pick buttons (`B` / `E` / `I`), Line / Rect / Oval /
-  Fill buttons (`L` / `R` / `V` / `F`), Camera button (`C`), colour, width,
-  pen pressure, stabiliser (0–10), stroke opacity (1–100 %) and blend mode,
-  undo / redo.
+- **Tool property panel** (the column on the left): one tall panel with a
+  part for each thing, the way MoArt's tool property panel is built —
+  - *Colour circle*: the hue ring with the saturation/value square inside it,
+    always on screen, and under it the colour, its hex value and the
+    *Transparent* button that switches to the eraser;
+  - *Tools*: Brush / Eraser / Pick buttons (`B` / `E` / `I`), Line / Rect /
+    Oval / Fill buttons (`L` / `R` / `V` / `F`), Camera button (`C`);
+  - *History*: undo / redo;
+  - *Brush*: the brush that is loaded, the brushes that are saved, width,
+    stabiliser (0–10), stroke opacity (1–100 %) and blend mode;
+  - *Pen*: pen pressure, the pressure gain and *Draw with touch*.
+- There is **no properties bar** along the bottom of the window: the
+  properties of the tool live in the tool property panel, and the space
+  goes to the stage.
 - Timeline: a camera row (keyframes that frame the shot, `Shift+C` toggles a
   key on the current frame), the layer rows, and a sound row with the
   waveform.
@@ -551,9 +588,24 @@ text; it never fails silently.
 - Current layer: name, opacity, before-first behaviour, after-last behaviour,
   clear current drawing.
 - Canvas: drag to draw; stroke colour and width controls.
-- Timeline toolbar: Play/Pause, Loop, FPS, Start, current frame, layer
-  add/delete/move, drawing add/duplicate/hold/delete, exposure.
+- The stage zooms **around the pointer**: the point of the document under the
+  pointer is the point that stays under the pointer, on both axes. The wheel
+  over the stage and the zoom buttons both do this, and the pointer may be
+  anywhere over the document.
+- The head of the stage carries the **zoom controls**, the way MoArt has
+  them: the size as a percentage, a bar to make it smaller, a bar to make it
+  bigger and a button to show the whole document. The percentage is a
+  button too: it goes back to 100% and puts the document in the middle.
+- The stage is a **window onto a world**. The world is always a little
+  larger than the pane, so the bars of the pane have something to show at
+  any zoom: a document zoomed right out does not swallow them, and the
+  document can be moved around freely.
+- Timeline toolbar: the transport (Play/Pause, the keyframe buttons), Loop,
+  FPS, Start, *Compact view*, the shape buttons of the layers, folders and
+  drawings, Duplicate, Hold +1, and the *Cell names* and *Keys* switches.
 - Timeline grid: layer rows, frame columns, current-cell outline, virtual cells.
+- Layers panel: the same shape buttons as the timeline, so the two places
+  that do the same thing look the same.
 - Status bar: last result or error.
 - Title bar: `name — TVMini` with `*` while unsaved.
 

@@ -139,6 +139,14 @@ test("contentEnd and timelineColumns include content and the playhead", () => {
   assert.equal(contentLength(project), 8);
   assert.equal(timelineColumns(project, 12), 12);
 
+  // The default strip is long: three hundred frames of room to draw in.
+  assert.equal(timelineColumns(project), 300);
+
+  // A project that is longer than the default strip grows it.
+  project.layers[0].drawings = [drawing(2, 2), drawing(400, 1)];
+  assert.equal(timelineColumns(project), 404);
+
+  project.layers[0].drawings = [drawing(2, 2), drawing(8, 1)];
   project.startFrame = 3;
   project.currentFrame = 3;
   // Drawings at 2 are before the start and do not add columns.

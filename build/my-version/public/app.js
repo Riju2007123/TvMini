@@ -69,6 +69,14 @@ const overlayCtx = overlay.getContext("2d");
 // The box the stage is in. It scrolls when the document is larger than the
 // pane, and the bars of it show where the document is.
 const canvasScroll = document.querySelector(".canvas-scroll");
+// The sheet of the document inside the box. The zoom may shift it, so the
+// point under the pointer can be kept there.
+const canvasStack = document.querySelector(".canvas-stack");
+// The world the document sits in. It is bigger than the pane, so the bars
+// of the pane have somewhere to go at any zoom.
+const canvasWorld = document.querySelector(".canvas-world");
+// The room around the document inside the world.
+const WORLD_PAD = 120;
 const statusEl = document.getElementById("status");
 const statusBar = document.querySelector(".statusbar");
 const pathLabel = document.getElementById("pathLabel");
@@ -102,6 +110,9 @@ const cameraZoomButton = document.getElementById("cameraZoom");
 const cameraZoomInButton = document.getElementById("cameraZoomIn");
 const cameraZoomOutButton = document.getElementById("cameraZoomOut");
 const zoomLabel = document.getElementById("zoomLabel");
+const zoomInButton = document.getElementById("zoomInButton");
+const zoomOutButton = document.getElementById("zoomOutButton");
+const zoomFitButton = document.getElementById("zoomFitButton");
 const cameraXInput = document.getElementById("cameraX");
 const cameraYInput = document.getElementById("cameraY");
 const cameraWidthInput = document.getElementById("cameraWidth");
@@ -154,6 +165,7 @@ const clipLayerInput = document.getElementById("clipLayer");
 const frameReadout = document.getElementById("frameReadout");
 const cellNamesButton = document.getElementById("cellNamesButton");
 const keyMarkersButton = document.getElementById("keyMarkersButton");
+const compactViewButton = document.getElementById("compactViewButton");
 const timelineMenuButton = document.getElementById("timelineMenuButton");
 const timelineMenu = document.getElementById("timelineMenu");
 const menuFps = document.getElementById("menuFps");
@@ -231,6 +243,8 @@ const state = {
   // the frame numbers.
   showCellNames: true,
   showKeyMarkers: true,
+  // Small rows in the timeline (off = rows with room for a name).
+  compactTimeline: true,
   opacityBefore: null,
   tvppSourcePath: null,
   // Remembered preferences (pressure gain, touch drawing, start screen).
@@ -483,6 +497,46 @@ function element(tag, className, text) {
   return node;
 }
 
+/**
+ * A small button that shows one of the icons in the sprite.
+ *
+ * The icons are the shapes of the timeline: a rectangle is a layer, a circle
+ * is a folder, a triangle is a drawing. They are drawn in one place — the
+ * sprite at the top of the page — so a row of the timeline and the panel
+ * beside it always show the same mark.
+ */
+function iconButton(className, symbol, title) {
+  const button = element("button", className);
+  button.title = title;
+  button.append(iconGlyph(symbol));
+  return button;
+}
+
+/** The same icon, but not a button — for a mark inside a button. */
+function iconGlyph(symbol) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "tli");
+  svg.setAttribute("viewBox", "0 0 20 20");
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#${symbol}`);
+  svg.append(use);
+  return svg;
+}
+
+/**
+ * The play button shows a triangle while the animation is stopped and two
+ * bars while it runs.
+ */
+function setPlayIcon(playing) {
+  if (!playButton) return;
+  const use = playButton.querySelector("use");
+  if (use) use.setAttribute("href", playing ? "#i-pause" : "#i-play");
+  const label = document.getElementById("playLabel");
+  if (label) label.textContent = playing ? "Pause" : "Play";
+  playButton.setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+
 /* ------------------------------------------------------------- documents */
 
 /** The record of the document that is being edited. */
@@ -712,10 +766,16 @@ function stageBuffer() {
   const project = state.project;
   const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   const zoom = viewZoom || 1;
-  // The buffer holds the dots of the screen: the size of the document, times
-  // the zoom, times the number of dots a pixel of the screen has.
-  let width = Math.round(project.width * zoom * ratio);
-  let height = Math.round(project.height * zoom * ratio);
+  // The size the stage is shown at, measured from the element itself. That is
+  // the size the buffer has to match, whatever the page, the window or the
+  // browser does to it.
+  const box = canvas.getBoundingClientRect();
+  const shownWidth = box.width || project.width * zoom;
+  const shownHeight = box.height || project.height * zoom;
+  // The buffer holds the dots of the screen: the size on the screen, times
+  // the number of dots a pixel of the screen has.
+  let width = Math.round(shownWidth * ratio);
+  let height = Math.round(shownHeight * ratio);
   const biggest = Math.max(width, height);
   if (biggest > MAX_STAGE_BUFFER) {
     const shrink = MAX_STAGE_BUFFER / biggest;
@@ -784,10 +844,18 @@ function useStageSpace(target = ctx) {
 if (typeof window !== "undefined") {
   window.addEventListener("resize", () => {
     const buffer = stageBuffer();
-    if (canvas.width === buffer.width && canvas.height === buffer.height) return;
-    canvas.width = buffer.width;
-    canvas.height = buffer.height;
-    renderCanvas();
+    if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
+      canvas.width = buffer.width;
+      canvas.height = buffer.height;
+      renderCanvas();
+    }
+    // The world follows the pane, so the bars of the pane keep their room
+    // when the window is made bigger.
+    const project = state.project;
+    if (project) {
+      const zoom = viewZoom || 1;
+      sizeWorld(Math.round(project.width * zoom), Math.round(project.height * zoom));
+    }
   });
 }
 
@@ -798,6 +866,7 @@ function resizeCanvas() {
   // The element is the size the document is shown at, and the buffer holds
   // the dots of the screen.
   applyView();
+  centreStage();
   renderCanvas();
   renderTimeline();
   renderLayerPanel();
@@ -872,7 +941,14 @@ function strokeRadius(stroke, point) {
   return Math.max(0.5, radius);
 }
 
-function drawStrokesInto(ctx, strokes) {
+/**
+ * Paint strokes into a context.
+ *
+ * `brush` is the brush the strokes were made with. A brush that has a
+ * picture paints that picture along the stroke, the way Clip Studio Paint
+ * paints the shape of a brush, instead of a plain round line.
+ */
+function drawStrokesInto(ctx, strokes, brush = null) {
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
   ctx.lineCap = "round";
@@ -896,7 +972,7 @@ function drawStrokesInto(ctx, strokes) {
         blendCanvas.height = canvasHeight;
       }
       blendCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight);
+      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight, brush);
       ctx.globalAlpha = opacity;
       ctx.globalCompositeOperation =
         stroke.eraser === true ? "destination-out" : blend === "normal" ? "source-over" : blend;
@@ -906,10 +982,88 @@ function drawStrokesInto(ctx, strokes) {
       continue;
     }
 
-    drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight);
+    drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush);
   }
 
   ctx.globalCompositeOperation = "source-over";
+}
+
+/** The pictures of the brushes, in the colours they were used in. */
+const tintedTips = new Map();
+
+/**
+ * The picture of a brush in the colour of the stroke.
+ *
+ * The picture of a brush is only the shape of the tip, so the colour of the
+ * stroke is mixed into it. The result is kept, because the same brush and
+ * the same colour are used again and again.
+ */
+function tintedTip(brush, color) {
+  const picture = tipImage(brush);
+  if (!picture.complete || !picture.naturalWidth) return null;
+  const key = `${brush.data}|${color}`;
+  if (tintedTips.has(key)) return tintedTips.get(key);
+
+  const surface = document.createElement("canvas");
+  surface.width = picture.naturalWidth;
+  surface.height = picture.naturalHeight;
+  const context = surface.getContext("2d");
+  context.drawImage(picture, 0, 0);
+  // "source-in" keeps the picture and takes the colour of the fill, so the
+  // shape of the tip is painted in the colour of the stroke.
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = color;
+  context.fillRect(0, 0, surface.width, surface.height);
+  context.globalCompositeOperation = "source-over";
+
+  if (tintedTips.size > 8) tintedTips.clear();
+  tintedTips.set(key, surface);
+  return surface;
+}
+
+/**
+ * The size of the picture of a brush at a point of the stroke.
+ *
+ * The picture is as tall as the brush is wide, and its width follows from
+ * that, so a brush that is not round keeps its shape.
+ */
+function brushShapeBox(picture, radius) {
+  const height = Math.max(1, radius * 2);
+  const width = height * (picture.width / Math.max(1, picture.height));
+  return { width, height };
+}
+
+/**
+ * Paint a stroke with the picture of the brush.
+ *
+ * The picture is stamped along the path, a little apart, the way Clip Studio
+ * Paint stamps the shape of a brush.
+ */
+function drawStrokeWithPicture(ctx, stroke, picture) {
+  const radii = stroke.points.map((point) => strokeRadius(stroke, point));
+  const stamp = (x, y, radius) => {
+    const box = brushShapeBox(picture, radius);
+    ctx.drawImage(picture, x - box.width / 2, y - box.height / 2, box.width, box.height);
+  };
+
+  if (stroke.points.length === 1) {
+    stamp(stroke.points[0][0], stroke.points[0][1], radii[0]);
+    return;
+  }
+
+  for (let index = 1; index < stroke.points.length; index += 1) {
+    const [x0, y0] = stroke.points[index - 1];
+    const [x1, y1] = stroke.points[index];
+    const r0 = radii[index - 1];
+    const r1 = radii[index];
+    const length = Math.hypot(x1 - x0, y1 - y0);
+    const step = Math.max(0.5, Math.min(r0, r1) / 2);
+    const steps = Math.max(1, Math.ceil(length / step));
+    for (let part = 0; part <= steps; part += 1) {
+      const at = part / steps;
+      stamp(x0 + (x1 - x0) * at, y0 + (y1 - y0) * at, r0 + (r1 - r0) * at);
+    }
+  }
 }
 
 /** Bucket fill: flood the paint canvas from the seed with the stroke colour. */
@@ -931,12 +1085,28 @@ function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
   ctx.putImageData(image, 0, 0);
 }
 
-/** Paint one stroke (shape or freehand) directly into a 2D context. */
-function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight) {
+/**
+ * Paint one stroke (shape or freehand) directly into a 2D context.
+ *
+ * `brush` is the brush the stroke was made with. A brush that has a picture
+ * paints that picture along the stroke instead of a plain line.
+ */
+function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null) {
   ctx.globalCompositeOperation = stroke.eraser === true ? "destination-out" : "source-over";
   ctx.strokeStyle = stroke.color;
   ctx.fillStyle = stroke.color;
   const radii = stroke.points.map((point) => strokeRadius(stroke, point));
+
+  if (brush?.data) {
+    // The picture of the brush is only the shape of the tip, so it is
+    // painted in the colour of the stroke.
+    const shape = tintedTip(brush, stroke.color);
+    if (shape) {
+      drawStrokeWithPicture(ctx, stroke, shape);
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+  }
 
   if (stroke.kind === "line") {
     const [x0, y0] = stroke.points[0];
@@ -1039,7 +1209,7 @@ function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targ
   target.globalAlpha = alpha;
   const base = drawingImageElement(drawing);
   if (base) target.drawImage(base, 0, 0, project.width, project.height);
-  drawStrokesInto(target, drawing.strokes);
+  drawStrokesInto(target, drawing.strokes, drawing.brush);
   target.globalAlpha = 1;
   return targetCanvas;
 }
@@ -1294,8 +1464,16 @@ function drawCameraOverlay(camera, frame) {
 
 /* ---------------------------------------------------------------- timeline */
 
+/**
+ * How many columns of frames the timeline shows.
+ *
+ * The strip is a long one — three hundred frames — and the columns are a
+ * fixed width, so the timeline scrolls across rather than stretching the
+ * frames apart. The cap keeps the number of cells the browser has to draw
+ * within reach.
+ */
 function timelineColumnCount() {
-  return Math.max(12, Math.min(MAX_COLUMNS, timelineColumns(state.project, 12)));
+  return Math.max(300, Math.min(MAX_COLUMNS, timelineColumns(state.project, 300)));
 }
 
 /* ------------------------------------------------------------------ camera */
@@ -1620,82 +1798,72 @@ cameraZoomButton.addEventListener("click", () => {
   setStatus("Camera zoomed to the centre");
 });
 
-cameraZoomInButton.addEventListener("click", () => {
-  const box = canvas.getBoundingClientRect();
-  zoomStage(1 + ZOOM_STEP, box.left + box.width / 2, box.top + box.height / 2);
+cameraZoomInButton?.addEventListener("click", () => {
+  zoomStageAtCentre(1 + ZOOM_STEP);
   setStatus("Zoomed in");
 });
 
-cameraZoomOutButton.addEventListener("click", () => {
-  const box = canvas.getBoundingClientRect();
-  zoomStage(1 / (1 + ZOOM_STEP), box.left + box.width / 2, box.top + box.height / 2);
+cameraZoomOutButton?.addEventListener("click", () => {
+  zoomStageAtCentre(1 / (1 + ZOOM_STEP));
   setStatus("Zoomed out");
 });
 
-/* ------------------------------------------------------- the brush image */
+/* ------------------------------------------------------- the brush panel */
 
-const brushImageButton = document.getElementById("brushImageButton");
-const brushImageInput = document.getElementById("brushImageInput");
 const brushImageName = document.getElementById("brushImageName");
-
-brushImageButton.addEventListener("click", () => brushImageInput.click());
-
-/**
- * Use a picture as the shape of the brush.
- *
- * A PNG works, and so does a Clip Studio Paint brush, because the picture is
- * looked for inside the file. The picture becomes the tip of the brush of
- * the drawing that is being drawn on.
- */
-brushImageInput.addEventListener("change", async () => {
-  const file = brushImageInput.files?.[0];
-  brushImageInput.value = "";
-  if (!file) return;
-
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let picture = null;
-  let name = file.name;
-
-  // A Clip Studio Paint brush is a database with the picture of the tip in
-  // it, so it is read as one; anything else is taken as a picture.
-  if (/\.sut$/i.test(file.name)) {
-    const brush = await readSutBrush(bytes);
-    if (!brush) {
-      setStatus("That brush holds no picture the brush can use", true);
-      return;
-    }
-    picture = brush.texture;
-    name = brush.name || file.name;
-  } else {
-    picture = brushImageFromBytes(bytes);
-    if (!picture) {
-      setStatus("That file holds no picture the brush can use", true);
-      return;
-    }
-  }
-
-  const layer = currentLayer();
-  if (layer.locked) {
-    setStatus("This layer is locked — unlock it first", true);
-    return;
-  }
-  const drawing = ensureDrawing(layer, state.project.currentFrame);
-  const before = snapshot();
-  drawing.brush = { data: picture.data };
-  recordHistory(before);
-  markDirty();
-  afterChange();
-  brushImageName.textContent = name;
-  setStatus(`The brush is now ${name}`);
-  // The shape of the brush under the pointer is the picture now.
-  drawOverlay();
-});
-
-/* ------------------------------------------------------- the brush library */
-
 const brushLibrarySelect = document.getElementById("brushLibrary");
 const brushSaveButton = document.getElementById("brushSave");
-const brushRemoveButton = document.getElementById("brushRemove");
+const brushPanelButton = document.getElementById("brushPanelButton");
+const brushDialog = document.getElementById("brushDialog");
+const brushDrop = document.getElementById("brushDrop");
+const brushDropInput = document.getElementById("brushDropInput");
+const brushBuiltinsList = document.getElementById("brushBuiltins");
+const brushImportedList = document.getElementById("brushImported");
+const brushImportedEmpty = document.getElementById("brushImportedEmpty");
+
+/**
+ * The picture of a soft round tip.
+ *
+ * It is made in the page, so the program does not have to carry a picture
+ * file around. This is the shape of an air brush: soft at the edge.
+ */
+function softTipData() {
+  const size = 64;
+  const surface = document.createElement("canvas");
+  surface.width = size;
+  surface.height = size;
+  const context = surface.getContext("2d");
+  const middle = size / 2;
+  const fade = context.createRadialGradient(middle, middle, 0, middle, middle, middle);
+  fade.addColorStop(0, "rgba(16, 20, 24, 1)");
+  fade.addColorStop(0.55, "rgba(16, 20, 24, 0.6)");
+  fade.addColorStop(1, "rgba(16, 20, 24, 0)");
+  context.fillStyle = fade;
+  context.fillRect(0, 0, size, size);
+  // The picture of the tip is kept as base64, the way a drawing keeps it.
+  return surface.toDataURL("image/png").split(",")[1] ?? "";
+}
+
+/**
+ * The brushes that are always there.
+ *
+ * The round tip paints with the plain round stroke. The soft one paints with
+ * a picture of a soft blob.
+ */
+const BUILT_IN_BRUSHES = [
+  { name: "the round tip", size: 6, data: null },
+  { name: "the soft round", size: 40, data: null },
+];
+
+/** The picture of the soft round tip, made when it is first needed. */
+let softTip = null;
+
+function builtInBrushes() {
+  if (!softTip) softTip = softTipData();
+  return BUILT_IN_BRUSHES.map((brush) => (brush.name === "the soft round" ? { ...brush, data: softTip } : brush));
+}
+
+/* ------------------------------------------------------------ the library */
 
 /** Where the saved brushes are kept. */
 const BRUSH_STORE = "tvmini.brushes";
@@ -1719,6 +1887,29 @@ function writeBrushLibrary(list) {
   }
 }
 
+/**
+ * Put a brush into the library, under its own name.
+ *
+ * The settings of the brush are kept with it, so that a brush that comes
+ * from Clip Studio Paint keeps its size and the rest of it.
+ */
+function saveBrushToLibrary(brush) {
+  const list = readBrushLibrary().filter((item) => item.name !== brush.name);
+  list.push({
+    name: brush.name,
+    data: brush.data,
+    size: brush.size ?? null,
+    opacity: brush.opacity ?? null,
+    flow: brush.flow ?? null,
+    hardness: brush.hardness ?? null,
+    thickness: brush.thickness ?? null,
+    spacing: brush.spacing ?? null,
+    scale: brush.scale ?? null,
+    rotate: brush.rotate ?? null,
+  });
+  writeBrushLibrary(list);
+}
+
 /** Fill the list of saved brushes. */
 function refreshBrushLibrary() {
   const list = readBrushLibrary();
@@ -1737,7 +1928,6 @@ function refreshBrushLibrary() {
     brushLibrarySelect.append(option);
   }
   if (list.some((brush) => brush.name === wanted)) brushLibrarySelect.value = wanted;
-  brushRemoveButton.disabled = list.length === 0;
 }
 
 /** The brush of the drawing that is being drawn on. */
@@ -1750,7 +1940,13 @@ function currentBrush() {
   return drawing?.brush ?? null;
 }
 
-/** Put a brush on the drawing that is being drawn on. */
+/**
+ * Put a brush on the drawing that is being drawn on.
+ *
+ * A brush that comes with a size brings it with it: the width of the brush
+ * is set to the size the brush was made with, the same way Clip Studio Paint
+ * picks up the settings of a brush when it is chosen.
+ */
 function useBrush(brush, name) {
   const layer = currentLayer();
   if (layer.locked) {
@@ -1759,13 +1955,41 @@ function useBrush(brush, name) {
   }
   const drawing = ensureDrawing(layer, state.project.currentFrame);
   const before = snapshot();
-  if (brush) drawing.brush = { data: brush.data };
-  else delete drawing.brush;
+  if (brush) {
+    drawing.brush = {
+      data: brush.data,
+      size: brush.size ?? null,
+      opacity: brush.opacity ?? null,
+    };
+  } else {
+    delete drawing.brush;
+  }
   recordHistory(before);
   markDirty();
   afterChange();
   brushImageName.textContent = name;
+  if (brush) applyBrushSettings(brush);
   return true;
+}
+
+/**
+ * Put the settings of a brush into the tool panel.
+ *
+ * The width of the brush and how strong it paints are the two settings that
+ * can be used by this program; the rest of a Clip Studio Paint brush
+ * describes how the brush is drawn, which a picture of a tip cannot say.
+ */
+function applyBrushSettings(brush) {
+  const size = Number(brush.size);
+  if (Number.isFinite(size) && size > 0) {
+    widthInput.value = String(Math.min(Number(widthInput.max) || 300, Math.round(size)));
+    widthValue.textContent = widthInput.value;
+    syncQuickBar();
+  }
+  const opacity = Number(brush.opacity);
+  if (Number.isFinite(opacity) && opacity > 0) {
+    strokeOpacityInput.value = String(Math.min(100, Math.round(opacity)));
+  }
 }
 
 brushLibrarySelect.addEventListener("change", () => {
@@ -1790,21 +2014,244 @@ brushSaveButton.addEventListener("click", () => {
   }
   const name = prompt("The name of this brush", "my brush");
   if (!name) return;
-  const list = readBrushLibrary().filter((item) => item.name !== name);
-  list.push({ name, data: brush.data });
-  writeBrushLibrary(list);
+  saveBrushToLibrary({ name, data: brush.data, size: Number(widthInput.value) || null });
   refreshBrushLibrary();
+  refreshBrushPanel();
   brushLibrarySelect.value = name;
   setStatus(`Saved the brush ${name}`);
 });
 
-brushRemoveButton.addEventListener("click", () => {
-  const name = brushLibrarySelect.value;
-  if (!name) return;
-  writeBrushLibrary(readBrushLibrary().filter((item) => item.name !== name));
-  refreshBrushLibrary();
-  setStatus(`Removed the brush ${name}`);
+/* ------------------------------------------------------------ the panel */
+
+brushPanelButton.addEventListener("click", () => {
+  refreshBrushPanel();
+  brushDialog.hidden = false;
 });
+
+/**
+ * One card of the brush panel.
+ *
+ * The card shows a stroke made with the brush, the name of the brush, how
+ * wide it is, and what can be done with it.
+ */
+function brushCard(brush, options = {}) {
+  const card = document.createElement("div");
+  card.className = "brush-card-item";
+
+  const preview = document.createElement("canvas");
+  preview.className = "brush-preview";
+  preview.width = 150;
+  preview.height = 44;
+  card.append(preview);
+  drawBrushPreview(preview, brush);
+
+  const name = document.createElement("span");
+  name.className = "brush-card-name";
+  name.textContent = brush.name;
+  card.append(name);
+
+  const size = document.createElement("span");
+  size.className = "brush-card-size";
+  size.textContent = `${brush.size ?? Number(widthInput.value) ?? 6}px`;
+  card.append(size);
+
+  const use = document.createElement("button");
+  use.type = "button";
+  use.textContent = "Use";
+  use.addEventListener("click", () => {
+    if (useBrush(brush, brush.name)) setStatus(`The brush is now ${brush.name}`);
+  });
+  card.append(use);
+
+  const write = document.createElement("button");
+  write.type = "button";
+  write.textContent = "Export .sut";
+  write.title = "Write this brush out as a Clip Studio Paint brush";
+  write.addEventListener("click", () => exportBrushAsSut(brush));
+  card.append(write);
+
+  if (options.remove) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => {
+      writeBrushLibrary(readBrushLibrary().filter((item) => item.name !== brush.name));
+      refreshBrushLibrary();
+      refreshBrushPanel();
+      setStatus(`Removed the brush ${brush.name}`);
+    });
+    card.append(remove);
+  }
+
+  return card;
+}
+
+/** Draw a stroke with the brush, so the card shows what the brush does. */
+function drawBrushPreview(surface, brush) {
+  const context = surface.getContext("2d");
+  const width = surface.width;
+  const height = surface.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#f4f4f6";
+  context.fillRect(0, 0, width, height);
+
+  const size = Math.max(2, Math.min(30, Number(brush.size) || 6));
+  const path = () => {
+    context.beginPath();
+    context.moveTo(8, height - 8);
+    context.bezierCurveTo(width * 0.3, 3, width * 0.62, height - 3, width - 8, 9);
+  };
+
+  const picture = brush.data ? tipImage({ data: brush.data }) : null;
+  if (picture && picture.complete && picture.naturalWidth > 0) {
+    // The brush with a picture paints that picture along the stroke, and it
+    // keeps its own shape.
+    const radius = size / 2;
+    const height = radius * 2;
+    const width = height * (picture.naturalWidth / Math.max(1, picture.naturalHeight));
+    for (let step = 0; step <= 40; step += 1) {
+      const at = step / 40;
+      const x = 8 + (width - 16) * at;
+      const y = height - 8 - Math.sin(at * Math.PI) * (height - 20);
+      context.globalAlpha = 0.85;
+      context.drawImage(picture, x - width / 2, y - height / 2, width, height);
+    }
+    context.globalAlpha = 1;
+    return;
+  }
+
+  context.strokeStyle = "#101418";
+  context.lineWidth = size;
+  context.lineCap = "round";
+  path();
+  context.stroke();
+}
+
+/** Fill the panel with the brushes that are there. */
+function refreshBrushPanel() {
+  brushBuiltinsList.textContent = "";
+  for (const brush of builtInBrushes()) {
+    brushBuiltinsList.append(brushCard(brush));
+  }
+
+  const list = readBrushLibrary();
+  brushImportedList.textContent = "";
+  for (const brush of list) {
+    brushImportedList.append(brushCard(brush, { remove: true }));
+  }
+  brushImportedEmpty.hidden = list.length > 0;
+}
+
+/**
+ * Bring a brush in.
+ *
+ * A PNG works, and so does a Clip Studio Paint brush, because the picture is
+ * looked for inside the file. The picture becomes the tip of the brush of
+ * the drawing that is being drawn on, and the brush is kept in the library.
+ */
+async function importBrushFiles(files) {
+  let brought = 0;
+  let last = null;
+  for (const file of files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let picture = null;
+    let name = file.name.replace(/\.[^.]+$/, "");
+    let size = null;
+    let settings = {};
+
+    // A Clip Studio Paint brush is a database with the picture of the tip in
+    // it, so it is read as one; anything else is taken as a picture.
+    if (/\.sut$/i.test(file.name)) {
+      const brush = await readSutBrush(bytes);
+      if (!brush) {
+        setStatus(`That brush holds no picture the brush can use: ${file.name}`, true);
+        continue;
+      }
+      picture = brush.texture;
+      name = brush.name || name;
+      size = brush.size;
+      settings = {
+        opacity: brush.opacity,
+        flow: brush.flow,
+        hardness: brush.hardness,
+        thickness: brush.thickness,
+        spacing: brush.spacing,
+        scale: brush.scale,
+        rotate: brush.rotate,
+      };
+    } else {
+      picture = brushImageFromBytes(bytes);
+      if (!picture) {
+        setStatus(`That file holds no picture the brush can use: ${file.name}`, true);
+        continue;
+      }
+    }
+
+    const brush = { name, data: picture.data, size, ...settings };
+    saveBrushToLibrary(brush);
+    last = brush;
+    brought += 1;
+  }
+
+  refreshBrushLibrary();
+  refreshBrushPanel();
+  if (!brought) return;
+  // The brush that was brought in is the one in the hand.
+  if (last) useBrush(last, last.name);
+  setStatus(`Brought in ${brought} brush${brought === 1 ? "" : "es"}`);
+}
+
+brushDrop.addEventListener("click", () => brushDropInput.click());
+brushDrop.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  brushDrop.classList.add("over");
+});
+brushDrop.addEventListener("dragleave", () => brushDrop.classList.remove("over"));
+brushDrop.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  brushDrop.classList.remove("over");
+  const files = [...(event.dataTransfer?.files ?? [])];
+  if (files.length) await importBrushFiles(files);
+});
+brushDropInput.addEventListener("change", async () => {
+  const files = [...(brushDropInput.files ?? [])];
+  brushDropInput.value = "";
+  if (files.length) await importBrushFiles(files);
+});
+
+// A file that is dropped outside the panel must not replace the page.
+window.addEventListener("dragover", (event) => event.preventDefault());
+window.addEventListener("drop", (event) => event.preventDefault());
+
+/**
+ * Write a brush out as a Clip Studio Paint brush.
+ *
+ * The file is a `.sut` file: the same thing Clip Studio Paint writes when a
+ * brush is exported, so it can be brought into Clip Studio Paint and into
+ * other programs that read those brushes.
+ */
+async function exportBrushAsSut(brush) {
+  const size = Number(brush.size) || Number(widthInput.value) || 6;
+  try {
+    const result = await backend.exportBrush(
+      {
+        name: brush.name,
+        size,
+        opacity: Number(strokeOpacityInput.value) || 100,
+        flow: 100,
+        hardness: 100,
+        thickness: 100,
+        texture: brush.data ? { data: brush.data } : null,
+      },
+      `${brush.name}.sut`,
+    );
+    if (!result) return;
+    setStatus(`The brush was written to ${result.path}`);
+  } catch (error) {
+    setStatus(`The brush could not be written: ${error.message}`, true);
+  }
+}
 
 /* ---------------------------------------------------------- the brush tip */
 
@@ -1863,8 +2310,12 @@ function drawBrushTip(target = overlayCtx) {
   if (brush) {
     const image = tipImage(brush);
     if (image.complete && image.naturalWidth > 0) {
+      // The picture of the brush keeps its own shape: it is as tall as the
+      // brush is wide, and its width follows from that.
+      const height = radius * 2;
+      const width = height * (image.naturalWidth / Math.max(1, image.naturalHeight));
       target.globalAlpha = 0.55;
-      target.drawImage(image, x - radius, y - radius, radius * 2, radius * 2);
+      target.drawImage(image, x - width / 2, y - height / 2, width, height);
     }
   } else {
     // A light ring under a dark one, so the shape of the brush is seen on
@@ -1911,7 +2362,7 @@ function drawOverlay() {
     // the pointer moves, so the stroke is shown here instead. An eraser is
     // not shown here: a sheet on top of the stage cannot take ink away, so
     // the eraser works on the document itself.
-    drawStrokesInto(overlayCtx, [state.drawing]);
+    drawStrokesInto(overlayCtx, [state.drawing], currentBrush());
   }
   drawBrushTip();
   if (view) overlayCtx.restore();
@@ -1958,6 +2409,21 @@ function showZoom() {
 let viewZoom = 1;
 
 /**
+ * Where the document sits inside the stage, when the pane cannot be
+ * scrolled far enough to put it there.
+ *
+ * The pane is scrolled to move the document, and the scroll stops at its
+ * ends. When the document is smaller than the pane there is nothing to
+ * scroll at all, so what is left over is kept here as a shift of the sheet.
+ * The shift is only ever used when the scroll has no room, and it is put
+ * back to nothing as soon as the pane is moved by hand.
+ */
+let viewShiftX = 0;
+let viewShiftY = 0;
+let expectedScrollLeft = null;
+let expectedScrollTop = null;
+
+/**
  * Put the zoom on the canvas element.
  *
  * The element is the size the document is shown at, and the buffer behind it
@@ -1968,8 +2434,16 @@ let viewZoom = 1;
 function applyView() {
   const project = state.project;
   const zoom = viewZoom || 1;
-  canvas.style.width = `${Math.round(project.width * zoom)}px`;
-  canvas.style.height = `${Math.round(project.height * zoom)}px`;
+  const paperW = Math.round(project.width * zoom);
+  const paperH = Math.round(project.height * zoom);
+  canvas.style.width = `${paperW}px`;
+  canvas.style.height = `${paperH}px`;
+  if (canvasStack) {
+    canvasStack.style.transform = viewShiftX || viewShiftY
+      ? `translate(${viewShiftX}px, ${viewShiftY}px)`
+      : "";
+  }
+  sizeWorld(paperW, paperH);
   // The buffer holds the dots of the screen, so it follows the zoom.
   const buffer = stageBuffer();
   if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
@@ -1981,20 +2455,113 @@ function applyView() {
   showZoom();
 }
 
-/** Zoom the stage by a factor, keeping the point under the pointer in place. */
+/**
+ * The size of the world the document sits in.
+ *
+ * The world is always a little larger than the pane and a little larger
+ * than the document, so the bars of the pane keep something to show at any
+ * zoom: a document zoomed right out does not swallow them.
+ */
+function sizeWorld(paperW, paperH) {
+  if (!canvasWorld) return;
+  const pane = canvasScroll.getBoundingClientRect();
+  const worldW = Math.max(pane.width, paperW) + WORLD_PAD * 2;
+  const worldH = Math.max(pane.height, paperH) + WORLD_PAD * 2;
+  canvasWorld.style.width = `${Math.round(worldW)}px`;
+  canvasWorld.style.height = `${Math.round(worldH)}px`;
+}
+
+/**
+ * Put the document in the middle of the pane.
+ *
+ * The world is bigger than the pane, so the middle of the world is the
+ * middle of the pane, and the document — which sits in the middle of the
+ * world — is in the middle of the pane too.
+ */
+function centreStage() {
+  const maxX = Math.max(0, canvasScroll.scrollWidth - canvasScroll.clientWidth);
+  const maxY = Math.max(0, canvasScroll.scrollHeight - canvasScroll.clientHeight);
+  canvasScroll.scrollLeft = maxX / 2;
+  canvasScroll.scrollTop = maxY / 2;
+  expectedScrollLeft = canvasScroll.scrollLeft;
+  expectedScrollTop = canvasScroll.scrollTop;
+}
+
+/** Go back to 100% and put the document in the middle of the pane. */
+function resetStage() {
+  viewZoom = 1;
+  viewShiftX = 0;
+  viewShiftY = 0;
+  expectedScrollLeft = null;
+  applyView();
+  centreStage();
+}
+
+/**
+ * Zoom the stage by a factor, keeping the point under the pointer in place.
+ *
+ * The point of the document under the pointer is worked out before the
+ * zoom, and the document is placed afterwards so that the same point of the
+ * document lands under the pointer again. Each axis is worked out on its
+ * own: the horizontal point and the vertical one are different points of
+ * the document, and mixing them up slides the picture away from the
+ * pointer.
+ */
 function zoomStage(factor, clientX, clientY) {
+  const project = state.project;
   const rect = canvas.getBoundingClientRect();
-  // The point under the pointer, in the pixels of the document.
-  const local = (clientX - rect.left) / viewZoom;
+  // The scale the document is really shown at. It can differ from the zoom
+  // by a fraction of a pixel, because the size of the canvas is rounded.
+  const scale = rect.width / project.width;
+  const localX = (clientX - rect.left) / scale;
+  const localY = (clientY - rect.top) / scale;
+
   const next = Math.max(0.1, Math.min(16, viewZoom * factor));
   if (next === viewZoom) return;
   viewZoom = next;
   applyView();
-  // The element grows with the zoom, so the pane is scrolled so that the
-  // same point of the document stays under the pointer.
+
+  // The scale after the zoom, and the place the document has to sit at for
+  // the point under the pointer to stay under the pointer.
   const after = canvas.getBoundingClientRect();
-  canvasScroll.scrollLeft += after.left - (clientX - local * next);
-  canvasScroll.scrollTop += after.top - (clientY - local * next);
+  const afterScale = after.width / project.width;
+  const wantX = clientX - localX * afterScale;
+  const wantY = clientY - localY * afterScale;
+
+  // The pane is scrolled to move the document there. The scroll stops at its
+  // ends, and what it cannot take is left to the shift.
+  const maxX = Math.max(0, canvasScroll.scrollWidth - canvasScroll.clientWidth);
+  const maxY = Math.max(0, canvasScroll.scrollHeight - canvasScroll.clientHeight);
+  canvasScroll.scrollLeft = Math.max(0, Math.min(maxX, canvasScroll.scrollLeft + (after.left - wantX)));
+  canvasScroll.scrollTop = Math.max(0, Math.min(maxY, canvasScroll.scrollTop + (after.top - wantY)));
+  expectedScrollLeft = canvasScroll.scrollLeft;
+  expectedScrollTop = canvasScroll.scrollTop;
+
+  // Where the document ended up, and the shift that puts it where it has
+  // to be. The old shift is taken out first, because the place the document
+  // was measured at already carries it.
+  const settled = canvas.getBoundingClientRect();
+  viewShiftX = wantX - (settled.x - viewShiftX);
+  viewShiftY = wantY - (settled.y - viewShiftY);
+  applyView();
+}
+
+// A pane that was moved by hand takes the shift with it: the shift only
+// ever stands in for a scroll that could not be made.
+canvasScroll?.addEventListener("scroll", () => {
+  if (expectedScrollLeft === null) return;
+  if (canvasScroll.scrollLeft === expectedScrollLeft && canvasScroll.scrollTop === expectedScrollTop) return;
+  expectedScrollLeft = null;
+  if (!viewShiftX && !viewShiftY) return;
+  viewShiftX = 0;
+  viewShiftY = 0;
+  applyView();
+});
+
+/** Zoom the stage about the middle of the document. */
+function zoomStageAtCentre(factor) {
+  const box = canvas.getBoundingClientRect();
+  zoomStage(factor, box.left + box.width / 2, box.top + box.height / 2);
 }
 
 /** The zoom that shows the whole document in the pane. */
@@ -2004,10 +2571,14 @@ function fitStage() {
   if (!box || !box.width || !box.height) return;
   const zoom = Math.min(box.width / project.width, box.height / project.height);
   viewZoom = Math.max(0.1, Math.min(16, zoom));
+  // The document goes back to the middle of the pane, so the shift the zoom
+  // may have left behind is put away.
+  viewShiftX = 0;
+  viewShiftY = 0;
+  expectedScrollLeft = null;
   applyView();
   // The document is in the middle of the pane again.
-  canvasScroll.scrollLeft = 0;
-  canvasScroll.scrollTop = 0;
+  centreStage();
 }
 
 /** Drag the stage with the middle mouse button: the pane is scrolled. */
@@ -2032,6 +2603,18 @@ function panStage(event) {
 }
 
 zoomLabel.addEventListener("click", () => {
+  resetStage();
+  setStatus("Back to 100%");
+});
+zoomInButton.addEventListener("click", () => {
+  zoomStageAtCentre(1 + ZOOM_STEP);
+  setStatus("Zoomed in");
+});
+zoomOutButton.addEventListener("click", () => {
+  zoomStageAtCentre(1 / (1 + ZOOM_STEP));
+  setStatus("Zoomed out");
+});
+zoomFitButton.addEventListener("click", () => {
   fitStage();
   setStatus("The whole canvas is shown");
 });
@@ -2085,7 +2668,9 @@ function renderCameraRow(columns, start) {
 
   const head = element("div", "tl-head");
 
-  const name = element("button", "tl-name", "🎥 Camera");
+  const name = element("button", "tl-name");
+  name.append(iconGlyph("i-camera"));
+  name.append(element("span", "tl-name-text", "Camera"));
   name.title = "The camera frames the shot; the stage shows what it sees";
   name.addEventListener("click", () => {
     if (currentCameraKey()) {
@@ -2096,22 +2681,23 @@ function renderCameraRow(columns, start) {
   });
   head.append(name);
 
-  const add = element("button", "tl-icon", "◆");
-  add.title = "Add or remove the camera key on the current frame";
+  const add = iconButton("tl-icon", "i-diamond", "Add or remove the camera key on the current frame");
   add.addEventListener("click", (event) => {
     event.stopPropagation();
     toggleCameraKey();
   });
 
-  const remove = element("button", "tl-icon", "✕");
-  remove.title = "Remove the camera key on the current frame";
+  const remove = iconButton("tl-icon", "i-cross", "Remove the camera key on the current frame");
   remove.addEventListener("click", (event) => {
     event.stopPropagation();
     removeCameraKey();
   });
 
-  const view = element("button", "tl-icon", state.cameraView ? "🎥" : "▣");
-  view.title = "Show the camera's shot in the stage";
+  const view = iconButton(
+    "tl-icon",
+    state.cameraView ? "i-camera" : "i-frame",
+    "Show the camera's shot in the stage",
+  );
   view.addEventListener("click", (event) => {
     event.stopPropagation();
     toggleCameraView();
@@ -2250,6 +2836,29 @@ function addLayerBeside(index) {
   setStatus(`Added ${currentLayer().name}`);
 }
 
+/**
+ * How wide one column of frames is, in pixels.
+ *
+ * Every frame gets a column of the same fixed width, the way MoArt gives
+ * every frame a fixed width, so the numbers of the ruler stand in a row
+ * above the frames they belong to. The width is set on the timeline and
+ * read back here.
+ */
+function timelineCellWidth() {
+  const min = parseFloat(getComputedStyle(timelineEl).getPropertyValue("--tl-cell-min")) || 18;
+  return min;
+}
+
+/**
+ * The width a column needs to hold the number of a frame.
+ *
+ * The numbers of the ruler are monospace, so every digit is the same width
+ * and the widest number decides how wide the column has to be.
+ */
+function frameNumberWidth(digits) {
+  return 2 + digits * 5.6 + 1;
+}
+
 function renderTimeline() {
   const project = state.project;
   const columns = timelineColumnCount();
@@ -2275,24 +2884,45 @@ function renderTimeline() {
     for (const key of keyframes(project)) {
       const column = key - start + 1;
       if (column < 1 || column > columns) continue;
-      const marker = element("div", `tl-key${key === project.currentFrame ? " current" : ""}`, String(key));
+      // The frame the playhead is on is marked by the red triangle below, so
+      // its key carries no number of its own.
+      const current = key === project.currentFrame;
+      const marker = element("div", `tl-key${current ? " current" : ""}`, current ? "" : String(key));
       marker.style.gridColumn = `${column} / span 1`;
       marker.title = `Key on frame ${key}`;
       marker.addEventListener("click", () => selectFrame(key));
       keys.append(marker);
     }
   }
+
+  // The red triangle that says where the playhead is. It sits over the frame
+  // the playhead is on and is shown whether the keys are shown or not.
+  const markColumn = project.currentFrame - start + 1;
+  if (markColumn >= 1 && markColumn <= columns) {
+    const mark = element("div", "tl-playhead-mark");
+    mark.style.gridColumn = `${markColumn} / span 1`;
+    keys.append(mark);
+  }
   ruler.append(keys);
 
   const numbers = element("div", "tl-numbers");
   numbers.style.setProperty("--frames", String(columns));
-  // The numbers are thinned out when there are many frames, so they do not
-  // run into one another.
-  const interval = Math.max(1, Math.ceil(columns / 40));
+  // The number of every frame is written, the way MoArt writes them, so the
+  // ruler reads as one scale. A column that is too narrow to hold the number
+  // leaves it out, and only every few frames are written then.
+  const last = start + columns - 1;
+  const digits = String(Math.max(1, last)).length;
+  const needed = frameNumberWidth(digits);
+  // A column is never narrower than the number it has to hold.
+  const base = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tl-cell-base")) || 18;
+  timelineEl.style.setProperty("--tl-cell-min", `${Math.max(base, Math.ceil(needed))}px`);
+  const roomy = timelineCellWidth() >= needed;
   for (let i = 0; i < columns; i += 1) {
     const frame = start + i;
-    const showNumber = i % interval === 0 || i === 0 || frame === project.currentFrame;
-    const cell = element("div", `tl-number${frame === project.currentFrame ? " current" : ""}`, showNumber ? String(frame) : "");
+    const current = frame === project.currentFrame;
+    const major = frame % 5 === 0 || frame === last;
+    const showNumber = roomy || major || current;
+    const cell = element("div", `tl-number${current ? " current" : ""}`, showNumber ? String(frame) : "");
     cell.title = `Frame ${frame}`;
     numbers.append(cell);
   }
@@ -2313,10 +2943,11 @@ function renderTimeline() {
     const head = element("div", "tl-head");
 
     if (isGroup(layer)) {
-      const toggle = element("button", "tl-icon tl-fold", state.collapsed.has(layer.name) ? "▸" : "▾");
-      toggle.title = state.collapsed.has(layer.name)
-        ? "Open this folder"
-        : "Close this folder";
+      const toggle = iconButton(
+        "tl-icon tl-fold",
+        state.collapsed.has(layer.name) ? "i-fold-closed" : "i-fold-open",
+        state.collapsed.has(layer.name) ? "Open this folder" : "Close this folder",
+      );
       toggle.addEventListener("click", (event) => {
         event.stopPropagation();
         toggleFolder(layer.name);
@@ -2324,8 +2955,11 @@ function renderTimeline() {
       head.append(toggle);
     }
 
-    const visibility = element("button", "tl-icon", layer.visible ? "👁" : "🚫");
-    visibility.title = layer.visible ? "Hide layer" : "Show layer";
+    const visibility = iconButton(
+      "tl-icon",
+      layer.visible ? "i-eye" : "i-eye-off",
+      layer.visible ? "Hide layer" : "Show layer",
+    );
     visibility.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleVisibility(index);
@@ -2349,8 +2983,11 @@ function renderTimeline() {
       renameLayer(index);
     });
 
-    const lock = element("button", "tl-icon", layer.locked ? "🔒" : "🔓");
-    lock.title = layer.locked ? "Unlock layer" : "Lock layer";
+    const lock = iconButton(
+      "tl-icon",
+      layer.locked ? "i-lock" : "i-unlock",
+      layer.locked ? "Unlock layer" : "Lock layer",
+    );
     lock.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleLock(index);
@@ -2366,7 +3003,7 @@ function renderTimeline() {
 
     // The button that adds a layer next to this one, the way Clip Studio
     // Paint has one on every row of its layer palette.
-    const add = element("button", "tl-add", "⊞");
+    const add = element("button", "tl-add", "+");
     add.title = isGroup(layer)
       ? "Add a layer inside this folder"
       : "Add a layer above this one";
@@ -2597,9 +3234,12 @@ function renderLayerPanel() {
 
     // A folder can be opened and closed. A layer has nothing there, but
     // the space is kept so the names of the layers line up.
-    const fold = element("button", "layer-fold", collapsed ? "▶" : "▼");
+    const fold = iconButton(
+      "layer-fold",
+      collapsed ? "i-fold-closed" : "i-fold-open",
+      collapsed ? "Open this folder" : "Close this folder",
+    );
     if (folder) {
-      fold.title = collapsed ? "Open this folder" : "Close this folder";
       fold.addEventListener("click", (event) => {
         event.stopPropagation();
         toggleFolder(layer.name);
@@ -2611,8 +3251,11 @@ function renderLayerPanel() {
     }
     row.append(fold);
 
-    const eye = element("button", "layer-eye", layer.visible ? "👁" : "🚫");
-    eye.title = layer.visible ? "Hide this layer" : "Show this layer";
+    const eye = iconButton(
+      "layer-eye",
+      layer.visible ? "i-eye" : "i-eye-off",
+      layer.visible ? "Hide this layer" : "Show this layer",
+    );
     eye.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleVisibility(index);
@@ -3580,7 +4223,7 @@ function startPlayback() {
   if (project.currentFrame > playbackEnd()) project.currentFrame = project.startFrame;
 
   state.playing = true;
-  playButton.textContent = "⏸ Pause";
+  setPlayIcon(true);
   renderCanvas(); // hides the onion skins
   startAudio();
 
@@ -3633,7 +4276,7 @@ function stopPlayback() {
   if (state.playTimer) cancelAnimationFrame(state.playTimer);
   state.playTimer = null;
   state.playing = false;
-  playButton.textContent = "▶ Play";
+  setPlayIcon(false);
   stopAudio();
   if (state.project?.layers?.length) {
     syncLayerControls();
@@ -3716,21 +4359,29 @@ function zoomCamera(factor, px, py) {
 }
 
 /**
- * Zoom with the wheel over the canvas.
+ * Zoom with the wheel over the stage.
  *
  * Every wheel over the stage zooms: a plain wheel, the middle button held
  * down and scrolled, and the control key that a trackpad sends for a pinch.
  * The button of a wheel event is not used to tell them apart, because a
  * browser reports every wheel as the primary button.
+ *
+ * The wheel works over the whole stage, not only over the document, and
+ * the zoom keeps the point of the document that is under the pointer. When
+ * the pointer is over the empty stage beside the document, the nearest
+ * edge of the document is the point that is kept.
  */
-canvas.addEventListener("wheel", (event) => {
+canvasScroll.addEventListener("wheel", (event) => {
   event.preventDefault();
   const factor = event.deltaY < 0 ? 1 + ZOOM_STEP : 1 / (1 + ZOOM_STEP);
-  zoomStage(factor, event.clientX, event.clientY);
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.min(rect.right, Math.max(rect.left, event.clientX));
+  const y = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
+  zoomStage(factor, x, y);
 }, { passive: false });
 
 // The middle mouse button drags the stage, the way Clip Studio Paint does it.
-canvas.addEventListener("pointerdown", (event) => {
+canvasScroll.addEventListener("pointerdown", (event) => {
   if (event.button !== 1) return;
   event.preventDefault();
   panStage(event);
@@ -4061,6 +4712,20 @@ function shrinkExposure() {
 
 const SETTINGS_KEY = "tvmini.settings.v1";
 
+/**
+ * The size of the rows of the timeline.
+ *
+ * The compact view is the small one: a row is one line high and the whole
+ * timeline fits in a thin band of the window. The other view gives the rows
+ * room for a name and a picture.
+ */
+function applyCompactView() {
+  document.body.classList.toggle("tl-rows-tall", !state.compactTimeline);
+  if (!compactViewButton) return;
+  compactViewButton.classList.toggle("on", state.compactTimeline);
+  compactViewButton.setAttribute("aria-pressed", state.compactTimeline ? "true" : "false");
+}
+
 function clampOnion(value, fallback) {
   const number = Math.trunc(Number(value));
   return Number.isFinite(number) ? Math.min(5, Math.max(0, number)) : fallback;
@@ -4267,6 +4932,17 @@ keyMarkersButton.addEventListener("click", () => {
   keyMarkersButton.classList.toggle("on", state.showKeyMarkers);
   renderTimeline();
   setStatus(state.showKeyMarkers ? "The keys are marked above the frames" : "The keys are hidden");
+});
+compactViewButton.addEventListener("click", () => {
+  state.compactTimeline = !state.compactTimeline;
+  applyCompactView();
+  renderTimeline();
+  saveSettings();
+  setStatus(
+    state.compactTimeline
+      ? "The rows of the timeline are small"
+      : "The rows of the timeline have room for a name",
+  );
 });
 timelineMenuButton.addEventListener("click", () => {
   const open = timelineMenu.hidden;
@@ -5412,8 +6088,6 @@ nameInput.addEventListener("keydown", (event) => {
 
 /* ------------------------------------------------- colour wheel (HSV) */
 
-const wheelButton = document.getElementById("wheelButton");
-const wheelPanel = document.getElementById("wheelPanel");
 const wheelCanvas = document.getElementById("wheelCanvas");
 const wheelHex = document.getElementById("wheelHex");
 const wheelTransparent = document.getElementById("wheelTransparent");
@@ -5422,8 +6096,10 @@ const speedInput = document.getElementById("speed");
 const onionBeforeInput = document.getElementById("onionBefore");
 const onionAfterInput = document.getElementById("onionAfter");
 
-/* Matches the reference layout: hue ring around an inscribed SV square. */
-const WHEEL_SIZE = 214;
+/* Matches the reference layout: hue ring around an inscribed SV square.
+   The wheel sits in the tool property panel, the way MoArt's colour circle
+   does, so it is always there and needs no button to open it. */
+const WHEEL_SIZE = 176;
 
 const wheel = { hue: 222, saturation: 0.8, value: 0.6 };
 
@@ -5556,13 +6232,9 @@ function wheelSyncFromColor() {
   [wheel.hue, wheel.saturation, wheel.value] = rgbToHsv(...rgb);
 }
 
-wheelButton.addEventListener("click", () => {
-  wheelPanel.hidden = !wheelPanel.hidden;
-  if (!wheelPanel.hidden) {
-    wheelSyncFromColor();
-    wheelApply();
-  }
-});
+// The wheel is always on screen, so it follows the colour from the start.
+wheelSyncFromColor();
+wheelApply();
 
 wheelCanvas.addEventListener("pointerdown", (event) => {
   try {
@@ -5586,7 +6258,6 @@ wheelHex.addEventListener("change", () => {
 });
 
 wheelTransparent.addEventListener("click", () => {
-  wheelPanel.hidden = true;
   selectTool("eraser");
   setStatus("Transparent: switched to the eraser (E)");
 });
@@ -5630,7 +6301,7 @@ function flipPaint(frameNumber) {
   if (resolved) {
     const base = drawingImageElement(resolved.drawing);
     if (base) context.drawImage(base, 0, 0, project.width, project.height);
-    drawStrokesInto(context, resolved.drawing.strokes);
+    drawStrokesInto(context, resolved.drawing.strokes, resolved.drawing.brush);
   }
   const labelCell = document.getElementById("flipLabel");
   labelCell.textContent = resolved
@@ -5759,10 +6430,11 @@ function closeAllOverlays() {
   startOverlay.hidden = true;
   keysDialog.hidden = true;
   guideDialog.hidden = true;
+  brushDialog.hidden = true;
 }
 
 function anyOverlayOpen() {
-  return !startOverlay.hidden || !keysDialog.hidden || !guideDialog.hidden;
+  return !startOverlay.hidden || !keysDialog.hidden || !guideDialog.hidden || !brushDialog.hidden;
 }
 
 startDrawButton.addEventListener("click", () => {
@@ -6080,6 +6752,7 @@ async function boot() {
 
   loadSettings();
   syncSettingsUI();
+  applyCompactView();
   syncQuickBar();
   wireNewProjectDialog();
 

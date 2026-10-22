@@ -607,8 +607,12 @@ export function contentLength(project) {
 /**
  * Number of timeline columns to show. Extra empty columns make it easy to
  * draw beyond the current content.
+ *
+ * The default is a long strip of frames: the columns are a fixed width, so
+ * three hundred of them are a strip the timeline scrolls across, and the
+ * playhead has somewhere to go without the ruler having to grow.
  */
-export function timelineColumns(project, minimum = 12) {
+export function timelineColumns(project, minimum = 300) {
   const current = project.currentFrame - project.startFrame + 1;
   return Math.max(minimum, contentLength(project) + 4, current + 2);
 }

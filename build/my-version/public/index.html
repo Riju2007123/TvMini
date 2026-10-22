@@ -167,7 +167,6 @@
             <button role="menuitemcheckbox" data-pane-toggle="stage" aria-checked="true">Stage</button>
             <button role="menuitemcheckbox" data-pane-toggle="layers" aria-checked="true">Layers</button>
             <button role="menuitemcheckbox" data-pane-toggle="inspector" aria-checked="true">Inspector</button>
-            <button role="menuitemcheckbox" data-pane-toggle="properties" aria-checked="true">Properties</button>
             <button role="menuitemcheckbox" data-pane-toggle="timeline" aria-checked="true">Timeline</button>
             <hr />
             <button role="menuitem" data-shell-action="resetLayout">Reset layout</button>
@@ -218,13 +217,23 @@
     <main class="workspace">
       <aside class="pane tools-pane" data-pane="tools">
         <div class="pane-header">
-          <span class="pane-title">Tools</span>
+          <span class="pane-title">Tool property</span>
           <span class="pane-header-spacer"></span>
-          <button class="ghost-btn" type="button" data-pane-toggle="tools" title="Hide the Tools panel" aria-label="Hide the Tools panel">
+          <button class="ghost-btn" type="button" data-pane-toggle="tools" title="Hide the Tool property panel" aria-label="Hide the Tool property panel">
             <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
           </button>
         </div>
         <div class="pane-body tools">
+          <div class="tool-section-title">Colour circle</div>
+          <div class="wheel">
+            <canvas id="wheelCanvas" width="176" height="176"></canvas>
+          </div>
+          <div class="wheel-row">
+            <input id="color" type="color" value="#1f2937" title="The colour of the strokes" />
+            <input id="wheelHex" type="text" maxlength="7" spellcheck="false" value="#1f2937" />
+            <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
+          </div>
+
           <div class="tool-section-title">Tools</div>
           <div class="tool-grid">
             <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)" aria-label="Brush">
@@ -261,13 +270,13 @@
               </svg>
             </button>
             <button id="fillTool" aria-pressed="false" title="Fill — click a region to flood it (F)" aria-label="Fill">
-              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
                 <path d="M6 2.5 12 8.5 7.5 13 2 7.5z" />
                 <path d="M13.5 10.5c0 1-.7 1.8-1.6 1.8s-1.6-.8-1.6-1.8 1.6-2.6 1.6-2.6 1.6 1.6 1.6 2.6z" />
               </svg>
             </button>
             <button id="cameraTool" aria-pressed="false" title="Camera — drag the frame to aim the shot (C)" aria-label="Camera">
-              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
                 <rect x="1.5" y="4.5" width="13" height="8" rx="1" />
                 <path d="M6 4.5 7 2.5h2l1 2" />
                 <circle cx="8" cy="8.5" r="2.2" />
@@ -276,7 +285,7 @@
           </div>
 
           <div class="tool-section-title">History</div>
-          <div class="tool-grid">
+          <div class="tool-grid pair">
             <button id="undoButton" disabled title="Undo (Ctrl+Z)" aria-label="Undo">
               <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M6 4.5 3 7.5l3 3" />
@@ -291,22 +300,53 @@
             </button>
           </div>
 
-          <div class="tool-section-title">Colours</div>
-          <div class="tool-swatches">
-            <input id="color" type="color" value="#1f2937" title="The colour of the strokes" />
-            <button id="wheelButton" class="tool-swatch" type="button" title="Hue ring + saturation/value picker" aria-label="Hue ring and saturation picker">
-              <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
-                <circle cx="8" cy="8" r="6" />
-                <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-          </div>
-          <div id="wheelPanel" class="wheel-panel" hidden>
-            <canvas id="wheelCanvas" width="214" height="214"></canvas>
-            <div class="wheel-row">
-              <input id="wheelHex" type="text" maxlength="7" spellcheck="false" value="#1f2937" />
-              <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
+          <div class="tool-section-title">Brush</div>
+          <div class="tool-props">
+            <div class="brush-image-row">
+              <span id="brushImageName" class="brush-image-name">the round tip</span>
+              <select id="brushLibrary" title="The brushes you have saved"></select>
             </div>
+            <div class="brush-actions">
+              <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
+              <button id="brushPanelButton" type="button" title="Open the brush panel: bring in a brush, look at the brushes you have and write one out again">Brushes…</button>
+            </div>
+            <label class="field">
+              <span>Width <output id="widthValue">6</output></span>
+              <input id="width" type="range" min="1" max="300" value="6" />
+            </label>
+            <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
+              <span>Stabiliser <output id="stabilizerValue">0</output></span>
+              <input id="stabilizer" type="range" min="0" max="100" step="1" value="0" />
+            </label>
+            <label class="field" title="Transparency of the whole stroke (100 = solid)">
+              <span>Stroke opacity</span>
+              <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />
+            </label>
+            <label class="field" title="How new strokes mix with the paint under them">
+              <span>Blend</span>
+              <select id="strokeBlend">
+                <option value="normal" selected>Normal</option>
+                <option value="multiply">Multiply</option>
+                <option value="screen">Screen</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="tool-section-title">Pen</div>
+          <div class="tool-props">
+            <label class="field checkbox">
+              <input id="pressure" type="checkbox" checked />
+              <span>Pen pressure</span>
+            </label>
+            <label class="field">
+              <span>Pressure gain <output id="pressureGainValue">100%</output></span>
+              <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
+            </label>
+            <label class="field checkbox">
+              <input id="touchDraw" type="checkbox" checked />
+              <span>Draw with touch</span>
+            </label>
+            <div class="meter">Pressure: <output id="pressureValue">—</output></div>
           </div>
         </div>
       </aside>
@@ -327,6 +367,19 @@
             </label>
           </div>
           <span class="pane-header-spacer"></span>
+          <div class="stage-zoom">
+            <button id="zoomOutButton" class="stage-zoom-btn" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button>
+            <button id="zoomLabel" class="stage-zoom-label" type="button" title="The zoom of the stage. Click to go back to 100%.">100%</button>
+            <button id="zoomInButton" class="stage-zoom-btn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button id="zoomFitButton" class="stage-zoom-btn" type="button" title="Show the whole canvas" aria-label="Show the whole canvas">
+              <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 2.5H2.5V6" />
+                <path d="M10 2.5h3.5V6" />
+                <path d="M6 13.5H2.5V10" />
+                <path d="M10 13.5h3.5V10" />
+              </svg>
+            </button>
+          </div>
           <span id="frameLabel" class="frame-label">Frame 1</span>
         </div>
         <div class="pane-body canvas-wrap">
@@ -352,15 +405,15 @@
             <button class="quick-btn" id="quickHide" type="button" title="Hide this bar" aria-label="Hide the quick bar">×</button>
           </div>
           <div class="canvas-scroll">
-            <div class="canvas-stack">
-              <canvas id="canvas" width="960" height="600"></canvas>
-              <canvas id="overlay" aria-hidden="true"></canvas>
+            <div class="canvas-world">
+              <div class="canvas-stack">
+                <canvas id="canvas" width="960" height="600"></canvas>
+                <canvas id="overlay" aria-hidden="true"></canvas>
+              </div>
             </div>
           </div>
-          <button id="zoomLabel" class="zoom-label" type="button" title="The zoom of the stage. Click to fit the whole canvas.">100%</button>
         </div>
       </section>
-
       <div class="right-column">
         <aside class="pane layers-pane" data-pane="layers" aria-label="Layers">
           <div class="pane-header">
@@ -459,8 +512,6 @@
             <button id="cameraRemove" type="button" title="Remove the camera key on the current frame">Remove</button>
             <button id="cameraFit" type="button" title="Frame the whole canvas">Fit</button>
             <button id="cameraZoom" type="button" title="Zoom in on the centre of the canvas">2× zoom</button>
-            <button id="cameraZoomIn" type="button" title="Zoom in - the wheel over the canvas does this too">Zoom in</button>
-            <button id="cameraZoomOut" type="button" title="Zoom out - the wheel over the canvas does this too">Zoom out</button>
           </div>
           <label class="field">
             <span>Camera position X</span>
@@ -509,63 +560,6 @@
       </div>
     </main>
 
-    <section class="pane properties-pane" data-pane="properties" aria-label="Properties">
-      <div class="pane-header">
-        <span class="pane-title">Properties</span>
-        <span class="pane-header-spacer"></span>
-        <button class="ghost-btn" type="button" data-pane-toggle="properties" title="Hide the Properties panel" aria-label="Hide the Properties panel">
-          <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
-        </button>
-      </div>
-      <div class="pane-body properties">
-        <div class="property-group">
-          <div class="panel-title">Brush</div>
-          <div class="brush-image-row">
-            <span id="brushImageName" class="brush-image-name">the round tip</span>
-            <select id="brushLibrary" title="The brushes you have saved"></select>
-            <button id="brushSave" type="button" title="Save the brush that is loaded now">Save</button>
-            <button id="brushPanelButton" type="button" title="Open the brush panel: bring in a brush, look at the brushes you have and write one out again">Brushes…</button>
-          </div>
-        </div>
-        <div class="property-group">
-          <label class="field">
-            <span>Width <output id="widthValue">6</output></span>
-            <input id="width" type="range" min="1" max="60" value="6" />
-          </label>
-          <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
-            <span>Stabiliser <output id="stabilizerValue">0</output></span>
-            <input id="stabilizer" type="range" min="0" max="100" step="1" value="0" />
-          </label>
-          <label class="field" title="Transparency of the whole stroke (100 = solid)">
-            <span>Stroke opacity</span>
-            <input id="strokeOpacity" type="number" min="1" max="100" step="1" value="100" />
-          </label>
-          <label class="field" title="How new strokes mix with the paint under them">
-            <span>Blend</span>
-            <select id="strokeBlend">
-              <option value="normal" selected>Normal</option>
-              <option value="multiply">Multiply</option>
-              <option value="screen">Screen</option>
-            </select>
-          </label>
-        </div>
-        <div class="property-group">
-          <label class="field checkbox">
-            <input id="pressure" type="checkbox" checked />
-            <span>Pen pressure</span>
-          </label>
-          <label class="field">
-            <span>Pressure gain <output id="pressureGainValue">100%</output></span>
-            <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
-          </label>
-          <label class="field checkbox">
-            <input id="touchDraw" type="checkbox" checked />
-            <span>Draw with touch</span>
-          </label>
-          <div class="meter">Pressure: <output id="pressureValue">—</output></div>
-        </div>
-      </div>
-    </section>
 
 
 
