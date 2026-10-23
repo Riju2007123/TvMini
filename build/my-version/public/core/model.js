@@ -353,46 +353,9 @@ function normalizeBrush(value, maxBase64, label) {
   // A hard edge, the way binarize paints: every pixel is paint or paper.
   if (value.binarize === true) brush.binarize = true;
 
-  // Flow: how much paint one dab leaves (1..100).
-  if (Number.isFinite(value.flow)) {
-    brush.flow = Math.max(1, Math.min(100, Math.round(value.flow)));
-  }
-  // Flow pressure curve: points {x,y} where x=pressure 0..1, y=flow 0..1.
-  if (Array.isArray(value.flowCurvePts)) {
-    brush.flowCurvePts = value.flowCurvePts.map(pt => ({
-      x: Math.max(0, Math.min(1, Number(pt.x))),
-      y: Math.max(0, Math.min(1, Number(pt.y))),
-    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
-    if (brush.flowCurvePts.length < 2) delete brush.flowCurvePts;
-  }
-  // Flow random jitter: percentage of alpha drop (0..100).
-  if (Number.isFinite(value.flowJitter)) {
-    brush.flowJitter = Math.max(0, Math.min(100, Math.round(value.flowJitter)));
-  }
-
-  // Hardness: edge hardness of the tip (0..100, mapped to AntiAlias 0..3).
-  if (Number.isFinite(value.hardness)) {
-    brush.hardness = Math.max(0, Math.min(100, Math.round(value.hardness)));
-  }
-
-  // Thickness: how thick the tip is (1..100).
-  if (Number.isFinite(value.thickness)) {
-    brush.thickness = Math.max(1, Math.min(100, Math.round(value.thickness)));
-  }
-  // Vertical thickness: whether thickness applies to vertical axis.
-  if (value.verticalThickness === true) brush.verticalThickness = true;
-  // Thickness pressure curve.
-  if (Array.isArray(value.thicknessCurvePts)) {
-    brush.thicknessCurvePts = value.thicknessCurvePts.map(pt => ({
-      x: Math.max(0, Math.min(1, Number(pt.x))),
-      y: Math.max(0, Math.min(1, Number(pt.y))),
-    })).filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
-    if (brush.thicknessCurvePts.length < 2) delete brush.thicknessCurvePts;
-  }
-  // Thickness random jitter.
-  if (Number.isFinite(value.thicknessJitter)) {
-    brush.thicknessJitter = Math.max(0, Math.min(100, Math.round(value.thicknessJitter)));
-  }
+  // Flow, hardness and thickness are settings this program no longer has:
+  // there is no control for them and no stroke is painted with them, so a
+  // project that was made with an older version drops them when it opens.
 
   // Auto spacing type: 0=fixed, 1=wide, 2=normal, 3=narrow.
   if (Number.isFinite(value.autoInterval)) {
