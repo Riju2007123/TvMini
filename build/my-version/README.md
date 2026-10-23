@@ -143,7 +143,7 @@ This serves `public/` with no backend, exactly the way GitHub Pages serves
 it. The repository contains `.github/workflows/pages.yml`, which publishes
 `build/my-version/public` on every push to `master`:
 
-**https://Riju2007123.github.io/tvpaint-save-export-rea/**
+**https://Riju2007123.github.io/TvMini/**
 
 ### What changes without a server
 
