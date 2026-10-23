@@ -37,9 +37,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const body = await fs.readFile(target);
+    let resolvedTarget = target;
+    // If target is a directory, redirect to add a trailing slash so that
+    // relative URLs in the HTML resolve correctly, then serve index.html.
+    const stats = await fs.stat(resolvedTarget).catch(() => null);
+    if (stats && stats.isDirectory()) {
+      if (!url.pathname.endsWith("/")) {
+        res.writeHead(302, { location: url.pathname + "/" });
+        res.end();
+        return;
+      }
+      resolvedTarget = path.join(resolvedTarget, "index.html");
+    }
+    const body = await fs.readFile(resolvedTarget);
     res.writeHead(200, {
-      "content-type": MIME[path.extname(target).toLowerCase()] || "application/octet-stream",
+      "content-type": MIME[path.extname(resolvedTarget).toLowerCase()] || "application/octet-stream",
       "content-length": body.length,
       // This server is only used while developing; never cache, so a
       // rebuilt file is picked up on reload.

@@ -16,11 +16,14 @@ and looking inside. The tools that did the looking are in `tools/`:
 | `sut-compare.mjs` | compares a brush of Clip Studio Paint with one of ours |
 | `sut-roundtrip.mjs` | writes a brush and reads it back |
 | `sut-inside.mjs`, `sut-texture.mjs`, `sut-catalog.mjs`, `sut-zip.mjs` | the first steps of the search, kept for the record |
-| `sut-grain-probe.mjs` | prints the settings of the texture and the words of every material of a brush |
-| `sut-grain-xml.mjs` | prints the files and the XML of every material, so the paper can be told from the tip |
-| `sut-grain-dump.mjs` | writes the pictures of a brush out, so they can be looked at |
-| `sut-grain-survey.mjs` | the textures and the materials of every brush in a folder |
-| `brush-style-check.mjs` | draws with the flow, the hardness, the thickness and the paper in a headless browser and measures the ink |
+
+The tools that looked at the paper of a brush (`sut-grain-probe.mjs`,
+`sut-grain-xml.mjs`, `sut-grain-dump.mjs`, `sut-grain-survey.mjs`) and the one
+that drew with the flow, the hardness and the thickness
+(`brush-style-check.mjs`) were removed when those settings left this program.
+What they found is written down below, and the format still holds them: a
+brush of Clip Studio Paint that is brought in here keeps its picture, its size
+and its strength, and the rest is left alone.
 
 ## The file
 
@@ -217,13 +220,15 @@ mixed into it before it is painted.
 
 The TAR archive is written by `public/core/tar.js`.
 
-The paper of a brush is **not** written back. A brush that is written out here
-is written without a `PaperTexture` material, because the name that Clip Studio
-Paint uses to point at a material (`TextureImage`) is a BLOB whose layout was
-not worked out, and a file that points at nothing would be worse than a file
-without a paper. The brush itself (its size, its strength, its flow, its
-hardness, its thickness and its picture) is written, and so it comes back into
-Clip Studio Paint as the same brush, drawing on plain paper.
+The paper of a brush is **not** written back, and the paper of a brush that is
+brought in is **not** used. A brush that is written out here is written without
+a `PaperTexture` material, because the name that Clip Studio Paint uses to
+point at a material (`TextureImage`) is a BLOB whose layout was not worked
+out, and a file that points at nothing would be worse than a file without a
+paper. The brush itself (its size, its strength and its picture) is written,
+with the flow, the hardness and the thickness at the values Clip Studio Paint
+starts every brush with, so it comes back into Clip Studio Paint as the same
+brush, drawing on plain paper.
 
 ## What was checked
 
@@ -233,17 +238,19 @@ Clip Studio Paint as the same brush, drawing on plain paper.
   small graphs Clip Studio Paint keeps for its own sliders.
 * The picture of the tip comes back out of the file we write, with its name
   and its size (`tools/sut-roundtrip.mjs` and `test/sut-write.test.js`).
-* The paper of a brush is read out of the file, with its strength, its size,
-  its turn and the way it is turned over, for the brushes above
-  (`tools/sut-grain-survey.mjs`, `tools/sut-grain-probe.mjs`).
+* The paper of a brush was read out of the file, with its strength, its size,
+  its turn and the way it is turned over, for the brushes above. That reading
+  is kept in this note for the record; the program does not use the paper any
+  more.
 * The whole way through the program — the panel, bringing a brush in, and
   writing one out — was done in a real browser (`tools/brush-check.mjs`).
 * A brush of Clip Studio Paint was brought into the program in a real browser,
-  with its paper: the card of the brush says `· paper`, the rows of the panel
-  take the numbers of the brush (size 80, flow 79, paper 24 for `rough pen 3`),
-  and the same line drawn with the paper turned off holds 11 percent more ink
-  than the line drawn with it (7 143 811 against 6 471 949, measured with
-  `tools/brush-style-check.mjs`).
+  with its paper: the card of the brush said `· paper`, the rows of the panel
+  took the numbers of the brush (size 80, flow 79, paper 24 for `rough pen 3`),
+  and the same line drawn with the paper turned off held 11 percent more ink
+  than the line drawn with it (7 143 811 against 6 471 949). The paper is not
+  used any more, so a brush that is brought in now keeps its picture, its
+  size and its strength only.
 
 What was **not** checked here: the file was not imported into Clip Studio
 Paint itself. The menus of Clip Studio Paint cannot be driven by a script, so

@@ -231,33 +231,34 @@ a drawer behind that bar. What was read from the build:
 ### 4.2 What TVMini does with it (our own code, 2026-10-22)
 
 - The property panel now has the same three tables in our own words:
-  `PROP_ROW_ORDER` (size, opacity, flow, stabilizer, binarize, blend,
-  hardness, thickness, grain, grain size, smooth, velocity, taper), the
+  `PROP_ROW_ORDER` (size, opacity, stabilizer, binarize, blend), the
   vocabulary of each tool in `TOOL_PROPS[tool].rows`, and the pins in
   `localStorage` (`tvmini.toolPanelPins.v1`, `tvmini.toolPanelAdv.v1`).
 - The rows a panel starts with are the same five as the reference, so the
-  brush opens with **Size, Opacity, Stabilizer, Binarize, Blend** and a
-  "Hidden items" bar. The eye at the right of a row puts it away, the same eye
-  in the drawer brings it back, at most eight rows fit, and the bar is only
-  there while a row of the tool in hand is put away.
+  brush opens with **Size, Opacity, Stabilizer, Binarize, Blend**. The eye at
+  the right of a row puts it away, the same eye in the drawer brings it back,
+  at most eight rows fit, and the bar is only there while a row of the tool in
+  hand is put away.
 - The rows are moved between the panel and the drawer, never built again; the
   order of `PROP_ROW_ORDER` is the order in both places. The drawer scrolls
   itself into view when it is opened.
-- The eraser and the pencil have their own vocabularies (the eraser has the
-  flow, the hardness, the thickness and the paper; the pencil has the
-  smoothing), so each tool shows only the rows that do something for it, and
-  the shapes and the fill show no brush rows at all.
+- The eraser and the pencil have their own vocabularies, so each tool shows
+  only the rows that do something for it, and the shapes and the fill show no
+  brush rows at all.
 - **Binarize is a real setting** in TVMini as well, not only a switch: every
   pixel of a dab is either paint or paper (the alpha of the dab is read once
   and made whole or dropped at half), on the stage and in the PNG export, and
-  the panel preview is drawn by the same painter. Measured with a soft brush
-  (hardness 30): half-covered pixels 1 315 → 36, and the faint ring of the tip
-  is gone, so the line is a little narrower (ink 1 854 283 → 1 544 614).
-- The preview of the brush is drawn by the painter of the stage (flow,
-  hardness, thickness, paper and hard edge all show), and the size is written
-  in its corner the way the reference writes it.
-- A row that does nothing is greyed: the size of the grain sleeps while the
-  grain is 0.
+  the panel preview is drawn by the same painter.
+- The preview of the brush is drawn by the painter of the stage (the picture
+  of the tip and the hard edge both show), and the size is written in its
+  corner the way the reference writes it.
+
+**Not adopted, and taken out again (2026-10-22).** The flow, the hardness,
+the thickness, the paper, the smoothing, the velocity and the taper of the
+reference are not in this program any more: the brush is a hard round tip,
+the line keeps the width of the brush, and the paper of a brush is not used.
+The brush of Clip Studio Paint that is brought in keeps its picture, its size
+and its strength, and the rest of it is left alone.
 
 Not adopted: the **pressure modulation squares** (`mod`) and their popup,
 which would need a pressure curve per row; the per-tool "always" rows; and the
@@ -305,6 +306,38 @@ we test real projects.
 **TVMini equivalent:** our `timeline.js` already models exactly this
 (drawings with `at`/`hold`, per-layer `preBehavior`/`postBehavior`) — the
 exposure model of the .tvpp reader/writer maps 1:1 onto it.
+
+### 7.1 The cells of Umoupen, measured 2026-10-22
+
+Umoupen was opened on `Animation3.clip` and its timeline was measured with
+`tools/umou-capture.ps1` and `tools/umou-drag.ps1`:
+
+- **A cell is a block, not a frame.** Every cell is drawn as a small block
+  with the name of the cell on it, and the frames the cell is exposed for
+  follow it as a hatched area. The cells of `Animation3.clip` were measured
+  at 15.2 pixels a frame, and the blocks sit on the frames of the ruler.
+- **Dragging on a row of the timeline makes a range selection**, not a
+  move: the cells under the drag are drawn inside a rounded frame, and the
+  hatched area is the exposure of the selection.
+- **The menu of a cell** (right click) holds *Copy Frames*, *Paste Frames*,
+  *Convert Selected*, *New Blank Frame* and *Remove Frame(s)* — there is no
+  entry for the length of a cell, so the length is changed with the pointer.
+- The cells of a folder row are the cells of the layers inside it, the way
+  an animation folder shows the cells of an animation.
+
+**TVMini equivalent:** a cell is a drawing with `at` and `hold`, and the
+length and the place of a cell are changed with the pointer as well:
+
+- the **last frame of a cell carries a handle** that makes the cell longer
+  or shorter, the way the edge of a cell is pulled in Clip Studio Paint;
+  the cells after it move with it, so nothing overlaps;
+- the **first frame of a cell is the handle that moves it**, forward or
+  backward; the gap it leaves is closed and the room it needs is opened
+  where it lands, and a cell that lands inside another one cuts it in two,
+  the way a new cell does.
+
+Both were written from the model above (`public/timeline.js`: `setExposure`
+and `moveDrawing`) and not from the code of Umoupen.
 
 ## 8. `.clip` (CSP) reading
 

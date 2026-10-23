@@ -55,7 +55,11 @@ model. It shares **no code, data or file formats** with TVPaint.
 - HSV colour wheel (hue ring + saturation/value square + hex field, plus a
   "Transparent" chip that switches to the eraser) next to the native colour
   input, and `.tvpp` (TVPaint Animation) import/export — see
-  `docs/moart-study.md` for how the formats were mapped.
+  `docs/moart-study.md` for how the formats were mapped. The wheel follows
+  the cursor: the marker of the ring stands on the arc of the hue that was
+  clicked, and the wheel follows the colour of the strokes wherever that is
+  changed — the colour picker of the browser, the eyedropper or the hex
+  field — so the ring and the square always stand for the colour in use.
 - Onion skin: tinted neighbouring drawings (red = before, green = after) of the
   current layer under the drawing, with independent before/after counts
   (0–5 each); toggled in the timeline toolbar or with `O`. Ghosts follow
@@ -372,6 +376,22 @@ Toolbar actions:
 - **Exposure**: set the current drawing's hold to a whole number.
 - Changing **Start** moves drawings and the playhead by the same delta.
 
+### The cells of the timeline
+
+A cell is a block on the timeline: it has a name and a **length**, the number
+of frames it is exposed for. Both can be changed with the pointer, the way
+they are in Umoupen and in Clip Studio Paint:
+
+- **The last frame of a cell carries a handle** (the thin strip on its right
+  edge, `ew-resize`). Drag it and the cell becomes longer or shorter, and
+  the cells that come after it move with it, so nothing overlaps.
+- **The first frame of a cell is the handle that moves it** (`grab`). Drag
+  the cell and it goes to another frame, forward or backward, and the cells
+  around it make room: the gap it leaves is closed and the room it needs is
+  opened where it lands. A cell that lands inside another one cuts it in
+  two, the way a new cell does.
+- The undo puts a cell back where it was, and the length it had.
+
 The tools panel edits the current layer's name, opacity and before/after
 behaviour. **Clear drawing** empties its strokes. Visibility and lock icons are
 in each timeline row.
@@ -445,8 +465,7 @@ Strokes are drawn on a transparent layer above the background and any imported
 image. An eraser stroke clears only that layer (`destination-out` in the
 browser, alpha clearing in `src/png.js`), so lower layers, the white canvas or
 the `.clip` preview show through — not a painted-on white line. It uses the
-same width slider and pressure taper, is undoable like any stroke, and exports
-identically.
+same width slider, is undoable like any stroke, and exports identically.
 
 ## Shape tools, fill, opacity and blend
 
@@ -474,9 +493,14 @@ undoes and exports like a brush stroke:
   so a fill always floods the paint that was there when it was made.
 - The browser and the Node renderer share the same flood fill and blend code
   (`public/core/paint.js`), so a fill behaves the same on screen, in an
-  exported PNG, in a `.clip` and in a `.tvpp`. The browser antialiases stroke
-  edges while the export draws them hard, so the fill boundary can differ by
-  about one pixel.
+  exported PNG, in a `.clip` and in a `.tvpp`. Both antialias the edge of a
+  stroke, so the fill boundary can differ by about one pixel.
+- The edge of a stroke is **soft** in the export as well as on the stage: the
+  tip of the brush covers a part of the pixel it falls in, and that share is
+  the paint that goes down. A file whose strokes are full pixels and empty
+  pixels holds steps where the screen shows a curve, and Clip Studio Paint
+  draws those steps as a staircase. The **binarize** switch is the way to ask
+  for the hard edge on purpose.
 
 Two extra brush-panel settings apply to **new brush strokes**:
 
@@ -722,12 +746,14 @@ build/my-version/
   public/              the whole web app; this folder is what Pages publishes
     index.html
     app.js             canvas, timeline UI, history
-    shell.js           window chrome: panels, Window menu, resize grip, doc tab
+    shell.js           window chrome: panels, Window menu, floating panels, grips, doc tab
     history.js
     timeline.js        shared frame/exposure/behaviour logic
     style.css
     core/              platform-independent logic, used by Node and the browser
       model.js         project schema + validation + v1 migration
+      layout.js        the geometry of the window: columns, grips, floating panels
+      wheel.js         the colour wheel: hue ring, saturation/value square
       png.js           rasteriser + PNG encoder/decoder
       clip.js          read-only Clip Studio preview import
       clip-write.js    layered Clip Studio .clip writer
@@ -773,8 +799,25 @@ written from scratch against the layout that was documented in the study.
 - The `Window` menu lists Tools, Stage, Layers, Inspector and Timeline and
   toggles them; the choice is remembered in `localStorage`.
 - Every panel header carries a `–` button that hides that panel.
-- The strip between the stage and the timeline is a drag grip: drag it to
-  resize the timeline, double-click it to reset the height.
+- **Every panel can be grabbed and moved.** Drag the head of a panel and it
+  comes out of the window and floats over it, and it goes exactly where you
+  put it: it may even hang over the edge, as long as a strip of it stays on
+  the screen to grab it by. A floating panel has handles on its edges and in
+  its corners to make it bigger, a button in its head to put it back, and a
+  double-click on its head does the same. The layout is remembered in
+  `localStorage`.
+- **Every panel has a float button.** The `⇱` button next to the name of a
+  panel takes it out of the window where it stands — the same window, only
+  loose, so it does not jump anywhere — and the `⇲` button that takes its
+  place puts it back where it came from.
+- **Every panel can be resized.** The strip between the stage and the timeline
+  is a drag grip: pull it **up** to make the timeline taller and **down** to
+  make it shorter, double-click it to reset the height. The seams of the
+  window have the same grips: the one on the left makes the tool property
+  panel wider or narrower, the one on the right does the same for the layers
+  and the inspector, and the one between the layers and the inspector makes
+  the layers taller. A grip always grows the panel away from the edge the
+  grip sits on.
 - The document tab in the top bar follows the project name and the `*` dirty
   mark.
 - The palette is the mid-grey, borderless shell the study recorded: panels are
@@ -798,10 +841,15 @@ finding:
 
 - One canvas, 1…100 animation layers; no audio, camera, selection/vector or
   image layers.
+- One brush: a round tip of any size, hard at the edge unless **binarize** is
+  on, with the picture of a Clip Studio Paint brush when one is brought in.
+  There is no flow, hardness, thickness, paper grain, smoothing, velocity or
+  taper.
 - Only `blend: "normal"`; no per-drawing opacity, masks, groups or onion skin.
 - PNG and `.clip` export of the current frame only; no sequences or movies.
-- `.clip` import is preview-only and read-only. `.clip` export is a layered
-  still image for the current frame; it does not write CSP animation tracks.
+- `.clip` import is read-only. `.clip` export writes the layers and the
+  timeline of the project; the camera is written when the document exported
+  from carries a camera track to copy.
 - `.tvpp` export writes uncompressed images and needs one real TVPaint save to
   be called fully validated (the reader handles both compressed and bare
   files); blend modes, audio and camera chunks are not produced yet.
