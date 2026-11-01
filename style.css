@@ -1,0 +1,3482 @@
+/* ==========================================================================
+   TVMini shell
+   Visual language: a dark workbench. The window is a menu bar, a strip of
+   document tabs, the timeline above the stage, the stage itself on a dark
+   pasteboard, and a dock on the right. Every panel is one of three greys, a
+   hairline says where one part ends and the next begins, and one blue is the
+   only colour that means "this is live".
+
+   The palette and the metrics follow MoArt's shell, so the two programs
+   read as the same family: the surfaces, the hairlines, the one-pixel top
+   highlight on a raised button, the 18-pixel control height and the small
+   type. The timeline is the densest part of the window and is sized for
+   that — one number states the height of a row and every part of it reads
+   that number, so the rows cannot drift apart.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces — the ground of the window, the wells that sink, the panels */
+  --ground: #303336;
+  --well: #292c2f;
+  --surface: #43464a;
+  --surface-2: #4e5257;
+  --surface-3: #575b61;
+  --surface-sunken: #383b3f;
+
+  /* seams and edges */
+  --seam: rgba(0, 0, 0, 0.3);
+  --seam-strong: rgba(0, 0, 0, 0.38);
+  --edge: rgba(255, 255, 255, 0.075);
+  --edge-strong: rgba(0, 0, 0, 0.45);
+
+  /* text */
+  --text: #e9ebed;
+  --text-dim: #d2d6da;
+  --muted: #a9aeb4;
+  --faint: #7f868d;
+
+  /* accent */
+  --accent: #3fa3ec;
+  --accent-hover: #5fb2f0;
+  --accent-soft: rgba(63, 163, 236, 0.22);
+  --accent-softer: rgba(63, 163, 236, 0.11);
+  --accent-text: #8fcbf6;
+  --accent-ink: #0d1c26;
+  --danger: #e23b2e;
+  --violet: #b08758;
+
+  /* type */
+  --font-ui: "Yu Gothic UI", "Yu Gothic", Meiryo, "Hiragino Kaku Gothic ProN",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, Consolas, "SFMono-Regular", "Courier New", monospace;
+  --fs-xs: 9px;
+  --fs-sm: 10px;
+  --fs-md: 11px;
+  --fs-lg: 13px;
+
+  /* metrics */
+  --topbar-h: 26px;
+  --tabstrip-h: 26px;
+  --pane-header-h: 22px;
+  --ctl-h: 18px;
+  --btn-h: 22px;
+  --btn-h-mini: 18px;
+  --btn-w-mini: 20px;
+  --r-sm: 3px;
+  --r-btn: 5px;
+  --r-panel: 0px;
+  --seam-w: 1px;
+  --timeline-h: 164px;
+  --left-w: 196px;
+  --right-w: 232px;
+  /* The room around the document inside the stage. It is what keeps the
+     bars of the stage alive when the document is zoomed right out. */
+  --world-pad: 120px;
+
+  /* The timeline's geometry. Every row, cell and lane reads these, so the
+     timeline keeps one rhythm from the ruler down to the empty area. */
+  --tl-head-w: 150px;
+  --tl-row-h: 20px;
+  --tl-lane-h: 20px;
+  --tl-keys-h: 11px;
+  --tl-nums-h: 15px;
+  --tl-cell-min: 18px;
+  --tl-cell-base: 18px;
+  --tl-head-pad-l: 4px;
+  --tl-head-pad-r: 3px;
+  --tl-head-gap: 3px;
+
+  /* depth */
+  --elev: inset 0 1px 0 var(--edge);
+  --elev-float: 0 2px 6px rgba(0, 0, 0, 0.28);
+  --elev-dialog: 0 10px 30px rgba(0, 0, 0, 0.4);
+
+  /* legacy aliases used by older rules */
+  --ink: var(--text);
+  --line: var(--seam);
+  --panel: var(--surface);
+  --surface-1: var(--surface);
+  --text-1: var(--text);
+  --text-2: var(--muted);
+  --accent-ink-legacy: #ffffff;
+}
+
+/* The tall view of the timeline: the rows get room for a name and a
+   thumbnail. The compact view is the default and is what the rows look
+   like in a small window. */
+body.tl-rows-tall {
+  --tl-row-h: 34px;
+  --tl-lane-h: 26px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body.shell {
+  display: grid;
+  grid-template-rows:
+    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 5px var(--timeline-h) 24px;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--ground);
+  color: var(--text);
+  font: var(--fs-md) / 1.35 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* Every part of the window says which row of the grid it sits in. Without
+   this, hiding a panel takes its row with it and every part below it slides
+   up by one. */
+.topbar {
+  grid-row: 1;
+}
+
+.doc-tab-strip {
+  grid-row: 2;
+}
+
+.workspace {
+  grid-row: 3;
+}
+
+#timelineGrip {
+  grid-row: 4;
+}
+
+.timeline-pane {
+  grid-row: 5;
+}
+
+.statusbar {
+  grid-row: 6;
+}
+
+/* hidden panes ---------------------------------------------------------- */
+
+body.hide-tools .tools-pane,
+body.hide-inspector .inspector-pane,
+body.hide-layers .layers-pane,
+body.hide-stage .stage-pane,
+body.hide-timeline .timeline-pane,
+body.hide-timeline #timelineGrip {
+  display: none;
+}
+
+body.hide-timeline {
+  grid-template-rows:
+    var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 0 0 24px;
+}
+
+body.hide-stage .workspace {
+  grid-template-columns: var(--left-w) var(--right-w);
+}
+
+body.hide-tools .workspace {
+  grid-template-columns: minmax(0, 1fr) var(--right-w);
+}
+
+body.hide-inspector .workspace {
+  grid-template-columns: var(--left-w) minmax(0, 1fr);
+}
+
+body.hide-tools.hide-inspector .workspace,
+body.hide-tools.hide-stage .workspace,
+body.hide-inspector.hide-stage .workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* top bar --------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px;
+  /* The menu bar sits on the panel colour, with a hairline under it. */
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 0 var(--seam-strong);
+  position: relative;
+  z-index: 20;
+}
+
+/* The strip of document tabs, under the menu bar. */
+.doc-tab-strip {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  padding: 2px 0 0 2px;
+  background: var(--ground);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+
+.doc-tab-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.doc-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-btn);
+  background: linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 1px rgba(0, 0, 0, 0.3);
+  color: var(--accent);
+}
+
+.brand-mark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.brand-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.brand-tag {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.menu {
+  position: relative;
+}
+
+.menu-title {
+  height: var(--ctl-h);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.menu-title:hover,
+.menu-title[aria-expanded="true"] {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.topbar-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+/* project tab strip */
+
+.doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: var(--r-btn) var(--r-btn) 0 0;
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--edge);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.doc-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+
+.doc-tab-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.doc-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-tab-close {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.doc-tab:hover .doc-tab-close,
+.doc-tab.active .doc-tab-close {
+  opacity: 1;
+}
+
+.doc-tab-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.doc-tab-add {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  padding: 0;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.doc-tab-add:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* quick bar over the canvas --------------------------------------------- */
+
+.quick-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-btn);
+  background: rgba(20, 24, 30, 0.82);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+.quick-bar[hidden] {
+  display: none;
+}
+
+.quick-colour {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--seam-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.quick-swatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  background: #1f2937;
+}
+
+.quick-width {
+  width: 86px;
+  accent-color: var(--accent);
+}
+
+.quick-value {
+  min-width: 18px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.quick-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--seam);
+}
+
+.quick-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.quick-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.quick-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.quick-bar.collapsed {
+  gap: 0;
+  padding: 2px;
+}
+
+.quick-bar.collapsed > *:not(.quick-btn) {
+  display: none;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+
+.bar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: var(--btn-h);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.bar-action:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.tli {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.export-commands {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+.modal-card-new {
+  width: min(880px, 94vw);
+}
+
+.new-project {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 380px);
+  gap: 18px;
+  align-items: start;
+}
+
+.new-project-fields .field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.new-project-fields .field.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.chip {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--surface-3);
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.chip-label input {
+  width: 56px;
+}
+
+.size-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 6px;
+}
+
+.size-row label {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.new-project-preview {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.new-preview {
+  width: 360px;
+  height: 420px;
+  border: 1px solid var(--line);
+  background: #17181b;
+  touch-action: none;
+  cursor: grab;
+}
+
+
+.export-commands button {
+  height: var(--btn-h);
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-commands button:hover {
+  background: var(--surface-3);
+}
+
+.topbar-clip {
+  margin-left: 2px;
+}
+
+.topbar-export {
+  height: var(--btn-h);
+  margin-left: 4px;
+  padding: 0 12px;
+  font-size: var(--fs-md);
+}
+
+/* menus ------------------------------------------------------------------ */
+
+.menu-popup,
+.submenu-popup {
+  position: absolute;
+  top: calc(var(--ctl-h) + 6px);
+  left: 0;
+  min-width: 236px;
+  padding: 4px;
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--r-btn);
+  background: var(--surface);
+  box-shadow: var(--elev), var(--elev-float);
+  z-index: 40;
+}
+
+.menu-popup[hidden],
+.submenu-popup[hidden] {
+  display: none;
+}
+
+.submenu {
+  position: relative;
+}
+
+.submenu-popup {
+  left: 100%;
+  top: -4px;
+  min-width: 320px;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.menu-popup button,
+.submenu-popup button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  height: var(--btn-h);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-popup button:hover:not(:disabled),
+.submenu-popup button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.menu-popup button:disabled,
+.submenu-popup button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.menu-popup button[role="menuitemcheckbox"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.25;
+}
+
+.menu-popup button[aria-checked="true"][role="menuitemcheckbox"]::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.menu-popup button[data-pane-toggle] {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.menu-popup hr {
+  height: 1px;
+  margin: 4px 2px;
+  border: 0;
+  background: var(--seam);
+}
+
+.key {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.submenu-popup .recent-name {
+  font-weight: 600;
+}
+
+.submenu-popup .recent-path {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* workspace -------------------------------------------------------------- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: var(--left-w) minmax(0, 1fr) var(--right-w);
+  gap: var(--seam-w);
+  min-height: 0;
+  min-width: 0;
+  background: var(--seam-strong);
+  overflow: hidden;
+  /* The grips between the panels sit on the seams of the workspace, so it
+     has to be the box they are measured against. */
+  position: relative;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* The panes on the right stand on top of each other. */
+.right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--seam);
+}
+
+.right-column > .pane {
+  flex: 1 1 auto;
+}
+
+.right-column > .layers-pane {
+  flex: 0 0 auto;
+  /* The grip between the layers and the inspector sets how tall they are. */
+  height: var(--layers-h, auto);
+  max-height: 58%;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: var(--pane-header-h);
+  padding: 0 6px 0 8px;
+  /* The heading of a panel is the panel colour with a little more light at
+     the top, and a hairline under it. */
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 0 var(--seam-strong);
+  position: relative;
+  z-index: 3;
+}
+
+.pane-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pane-header-spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
+}
+
+.pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.ghost-btn .tli {
+  width: 13px;
+  height: 13px;
+}
+
+/* layers panel ------------------------------------------------------------ */
+
+.layer-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-controls select {
+  height: 20px;
+  min-width: 0;
+  padding: 0 2px;
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.layer-kind {
+  flex: 0 0 auto;
+  max-width: 74px;
+}
+
+.layer-blend {
+  flex: 0 0 auto;
+  max-width: 62px;
+  color: var(--faint);
+}
+
+.layer-opacity {
+  flex: 1 1 auto;
+  min-width: 30px;
+  accent-color: var(--accent);
+}
+
+.layer-opacity-out {
+  flex: none;
+  width: 24px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.layer-lock {
+  flex: none;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layer-lock:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.layer-lock[aria-pressed="true"] {
+  border-color: var(--seam-strong);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* The action row of the layers panel. It holds the same shape buttons as
+   the timeline, so the two places that do the same thing look the same. */
+.layer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 3px 6px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-actions button {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: var(--btn-h-mini);
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.layer-actions button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.layer-actions button:active {
+  background: var(--surface-2);
+}
+
+.layer-tree {
+  padding: 2px 0 6px;
+  overflow: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 26px;
+  padding: 1px 6px 1px 0;
+  /* The layers inside a folder are indented under it. */
+  padding-left: calc(4px + var(--depth, 0) * 12px);
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.layer-row:hover {
+  background: var(--surface-2);
+}
+
+.layer-row.selected {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.layer-row.selected:hover {
+  background: var(--accent-hover);
+}
+
+.layer-row.drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.layer-eye,
+.layer-fold {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layer-eye .tli,
+.layer-fold .tli {
+  width: 13px;
+  height: 13px;
+}
+
+.layer-eye:hover,
+.layer-fold:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.layer-fold {
+  color: var(--muted);
+}
+
+.layer-fold-blank {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.layer-thumb {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--seam-strong);
+  border-radius: 2px;
+  background: var(--surface-3);
+}
+
+.layer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* The name of a layer, and under it what is set on it. */
+.layer-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.2;
+}
+
+.layer-detail {
+  padding-left: 2px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layer-row.selected .layer-detail {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.layer-name:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.layer-name input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.layer-current {
+  flex: none;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.layer-row.selected .layer-current {
+  color: var(--accent-ink);
+}
+
+/* tools pane ------------------------------------------------------------- */
+
+.tools {
+  padding: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* The heading of a part of the tool property panel. It is a small caption
+   at the left of the panel, the way MoArt writes the head of each part. */
+.tool-section-title {
+  flex: none;
+  padding: 7px 8px 4px;
+  border-top: 1px solid var(--seam);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.tool-section-title:first-child {
+  border-top: 0;
+}
+
+/* The properties of the tool, under their heading. */
+.tool-props {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 4px 8px 10px;
+}
+
+/* The panel of a tool shows a few rows, the way MoArt does, and the rest is
+   put away behind "Hidden items". A row is put away with the eye at its right
+   (or brought back with the same eye), and the bar that opens the drawer is
+   there only while a row is actually put away. */
+.prop-strip,
+.prop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.prop-group {
+  padding: 7px 6px;
+  border: 1px dashed var(--seam-strong);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+
+.prop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prop-row > .field {
+  grid-column: 1;
+}
+
+/* The eye: the row is in the panel when it is pressed, and in the drawer when
+   it is not. It is a small, quiet button — not one of the blue buttons of the
+   toolbar — so the state of the panel is written by the icon alone. */
+.prop-row .prop-eye,
+.prop-row .prop-eye[aria-pressed="true"],
+.prop-row .prop-eye[aria-pressed="false"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  box-shadow: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.prop-row .prop-eye:hover:not(:disabled),
+.prop-row .prop-eye:focus-visible {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.prop-eye svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.prop-eye .eye-off,
+.prop-eye[aria-pressed="false"] .eye-on {
+  display: none;
+}
+
+.prop-eye[aria-pressed="false"] .eye-off {
+  display: inline;
+}
+
+.prop-eye[aria-pressed="false"] {
+  opacity: 0.55;
+}
+
+.prop-eye[aria-pressed="true"] {
+  color: var(--muted);
+}
+
+/* The bar that opens the drawer of put-away rows. */
+.prop-adv-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.prop-adv-bar button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.prop-adv-chev {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.12s ease;
+}
+
+.prop-adv-bar button[aria-expanded="true"] .prop-adv-chev {
+  transform: rotate(180deg);
+}
+
+/* The shape of the brush, shown in the property panel. */
+.brush-preview-wrap {
+  position: relative;
+  cursor: pointer;
+}
+
+/* The size of the brush in the corner of the picture, the way MoArt writes
+   it next to the brush preview. */
+.brush-shape-size {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(20, 22, 24, 0.62);
+  color: #f2f4f6;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+/* The shape of the brush, shown in the property panel. */
+.brush-shape-preview {
+  display: block;
+  width: 100%;
+  height: 44px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: #f4f4f6;
+}
+
+/* The note under the settings of the tool in the hand. */
+.tool-note {
+  margin: 0;
+  padding: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  justify-content: start;
+  gap: 3px;
+  padding: 4px 8px 8px;
+}
+
+.tool-grid.pair {
+  grid-template-columns: repeat(2, 24px);
+}
+
+.tool-grid button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tool-grid button:hover:not(:disabled) {
+  border-color: var(--seam-strong);
+  background: var(--surface-3);
+}
+
+.tool-grid button.active,
+.tool-grid button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.tool-grid button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.tool-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* The colour circle: the hue ring with the square inside it. */
+.wheel {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+
+.wheel-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 8px;
+}
+
+.wheel-row input[type="color"] {
+  flex: none;
+  width: 26px;
+  height: 22px;
+}
+
+.wheel-row input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+
+/* The properties of the tool live in the tool property panel now, so the
+   old bar along the bottom of the window is gone. */
+
+.tool-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.tool-row.four {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.tool-row.four button {
+  padding: 0 4px;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-row.single {
+  grid-template-columns: 1fr;
+}
+
+.camera-tool {
+  cursor: crosshair;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+}
+
+.panel-title {
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.panel-title:first-child {
+  margin-top: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* A part of the panel that is put away stays put away, even when the rule
+   for it says it is shown. */
+[hidden] {
+  display: none !important;
+}
+
+.field > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field output {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.field.inline input[type="number"] {
+  width: 54px;
+}
+
+.chip-label {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tri {
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1;
+  vertical-align: 1px;
+}
+
+.meter {
+  padding: 4px 7px;
+  border-radius: var(--r-sm);
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.meter output {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-note {
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.panel-note code,
+.guide-body code {
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--well);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* stage ------------------------------------------------------------------ */
+
+.stage-pane {
+  background: var(--well);
+}
+
+.stage-header {
+  gap: 10px;
+}
+
+.stage-view-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--seam);
+  box-shadow: -1px 0 0 var(--edge);
+}
+
+/* The zoom of the stage, in the head of the stage, the way MoArt has it:
+   the size, a bar to make it smaller, a bar to make it bigger, and a
+   button to show the whole document. */
+.stage-zoom {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  padding-right: 8px;
+}
+
+.stage-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stage-zoom-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.stage-zoom-btn .tli {
+  width: 12px;
+  height: 12px;
+}
+
+.stage-zoom-label {
+  min-width: 44px;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  cursor: pointer;
+}
+
+.stage-zoom-label:hover {
+  background: var(--surface-3);
+}
+
+.frame-label {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-right: 2px;
+}
+
+.canvas-wrap {
+  position: relative;
+  display: flex;
+  /* The stage itself is not scrolled: the box inside it is, so the bars of
+     the timeline and the zoom of the stage stay where they are. */
+  overflow: hidden;
+  padding: 0;
+  /* The pasteboard of Flash is a flat grey, and the page sits on it. */
+  background-color: var(--ground);
+  background-image: none;
+}
+
+/* The stage scrolls in both directions, the way Clip Studio Paint does, so
+   a document that is larger than the pane can be moved around. The bars are
+   the slim ones of the timeline. */
+.canvas-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: scroll;
+  padding: 0;
+  /* The zoom sets the scroll itself, so the browser must not move the
+     picture on its own when the canvas changes size. */
+  overflow-anchor: none;
+}
+
+/* The world the document sits in. It is always a little larger than the
+   pane, so the bars of the pane have somewhere to go at any zoom — a
+   document zoomed right out does not swallow them. */
+.canvas-world {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: calc(100% + var(--world-pad) * 2);
+  min-height: calc(100% + var(--world-pad) * 2);
+  box-sizing: border-box;
+}
+
+.canvas-scroll::-webkit-scrollbar {
+  height: 9px;
+  width: 9px;
+}
+
+.canvas-scroll::-webkit-scrollbar-track {
+  background: var(--ground);
+}
+
+.canvas-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-3);
+  background-clip: content-box;
+}
+
+.canvas-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
+canvas {
+  flex: 0 0 auto;
+  background: #ffffff;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+canvas.picking {
+  cursor: grab;
+}
+
+/*
+ * The stage is two canvases in one pile: the document, and a thin sheet on
+ * top of it that holds the shape of the brush and the stroke that is being
+ * drawn. The sheet is cleared and drawn again for every move of the pointer,
+ * which is a small thing to do, while the document underneath is only drawn
+ * when the document changes. That is what keeps the stage smooth when the
+ * document is big.
+ */
+.canvas-stack {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: none;
+  max-height: none;
+  /* The stage is not made smaller to fit the pane: it is as big as the
+     zoom says, and the pane scrolls. */
+  flex: 0 0 auto;
+  /* Centred in the pane, and still reachable on both sides when the
+     document is larger than the pane. */
+  margin: auto;
+}
+
+.canvas-stack > canvas {
+  display: block;
+  /*
+   * The stage is not made smaller to fit the pane: the zoom decides how big
+   * it is, and the pane scrolls when the document is larger than the pane,
+   * the way Clip Studio Paint does.
+   */
+  max-width: none;
+  max-height: none;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+  touch-action: none;
+}
+
+/* timeline --------------------------------------------------------------- */
+
+.pane-grip {
+  background: var(--ground);
+  box-shadow: inset 0 1px 0 var(--edge), inset 0 -1px 0 var(--seam-strong);
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.pane-grip:hover,
+.pane-grip.dragging {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+/* The grips between the panels ------------------------------------------ */
+
+/* The grip on a vertical seam: it makes the column beside it wider. */
+.pane-grip-v {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 4;
+}
+
+#leftGrip {
+  left: calc(var(--left-w) - 3px);
+}
+
+#rightGrip {
+  right: calc(var(--right-w) - 3px);
+}
+
+/* The grip on a horizontal seam: it makes the panel above it taller. */
+.pane-grip-h {
+  flex: 0 0 5px;
+  height: 5px;
+}
+
+/* panels that float ------------------------------------------------------ */
+
+/* The layer the handles of the panels that float live in: a fixed box over
+   the whole window, so a panel can be put anywhere in it. It sits above the
+   panels and below the windows that are opened over the app. */
+#floatLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  pointer-events: none;
+}
+
+/* The frame of a panel that floats holds its handles. The panel itself is
+   put over the window, and keeps its place in the window all the same. */
+.pane-float {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* A panel that floats is a window of its own. */
+.pane.floating {
+  border: 1px solid var(--seam-strong);
+  box-shadow: var(--elev-dialog);
+}
+
+/* The handles of a panel that floats: the edges and the corners. */
+.pane-handle {
+  position: absolute;
+  z-index: 6;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.pane-handle-n {
+  top: -3px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.pane-handle-s {
+  bottom: -3px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.pane-handle-e {
+  right: -3px;
+  top: 12px;
+  bottom: 12px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.pane-handle-w {
+  left: -3px;
+  top: 12px;
+  bottom: 12px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.pane-handle-ne {
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.pane-handle-se {
+  bottom: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+.pane-handle-sw {
+  bottom: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.pane-handle-nw {
+  top: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* The head of a panel is the handle that moves it. */
+.pane-header {
+  cursor: grab;
+  touch-action: none;
+}
+
+.pane-header button,
+.pane-header input,
+.pane-header a {
+  cursor: pointer;
+}
+
+body.pane-dragging,
+body.pane-dragging .pane-header {
+  cursor: grabbing;
+}
+
+.timeline-pane {
+  background: var(--surface);
+  min-height: 0;
+}
+
+.timeline-header {
+  gap: 5px;
+  padding: 0 6px;
+}
+
+.timeline-header .transport {
+  min-width: 24px;
+  width: 24px;
+  height: var(--btn-h-mini);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline-header .transport:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.timeline-header .transport:disabled {
+  background: transparent;
+  color: var(--faint);
+}
+
+/* The play button carries a word, so it needs room for it. */
+.timeline-header #playButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  min-width: 54px;
+  padding: 0 8px;
+  color: var(--text);
+}
+
+.timeline-header .transport .tli {
+  width: 12px;
+  height: 12px;
+}
+
+/* The button that opens the settings of the timeline. */
+.tl-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--btn-h-mini);
+  padding: 0 6px 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.tl-menu-button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.tl-menu-icon {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.tl-menu-caret {
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.timeline-menu {
+  position: absolute;
+  top: 26px;
+  left: 6px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 190px;
+  padding: 8px;
+}
+
+.timeline-menu hr {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+  border: 0;
+  background: var(--seam-strong);
+}
+
+.timeline-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+/* The frame numbers and the keys above them, the way Clip Studio Paint
+   draws the ruler of a timeline. */
+.frame-readout {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.tl-toolbar-toggle {
+  color: var(--muted);
+}
+
+/* The toolbar of the timeline. It is one line of small controls, and the
+   shapes in it are the same shapes the rows of the timeline use. */
+.timeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--seam);
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The words in the toolbar sit on the panel, the same as the shapes do. */
+.toolbar-group > button:not(.shape-btn):not(.toggle) {
+  height: var(--btn-h-mini);
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.toolbar-group > button:not(.shape-btn):not(.toggle):hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 12px;
+  flex: none;
+  background: var(--seam-strong);
+  box-shadow: 1px 0 0 var(--edge);
+}
+
+.timeline-toolbar .spacer {
+  flex: 1;
+}
+
+/* The shape family of the timeline.
+   A rectangle is a layer, a circle is a folder and a triangle is a drawing.
+   A bar in front of the shape means the same thing is taken away, so the
+   six buttons read as three pairs without a word on any of them. */
+.shape-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--btn-w-mini);
+  height: var(--btn-h-mini);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.shape-btn .tli {
+  width: 13px;
+  height: 13px;
+}
+
+.shape-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.shape-btn:active:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.shape-btn:disabled {
+  background: transparent;
+  color: var(--faint);
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The strip of frames. It is a long one — three hundred columns — and the
+   columns are a fixed width, so the timeline is scrolled across and the
+   names of the layers stay where they are. */
+.timeline-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--well);
+}
+
+/* The rail under the strip is thin, so it does not eat a row of frames. */
+.timeline-scroll::-webkit-scrollbar {
+  height: 9px;
+  width: 9px;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: var(--well);
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-3);
+  background-clip: content-box;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
+.timeline {
+  width: max-content;
+  min-width: 100%;
+}
+
+.tl-header,
+.tl-row {
+  display: grid;
+  grid-template-columns: var(--tl-head-w) 1fr;
+  min-width: 100%;
+}
+
+.tl-header {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--seam-strong);
+}
+
+.tl-corner,
+.tl-head {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--seam-strong), inset 0 1px 0 var(--edge);
+}
+
+.tl-corner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: calc(var(--tl-keys-h) + var(--tl-nums-h));
+  padding: 0 var(--tl-head-pad-r) 0 var(--tl-head-pad-l);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tl-corner .tl-corner-caret {
+  color: var(--faint);
+  font-size: 8px;
+}
+
+/* The ruler: the keys of the timeline above the frame numbers. */
+.tl-ruler {
+  display: grid;
+  grid-template-rows: var(--tl-keys-h) var(--tl-nums-h);
+  background: var(--surface);
+}
+
+/* One column per frame, and every column is exactly as wide as the number
+   it has to hold. The columns do not stretch to fill the window — MoArt
+   gives every frame a fixed width too, and the ruler then reads as one
+   scale instead of a number scattered across the pane. */
+.tl-keys,
+.tl-numbers,
+.tl-cells {
+  display: grid;
+  grid-template-columns: repeat(var(--frames), var(--tl-cell-min));
+}
+
+.tl-keys {
+  align-items: end;
+  overflow: hidden;
+}
+
+/* The marker that says where the playhead is. It sits in the key line, over
+   the frame it is on, and it is the only red thing in the ruler. */
+.tl-playhead-mark {
+  grid-row: 1;
+  z-index: 4;
+  align-self: end;
+  justify-self: center;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--danger);
+  pointer-events: none;
+}
+
+.tl-key {
+  grid-row: 1;
+  height: var(--tl-keys-h);
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 8px;
+  line-height: var(--tl-keys-h);
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tl-key:hover {
+  color: var(--text);
+}
+
+.tl-key.current {
+  color: var(--danger, #e5484d);
+  font-weight: 700;
+}
+
+/* The ruler: the keys of the timeline above the frame numbers.
+   The numbers are written the way MoArt writes them — a monospace digit at
+   the left of its own column, so they line up in a row and the row reads as
+   one scale. */
+.tl-number {
+  height: var(--tl-nums-h);
+  line-height: var(--tl-nums-h);
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  padding-left: 2px;
+  /* The line of the column stands on the left of the number, the way MoArt
+     draws the ticks of its ruler. */
+  box-shadow: inset 1px 0 0 var(--seam);
+  white-space: nowrap;
+}
+
+.tl-number.current {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* The column the playhead is in, drawn over every row. The tint is light
+   enough that a cell keeps its own colour underneath it. */
+.tl-playhead {
+  grid-row: 1;
+  z-index: 3;
+  align-self: stretch;
+  background: rgba(226, 59, 46, 0.07);
+  box-shadow: inset 1px 0 0 rgba(226, 59, 46, 0.75);
+  pointer-events: none;
+}
+
+/* The column the first frame is in. */
+.tl-start-line {
+  grid-row: 1;
+  z-index: 2;
+  align-self: stretch;
+  box-shadow: inset 1px 0 0 var(--accent);
+  pointer-events: none;
+}
+
+/* The empty area under the rows, with the columns of the frames in it. */
+.tl-grid-bg {
+  display: grid;
+  grid-template-columns: var(--tl-head-w) 1fr;
+  min-height: 48px;
+  min-width: 100%;
+}
+
+.tl-grid-lines {
+  display: grid;
+  grid-column: 2;
+  grid-template-columns: repeat(var(--frames), var(--tl-cell-min));
+}
+
+.tl-grid-line {
+  grid-row: 1;
+  box-shadow: inset -1px 0 0 var(--seam);
+}
+
+.tl-grid-head {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--well);
+  box-shadow: 1px 0 0 var(--seam-strong);
+}
+
+.tl-row {
+  box-shadow: inset 0 -1px 0 var(--seam);
+}
+
+.tl-row.selected .tl-head {
+  background: var(--surface-2);
+  box-shadow: 1px 0 0 var(--seam-strong), inset 2px 0 0 var(--accent), inset 0 1px 0 var(--edge);}
+
+.tl-head {
+  display: flex;
+  align-items: center;
+  gap: var(--tl-head-gap);
+  height: var(--tl-row-h);
+  padding: 0 var(--tl-head-pad-r) 0 var(--tl-head-pad-l);
+  /* The layers inside a folder are indented under it. */
+  padding-left: calc(var(--tl-head-pad-l) + var(--depth, 0) * 12px);
+}
+
+.tl-fold {
+  color: var(--text-dim);
+}
+
+.tl-clip {
+  flex: none;
+  padding: 0 2px;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* The kind of a layer: a folder, a drawing layer or the imported picture. */
+.tl-kind {
+  flex: none;
+  width: 12px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+}
+
+.tl-kind.folder {
+  color: var(--text-dim);
+}
+
+/* The button that adds a layer next to the row it sits on. */
+.tl-add {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tl-add:hover {
+  background: var(--surface-3);
+  color: var(--accent);
+}
+
+.tl-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tl-icon .tli {
+  width: 12px;
+  height: 12px;
+}
+
+.tl-icon:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.tl-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 3px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tl-name .tli {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--faint);
+}
+
+.tl-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-name:hover {
+  background: var(--surface-3);
+}
+
+.tl-cell {
+  height: var(--tl-row-h);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  line-height: var(--tl-row-h);
+  text-align: center;
+  cursor: pointer;
+  /* The handle of the cell sits on its right edge. */
+  position: relative;
+}
+
+/* The handle on the right of a cell: it makes the cell longer or shorter,
+   the way the edge of a cell is pulled in Clip Studio Paint. */
+.tl-cell-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.tl-cell-handle:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* The first frame of a cell is the handle that moves it. */
+.tl-cell.movable {
+  cursor: grab;
+}
+
+body.cell-dragging,
+body.cell-dragging .tl-cell.movable {
+  cursor: grabbing;
+}
+
+.tl-cell.empty:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+/* The first frame of a cell: the name of the cell sits on it. */
+.tl-cell.head {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--accent-text, #a9d6f7);
+  font-weight: 600;
+}
+
+.tl-cell.hold {
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset -1px 0 0 var(--seam);
+  color: var(--faint);
+}
+
+.tl-cell.virtual {
+  background: rgba(255, 255, 255, 0.018);
+  color: var(--faint);
+}
+
+/* The name of a cell is only written out when the timeline is asked for
+   the names, the way Clip Studio Paint can hide them. */
+.tl-cells.no-names .tl-cell.head {
+  color: var(--accent);
+  font-weight: 400;
+}
+
+.tl-cell.image {
+  background: rgba(176, 135, 88, 0.16);
+  color: var(--violet);
+}
+
+.tl-cell.camera {
+  color: var(--faint);
+}
+
+.audio-row {
+  background: rgba(63, 163, 236, 0.05);
+}
+
+.tl-cell.audio-wave-cell {
+  padding: 0;
+  overflow: hidden;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 100% 100%;
+}
+
+.tl-cell.camera.key {
+  background: rgba(63, 163, 236, 0.16);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.camera-row {
+  background: rgba(63, 163, 236, 0.04);
+}
+
+/* The camera lane and the sound lane are a shade taller than a layer row,
+   so the diamonds and the wave have room. */
+.camera-row .tl-head,
+.camera-row .tl-cell,
+.audio-row .tl-head,
+.audio-row .tl-cell {
+  height: var(--tl-lane-h);
+  line-height: var(--tl-lane-h);
+}
+
+.camera-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.camera-presets button {
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.camera-presets button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.camera-presets button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.panel-hint {
+  margin: 2px 0 0;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.tl-cell.current {
+  position: relative;
+  z-index: 2;
+  outline: 1px solid rgba(226, 59, 46, 0.5);
+  outline-offset: -1px;
+}
+
+.tl-cell.first {
+  box-shadow: inset 2px 0 0 var(--accent), inset -1px 0 0 var(--seam);
+}
+
+.tl-image-head {
+  display: flex;
+  align-items: center;
+  height: var(--tl-row-h);
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* status bar ------------------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 24px;
+  padding: 0 10px;
+  background: var(--ground);
+  box-shadow: inset 0 1px 0 var(--edge);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.statusbar .path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 62%;
+  color: var(--faint);
+  font-family: var(--font-mono);
+}
+
+.statusbar.error {
+  color: var(--danger);
+}
+
+/* controls --------------------------------------------------------------- */
+
+button {
+  height: var(--btn-h);
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 2px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+button:active:not(:disabled) {
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.32);
+}
+
+button:disabled {
+  background: var(--surface-sunken);
+  box-shadow: none;
+  color: var(--faint);
+  cursor: default;
+}
+
+button.active,
+button[aria-pressed="true"] {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-ink);
+}
+
+button.active:hover,
+button[aria-pressed="true"]:hover {
+  background: var(--accent-hover);
+}
+
+button.primary {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-ink);
+}
+
+button.primary:hover {
+  background: var(--accent-hover);
+}
+
+/* A button that is on or off. The state shows as a colour and as a little
+   light behind the word. */
+button.toggle {
+  height: var(--btn-h-mini);
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+button.toggle:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+button.toggle.on,
+button.toggle.on:hover:not(:disabled) {
+  background: var(--accent-softer);
+  color: var(--accent-text, var(--accent));
+}
+
+/* The sprite of the shape icons. It is never shown, only used. */
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+button.wide {
+  width: 100%;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+  height: var(--ctl-h);
+  min-width: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+select {
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--edge);
+  padding-right: 2px;
+}
+
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+input[type="color"] {
+  width: 100%;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
+input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* HSV colour wheel. It sits in the tool property panel and is always
+   drawn, so it needs no panel of its own. */
+
+#wheelCanvas {
+  width: 176px;
+  height: 176px;
+  max-width: 100%;
+  background: transparent;
+  box-shadow: none;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* scrollbars ------------------------------------------------------------- */
+
+/* The bars are drawn with the old rules, so they are the same everywhere.
+   The standard properties are not used: a browser that is given them draws
+   its own bars and ignores these, and those have no thumb when there is
+   nothing to scroll, so the scroller of the stage would vanish as soon as
+   the document fits in the pane. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-3);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
+/* dialogs ---------------------------------------------------------------- */
+
+.modal,
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(16, 18, 20, 0.55);
+  backdrop-filter: blur(1px);
+}
+
+.modal {
+  z-index: 50;
+}
+
+.overlay {
+  z-index: 40;
+  padding: 24px;
+}
+
+.modal[hidden],
+.overlay[hidden] {
+  display: none;
+}
+
+.modal-card,
+.overlay-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(680px, calc(100vw - 40px));
+  max-height: calc(100vh - 60px);
+  padding: 16px 18px;
+  border: 1px solid var(--seam-strong);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  box-shadow: var(--elev), var(--elev-dialog);
+  color: var(--text);
+}
+
+.overlay-card {
+  width: min(430px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 22px 24px;
+}
+
+.overlay-card.wide {
+  width: min(680px, 94vw);
+}
+
+.modal-card h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.browser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.browser-head {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-head input {
+  flex: 1;
+}
+
+.dir-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  height: 260px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.dir-list li button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: var(--btn-h);
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.dir-list li button:hover {
+  background: var(--surface-3);
+}
+
+.dir-list .meta {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* start screen, guide, shortcuts */
+
+.overlay-brand {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.overlay-tag {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.overlay-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.overlay-actions button {
+  height: 28px;
+  border-radius: var(--r-btn);
+  font-size: var(--fs-md);
+}
+
+.overlay-title {
+  margin-bottom: 6px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.overlay-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.overlay-title-row .overlay-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.overlay-close {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overlay-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.start-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 38vh;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+}
+
+.start-recent button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+}
+
+.start-recent button:hover {
+  background: var(--surface-3);
+}
+
+.start-recent .start-name {
+  font-weight: 600;
+}
+
+.start-recent .start-path {
+  max-width: 55%;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-recent .empty {
+  padding: 4px 2px;
+  color: var(--faint);
+}
+
+.guide-body h3 {
+  margin: 14px 0 5px;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+.guide-body h3:first-child {
+  margin-top: 0;
+}
+
+.guide-body p {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.keys-body .keys-group {
+  margin-bottom: 12px;
+}
+
+.keys-body h3 {
+  margin: 0 0 4px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.keys-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 0;
+  box-shadow: inset 0 -1px 0 var(--seam);
+  font-size: var(--fs-md);
+}
+
+.keys-row:last-child {
+  box-shadow: none;
+}
+
+.keys-row .keys-key {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* flip preview ----------------------------------------------------------- */
+
+.flip-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(12, 14, 16, 0.9);
+}
+
+.flip-preview[hidden] {
+  display: none;
+}
+
+.flip-preview canvas {
+  max-width: 82vw;
+  max-height: 78vh;
+  border: 1px solid var(--seam-strong);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.flip-label {
+  color: var(--muted);
+  font-size: var(--fs-md);
+  letter-spacing: 0.04em;
+}
+
+/* responsive ------------------------------------------------------------- */
+
+@media (max-width: 1080px) {
+  :root {
+    --right-w: 226px;
+  }
+}
+
+@media (max-width: 900px) {
+  body.shell {
+    --right-w: 0px;
+  }
+
+  .inspector-pane {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  body.shell {
+    --left-w: 0px;
+    --timeline-h: 150px;
+  }
+
+  .tools-pane {
+    display: none;
+  }
+
+  .brand-tag,
+  .doc-tab-bar {
+    display: none;
+  }
+}
+
+/* A layer row can be dragged to another place in the list. */
+.tl-head {
+  cursor: grab;
+}
+
+.tl-row.drop-target .tl-head {
+  background: var(--surface-2);
+  box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.tl-row.drop-target .tl-name {
+  color: var(--accent);
+}
+/* The stage is clipped, and the zoom of the stage sits in its head. */
+.canvas-wrap {
+  overflow: hidden;
+}
+/* The brush picture and the brushes that were saved. */
+.brush-image-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.brush-image-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.brush-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.brush-actions button {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--btn-h-mini);
+  padding: 0 6px;
+  font-size: var(--fs-sm);
+}
+
+.brush-image-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* The brush panel: bring a brush in, look at the brushes, write one out. */
+.brush-dialog {
+  gap: 14px;
+}
+
+.brush-drop {
+  display: grid;
+  place-items: center;
+  min-height: 74px;
+  padding: 14px;
+  border: 1px dashed var(--seam-strong);
+  border-radius: var(--r-panel);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.brush-drop p {
+  margin: 0;
+}
+
+.brush-drop.over {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.brush-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.brush-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.brush-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.brush-empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.brush-card-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "preview size"
+    "name   name"
+    "buttons buttons";
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-panel);
+  background: var(--surface-2);
+}
+
+.brush-preview {
+  grid-area: preview;
+  width: 100%;
+  height: 44px;
+  border-radius: 4px;
+  border: 1px solid var(--seam);
+}
+
+.brush-card-name {
+  grid-area: name;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brush-card-size {
+  grid-area: size;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.brush-card-item button {
+  grid-area: buttons;
+  justify-self: start;
+}
+
+.brush-card-item button + button {
+  margin-left: 4px;
+}
+
+/* ---------------------------------------------------- Flash 8 UI & Options */
+
+.flash8-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--seam);
+  border-radius: 4px;
+}
+
+.f8-opt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.f8-opt-group label.field.inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+
+.f8-opt-group select {
+  flex: 1;
+  max-width: 140px;
+  font-size: var(--fs-sm);
+  padding: 2px 4px;
+}
+
+.f8-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--seam);
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.f8-action-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+}
+
+.f8-action-btn.toggle.on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.f8-snapping-row {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--seam);
+  padding-top: 6px;
+}
+
+.f8-snap-btn {
+  flex: 1;
+  padding: 3px 4px;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--seam);
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: center;
+}
+
+.f8-snap-btn:hover {
+  background: var(--surface-hover);
+}
+
+.f8-snap-btn.toggle.on {
+  background: var(--accent-soft);
+  color: var(--accent-text, #a9d6f7);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Flash 8 Keyframe Timeline Indicators */
+.tl-cell.blank-key {
+  position: relative;
+}
+
+.tl-cell.blank-key::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.tl-cell.key::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Drawing Settings Dialog */
+.drawing-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.drawing-settings-body label.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawing-settings-body select {
+  min-width: 170px;
+}
+
+/* Optimize Curves Dialog */
+.optimize-curves-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 16px 0;
+}
