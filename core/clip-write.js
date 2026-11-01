@@ -2265,22 +2265,39 @@ async function loadTemplate() {
  * drawing in the vector stage of this program.
  *
  * The export paints the layers at a size that covers the window of a normal
- * screen - about 2000 pixels on the long side - so that the picture Clip
- * Studio Paint fits is reduced rather than stretched, and the lines stay as
- * sharp as the vectors they were drawn from. A document that is that big
- * already keeps one pixel per unit, and a very large one is not made larger
- * than a picture can be handled.
+ * screen - about 2000 pixels on the long side of the canvas - so that the
+ * picture Clip Studio Paint fits is reduced rather than stretched, and the
+ * lines stay as sharp as the vectors they were drawn from. The canvas of the
+ * file is the sheet, the stage plus its pasteboard, so the scale is chosen
+ * for the sheet: choosing it for the bare stage put a 960x600 project at
+ * 4320x2700, more than twice the pixels the window needs. A canvas that is
+ * that big already keeps one pixel per unit, and a very large one is not made
+ * larger than a picture can be handled.
  */
 export const CLIP_LONG_SIDE = 2000;
 export const CLIP_PIXEL_BUDGET = 12_000_000;
 export const CLIP_MAX_SCALE = 8;
 
+/**
+ * The sheet the export paints on: the stage with a quarter of it in
+ * pasteboard on every side, so artwork that reaches past the stage - a note
+ * on the work area, a sketch that runs off - comes along.
+ */
+export function clipSheetSize(width, height) {
+  const safeWidth = Math.max(0, Number(width) || 0);
+  const safeHeight = Math.max(0, Number(height) || 0);
+  const pasteX = Math.round(safeWidth * 0.25);
+  const pasteY = Math.round(safeHeight * 0.25);
+  return { pasteX, pasteY, width: safeWidth + pasteX * 2, height: safeHeight + pasteY * 2 };
+}
+
 export function clipExportScale(width, height) {
-  const longSide = Math.max(1, Number(width) || 0, Number(height) || 0);
+  const sheet = clipSheetSize(width, height);
+  const longSide = Math.max(1, sheet.width, sheet.height);
   let scale = Math.max(1, Math.min(CLIP_MAX_SCALE, Math.ceil(CLIP_LONG_SIDE / longSide)));
   while (
     scale > 1 &&
-    Math.round(width * scale) * Math.round(height * scale) > CLIP_PIXEL_BUDGET
+    Math.round(sheet.width * scale) * Math.round(sheet.height * scale) > CLIP_PIXEL_BUDGET
   ) {
     scale -= 1;
   }
@@ -2409,11 +2426,14 @@ export async function createClipBuffer(
   // works: the canvas sits centred on it and a quarter of the canvas comes
   // along on every side as pasteboard. The stage stays the output frame at
   // the centre of the file, and the artwork that reaches past it - a note on
-  // the work area, a sketch that runs off the stage - comes along too.
-  const pasteX = Math.round(project.width * 0.25);
-  const pasteY = Math.round(project.height * 0.25);
-  const sheetWidth = project.width + pasteX * 2;
-  const sheetHeight = project.height + pasteY * 2;
+  // the work area, a sketch that runs off the stage - comes along too. The
+  // sheet is the one `clipExportScale` sizes the canvas from, so the scale
+  // the caller asks for and the canvas it is applied to cannot drift apart.
+  const sheet = clipSheetSize(project.width, project.height);
+  const pasteX = sheet.pasteX;
+  const pasteY = sheet.pasteY;
+  const sheetWidth = sheet.width;
+  const sheetHeight = sheet.height;
   const width = Math.round(sheetWidth * scale);
   const height = Math.round(sheetHeight * scale);
   const dpi = Math.round(72 * scale);
