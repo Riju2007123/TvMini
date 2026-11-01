@@ -1511,7 +1511,7 @@ export function binaryPageToProject(name, { page, stage, document }) {
     }
   }
 
-  return {
+  const project = {
     format: "tvmini",
     version: 3,
     width: stage.width,
@@ -1525,7 +1525,107 @@ export function binaryPageToProject(name, { page, stage, document }) {
     camera: null,
     audio: null,
     layers: page.layers,
-    warnings: warnings.length ? warnings : undefined,
   };
+  takeCameraLayers(project, stage, warnings);
+  if (warnings.length) project.warnings = warnings;
+  return project;
+}
+
+/**
+ * The virtual camera of a Flash file, made into the camera of the project.
+ *
+ * Flash had no camera of its own: animators put a shape — the viewfinder, a
+ * rectangle over the stage, usually black, on a layer named after a camera —
+ * and let ActionScript move that shape while the film played. The shape is
+ * not artwork and covers everything, so as an imported layer it would only
+ * paint itself over the scene. Here the layer is recognised, its viewfinder
+ * rectangles become the keyframes of the camera track (one per frame the
+ * layer shows one), and the layer itself is taken out.
+ *
+ * A layer qualifies when its name speaks of a camera ("Cam", "Camera",
+ * "V-Cam", …) and its shapes are closed fills that cover most of the stage;
+ * a name that only says "cam" must also fill near-black, so that an artwork
+ * layer that happens to be called Cam is left alone.
+ */
+function takeCameraLayers(project, stage, warnings) {
+  const nameSaysCamera = /(^|[^a-z])(v-?cam(era)?|cam(era)?)([^a-z]|$)/i;
+  const explicit = /v-?cam(era)?|camera/i;
+  const nearBlack = (hex) => {
+    const value = String(hex ?? "").replace("#", "");
+    if (!/^[0-9a-fA-F]{6}$/.test(value)) return false;
+    const red = Number.parseInt(value.slice(0, 2), 16);
+    const green = Number.parseInt(value.slice(2, 4), 16);
+    const blue = Number.parseInt(value.slice(4, 6), 16);
+    return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255 <= 0.12;
+  };
+  const boundsOf = (drawing) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const stroke of drawing.strokes ?? []) {
+      if (stroke.kind !== "paths" && stroke.kind !== "path") continue;
+      const walk = (point) => {
+        if (typeof point[0] === "number" && Number.isFinite(point[0]) && Number.isFinite(point[1])) {
+          if (point[0] < minX) minX = point[0];
+          if (point[1] < minY) minY = point[1];
+          if (point[0] > maxX) maxX = point[0];
+          if (point[1] > maxY) maxY = point[1];
+        } else for (const child of point) walk(child);
+      };
+      for (const point of stroke.paths ?? stroke.points ?? []) walk(point);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+    return { minX, minY, maxX, maxY };
+  };
+
+  const taken = [];
+  const keys = [];
+  for (let index = project.layers.length - 1; index >= 0; index -= 1) {
+    const layer = project.layers[index];
+    if (!nameSaysCamera.test(layer.name ?? "")) continue;
+    const drawings = layer.drawings ?? [];
+    if (drawings.length === 0) continue;
+    const wantsBlack = !explicit.test(layer.name ?? "");
+    const frames = [];
+    let covered = true;
+    for (const drawing of drawings) {
+      const bounds = boundsOf(drawing);
+      if (!bounds) { covered = false; break; }
+      const width = bounds.maxX - bounds.minX;
+      const height = bounds.maxY - bounds.minY;
+      if (width < stage.width * 0.6 || height < stage.height * 0.6) { covered = false; break; }
+      if (wantsBlack) {
+        const black = (drawing.strokes ?? []).some((stroke) => nearBlack(stroke.color));
+        if (!black) { covered = false; break; }
+      }
+      frames.push({
+        frame: Math.max(1, Math.round(drawing.at ?? 1)),
+        x: Math.round(Math.max(0, bounds.minX)),
+        y: Math.round(Math.max(0, bounds.minY)),
+        width: Math.max(1, Math.round(Math.min(width, stage.width * 4))),
+        height: Math.max(1, Math.round(Math.min(height, stage.height * 4))),
+        rotation: 0,
+        interp: "linear",
+      });
+    }
+    if (!covered || frames.length === 0) continue;
+    keys.push(...frames);
+    taken.push(layer.name);
+    project.layers.splice(index, 1);
+  }
+  if (taken.length === 0) return;
+  // One key per frame: the layers were walked from the top of the stack, so
+  // the topmost camera layer wins a frame that two of them both show.
+  const byFrame = new Map();
+  for (const key of keys) {
+    if (!byFrame.has(key.frame)) byFrame.set(key.frame, key);
+  }
+  project.camera = { keys: [...byFrame.values()].sort((a, b) => a.frame - b.frame) };
+  warnings.push(
+    `the camera layer ${taken.map((name) => `"${name}"`).join(", ")} became ` +
+      `${project.camera.keys.length} camera keyframe${project.camera.keys.length === 1 ? "" : "s"} ` +
+      "on the camera track (the viewfinder of a Flash virtual camera is not artwork)",
+  );
 }
 export { BinaryCursor, StopDecode, readShapeBody, shapeToStrokes, composeCellBitmaps };

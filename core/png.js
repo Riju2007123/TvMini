@@ -595,6 +595,9 @@ function fillPathInto(target, width, height, stroke, rgb, erase, scale = 1) {
   }
   const top = Math.max(0, Math.floor(minY));
   const bottom = Math.min(height - 1, Math.ceil(maxY));
+  // The same guard as the multi-subpath fill: a shape off the canvas or with
+  // points that are not finite paints nothing.
+  if (!(bottom >= top)) return;
   const samples = 4;
   const coverage = new Float32Array(width);
 
@@ -686,6 +689,10 @@ function fillPathsInto(target, width, height, subpaths, rgb, erase, scale = 1) {
 
   const top = Math.max(0, Math.floor(minY));
   const bottom = Math.min(height - 1, Math.ceil(maxY));
+  // A shape whose points are not finite, or that sits wholly outside the
+  // canvas, paints nothing — the row loop below would simply never run for
+  // it, and neither must the buckets be built for it.
+  if (!(bottom >= top)) return;
   const samples = 4;
   const coverage = new Float32Array(width);
   const buckets = scanlineBuckets(edges, top, bottom, samples);
