@@ -273,6 +273,7 @@ const startRecent = document.getElementById("startRecent");
 const startDrawButton = document.getElementById("startDraw");
 const startOpenButton = document.getElementById("startOpen");
 const startImportButton = document.getElementById("startImport");
+const startImportFlaButton = document.getElementById("startImportFla");
 const startGuideButton = document.getElementById("startGuide");
 const startKeysButton = document.getElementById("startKeys");
 const showStartInput = document.getElementById("showStart");
@@ -8852,6 +8853,11 @@ startOpenButton.addEventListener("click", async () => {
 startImportButton.addEventListener("click", async () => {
   startOverlay.hidden = true;
   await chooseAndImportClip();
+});
+
+startImportFlaButton.addEventListener("click", async () => {
+  startOverlay.hidden = true;
+  await chooseAndImportFLA();
 });
 
 startGuideButton.addEventListener("click", showGuide);
