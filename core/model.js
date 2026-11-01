@@ -1071,6 +1071,12 @@ export function normalizeProject(input) {
     camera,
     audio,
     layers,
+    // What the importers learned on the way in — the camera a Flash file
+    // carried, a media entry that could not be read — travels with the
+    // project so the interface can say it.
+    ...(Array.isArray(input.warnings) && input.warnings.length
+      ? { warnings: input.warnings.map((warning) => String(warning)) }
+      : {}),
   };
 }
 
