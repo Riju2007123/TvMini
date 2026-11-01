@@ -1726,12 +1726,21 @@ function insertRow(database, table, source, overrides) {
  */
 function writeAnimation(database, tree, project, skeleton, pixels, rows, source, scale = 1) {
   const cameraKeys = Array.isArray(project.camera?.keys) ? project.camera.keys : [];
+  // The camera curves are spliced into the mixers of a track the skeleton
+  // carries. A skeleton without a camera track of its own lends the
+  // documents of its paper track: the camera curves are added to them the
+  // same way they are added to a document that has none of them yet.
+  const cameraSkeleton =
+    skeleton.camera ??
+    (skeleton.paper
+      ? { first: skeleton.paper.first, second: skeleton.paper.second, track: skeleton.paper.track }
+      : null);
   // A project with no drawn frames and no camera keys is a still document.
   // The file then keeps the shape of the blank document Clip Studio writes,
   // and no timeline tables are added: a document with a TimeLine table but
   // no row in it is not a document Clip Studio ever writes, and it opens
   // such a file but cannot save it back.
-  if (!rows.length && !(cameraKeys.length && skeleton.camera)) return 0;
+  if (!rows.length && !(cameraKeys.length && cameraSkeleton)) return 0;
   if (!columnsOf(database, "Layer").includes("AnimationFolder")) {
     database.exec("ALTER TABLE Layer ADD COLUMN AnimationFolder INTEGER DEFAULT NULL");
   }
@@ -1896,15 +1905,45 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source,
   // copied rather than made up.
   //
   // A skeleton without a camera track has no tree to copy, so a project
-  // with camera keys and no camera track in its skeleton does not get one.
-  if (cameraKeys.length && skeleton.camera) {
-    const cameraLayer = readOne(
+  // with camera keys and no camera track in its skeleton gets its camera
+  // track built from the documents of the paper track: the six curves of
+  // the camera are added to them, the way they are added to a document that
+  // has none of them yet.
+  if (cameraKeys.length && cameraSkeleton) {
+    let cameraLayer = readOne(
       database,
       "SELECT MainId, LayerUuid FROM Layer WHERE LayerType = 512 ORDER BY MainId LIMIT 1",
     );
+    if (!cameraLayer) {
+      // The skeleton has no camera row either: make one, the way a document
+      // of Clip Studio Paint carries its camera as a folder of its own.
+      cameraLayer = cloneLayer(database, templateLayer.MainId, "Camera", {
+        __width: width,
+        __height: height,
+        LayerFolder: 1,
+        LayerType: 512,
+      });
+    }
     if (cameraLayer) {
       if (source && skeleton.cameraLayerRow) {
         copyLayerSettings(database, source, skeleton.cameraLayerRow, cameraLayer.MainId);
+      }
+      // The columns a camera layer carries in a document of Clip Studio
+      // Paint: where the camera rests (the centre of the sheet), a cache of
+      // its last window, and the flags that let the layer hold keys. The
+      // tables of our templates predate the camera, so the columns are added
+      // when they are not there.
+      for (const [column, type] of [
+        ["Camera2DResizableImageInfo", "BLOB"],
+        ["Camera2DOriginalFrameCenterX", "INTEGER"],
+        ["Camera2DOriginalFrameCenterY", "INTEGER"],
+        ["Camera2DApplyTransform", "INTEGER"],
+        ["TimeLineLayerKeyFrameEnabled", "INTEGER"],
+        ["TimeLineRenderFixAspectRatio", "INTEGER"],
+      ]) {
+        if (!columnsOf(database, "Layer").includes(column)) {
+          database.exec(`ALTER TABLE Layer ADD COLUMN ${column} ${type}`);
+        }
       }
       const plan = {
         // A camera frames part of the stage, and the stage of this file has
@@ -1926,12 +1965,15 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source,
         end: tickOf(cameraKeys[cameraKeys.length - 1].frame + 1),
         rate: 60,
       };
+      // The curves of the camera live in the second mixer of the track, the
+      // place Clip Studio Paint keeps them; the first carries the clip of
+      // the time and nothing of the camera.
       const first = setTrackRange(
-        parseActionDocument(spliceCameraPlan(parseActionDocument(skeleton.camera.first.raw), plan)),
+        parseActionDocument(cameraSkeleton.first.raw),
         cameraRange,
       );
       const second = setTrackRange(
-        parseActionDocument(spliceCameraPlan(parseActionDocument(skeleton.camera.second.raw), plan)),
+        parseActionDocument(spliceCameraPlan(parseActionDocument(cameraSkeleton.second.raw), plan)),
         cameraRange,
       );
       const firstId = newMixerId();
@@ -1941,7 +1983,7 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source,
 
       const id = nextId(database, "Track");
       trackIds.push(id);
-      insertRow(database, "Track", skeleton.camera.track, {
+      insertRow(database, "Track", cameraSkeleton.track, {
         MainId: id,
         TrackNextIndex: 0,
         TrackActionMixerSize: mixerColumnSize(first),
@@ -1950,10 +1992,55 @@ function writeAnimation(database, tree, project, skeleton, pixels, rows, source,
         TrackActionMixer2: Buffer.from(secondId, "ascii"),
         TrackUuid: uuidBytes(cryptoId()),
         LayerUuidWithTrack: uuidBytes(cameraLayer.LayerUuid),
-        TrackOpen: 0,
+        TrackOpen: 1,
         TrackContentOpen: 0,
         TrackKind: 2005,
       });
+      // The state of the camera as Clip Studio Paint caches it on the layer:
+      // the frame the camera looks through at rest (the first key's), where
+      // it stands last, and the window it showed last.
+      const firstKey = plan.keys[0];
+      const lastKey = plan.keys[plan.keys.length - 1];
+      const centreX = lastKey.width / 2;
+      const centreY = lastKey.height / 2;
+      const last = {
+        left: lastKey.x,
+        top: lastKey.y,
+        right: lastKey.x + lastKey.width,
+        bottom: lastKey.y + lastKey.height,
+      };
+      const info = Buffer.alloc(184);
+      info.writeUInt32BE(120, 0);
+      info.writeUInt32BE(16, 4);
+      info.writeUInt32BE(4, 8);
+      info.writeUInt32BE(2, 24);
+      info.writeUInt32BE(2, 28);
+      info.writeUInt32BE(Math.round(firstKey.width), 32);
+      info.writeUInt32BE(Math.round(firstKey.height), 36);
+      info.writeDoubleBE(1, 40);
+      info.writeDoubleBE(1, 48);
+      info.writeDoubleBE(lastKey.x + centreX, 64);
+      info.writeDoubleBE(lastKey.y + centreY, 72);
+      info.writeDoubleBE(centreX, 80);
+      info.writeDoubleBE(centreY, 88);
+      info.writeUInt32BE(plan.keys.length, 96);
+      info.writeUInt32BE(1, 100);
+      info.writeUInt32BE(1, 108);
+      info.writeDoubleBE(last.left, 120);
+      info.writeDoubleBE(last.top, 128);
+      info.writeDoubleBE(last.right, 136);
+      info.writeDoubleBE(last.top, 144);
+      info.writeDoubleBE(last.left, 152);
+      info.writeDoubleBE(last.bottom, 160);
+      info.writeDoubleBE(last.right, 168);
+      info.writeDoubleBE(last.top, 176);
+      database
+        .prepare(
+          "UPDATE Layer SET Camera2DOriginalFrameCenterX = ?, Camera2DOriginalFrameCenterY = ?, " +
+            "Camera2DApplyTransform = 0, TimeLineLayerKeyFrameEnabled = 1, TimeLineRenderFixAspectRatio = 1, " +
+            "Camera2DResizableImageInfo = ? WHERE MainId = ?",
+        )
+        .run(Math.round(project.width * 0.75 * scale), Math.round(project.height * 0.75 * scale), info, cameraLayer.MainId);
     }
   }
 
@@ -2417,6 +2504,41 @@ export async function createClipBuffer(
     // there is no timeline to write, so the layers are left as they are.
     const rows = skeleton ? animationRows(tree, project.width, project.height) : [];
     expandRows(tree, rows);
+
+    // The camera of the project needs a folder of its own in the document: a
+    // layer of type 512 that the camera track hangs on. An imported .clip
+    // brings its camera folder as a layer; a project whose camera came from
+    // anywhere else — the camera tool, the viewfinder of a Flash file — gets
+    // one made here, at the top of the stack, the way Clip Studio Paint
+    // carries its own camera.
+    if (
+      Array.isArray(project.camera?.keys) &&
+      project.camera.keys.length > 0 &&
+      !tree.nodes.some((node) => node.layer?.camera === true)
+    ) {
+      tree.nodes.push({
+        layer: {
+          name: "Camera",
+          type: "group",
+          camera: true,
+          visible: true,
+          locked: false,
+          opacity: 1,
+          drawings: [],
+        },
+        layerId: 0,
+        children: [],
+        parent: -1,
+      });
+      // The camera of Clip Studio Paint moves the layers inside its folder,
+      // so the artwork goes into it: every top-level node of the tree becomes
+      // a child of the camera, and the camera is the only root left.
+      const cameraIndex = tree.nodes.length - 1;
+      const cameraNode = tree.nodes[cameraIndex];
+      cameraNode.children = [...tree.roots];
+      for (const index of tree.roots) tree.nodes[index].parent = cameraIndex;
+      tree.roots = [cameraIndex];
+    }
     const created = [];
 
     for (let index = 0; index < tree.nodes.length; index += 1) {
