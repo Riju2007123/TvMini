@@ -2271,18 +2271,20 @@ async function loadTemplate() {
  * file is the sheet, the stage plus its pasteboard, so the scale is chosen
  * for the sheet: choosing it for the bare stage put a 960x600 project at
  * 4320x2700, more than twice the pixels the window needs. A stage that is
- * already 1280x720 or larger is not made larger at all: it keeps the
- * resolution of its source, one pixel per unit, and the page is written at
- * 144 dpi. A canvas that is that big already keeps one pixel per unit, and a
- * very large one is not made larger than a picture can be handled.
+ * already 1280x720 or larger is written at twice its resolution, with the
+ * page at twice the dpi a one-pixel-a-unit file would have, so the picture
+ * stays clean when it is zoomed or printed. A canvas that is that big
+ * already keeps one pixel per unit, and a very large one is not made larger
+ * than a picture can be handled.
  */
 export const CLIP_LONG_SIDE = 2000;
 export const CLIP_PIXEL_BUDGET = 12_000_000;
 export const CLIP_MAX_SCALE = 8;
-/** A stage of this size or larger is written at the resolution it has. */
+/** A stage of this size or larger is written at twice its resolution. */
 export const CLIP_NATIVE_WIDTH = 1280;
 export const CLIP_NATIVE_HEIGHT = 720;
-/** The page resolution of a stage written at its own resolution. */
+/** How much larger such a stage is painted, and the page dpi that goes with it. */
+export const CLIP_NATIVE_SCALE = 2;
 export const CLIP_NATIVE_DPI = 144;
 
 /**
@@ -2299,14 +2301,18 @@ export function clipSheetSize(width, height) {
 }
 
 export function clipExportScale(width, height) {
-  // A stage that is already 1280x720 or larger keeps the resolution it has:
-  // one pixel per unit. The window of a normal screen shows that much of it
-  // without stretching, so painting it again at twice the size would only
-  // make every layer heavier for Clip Studio Paint to open.
-  if (Number(width) >= CLIP_NATIVE_WIDTH && Number(height) >= CLIP_NATIVE_HEIGHT) return 1;
   const sheet = clipSheetSize(width, height);
-  const longSide = Math.max(1, sheet.width, sheet.height);
-  let scale = Math.max(1, Math.min(CLIP_MAX_SCALE, Math.ceil(CLIP_LONG_SIDE / longSide)));
+  // A stage that is already 1280x720 or larger is painted at twice its
+  // resolution, so the lines stay clean when the picture is zoomed or
+  // printed. The pixel budget still caps a canvas that would be too large.
+  const native =
+    Number(width) >= CLIP_NATIVE_WIDTH && Number(height) >= CLIP_NATIVE_HEIGHT;
+  let scale = native
+    ? CLIP_NATIVE_SCALE
+    : Math.max(
+        1,
+        Math.min(CLIP_MAX_SCALE, Math.ceil(CLIP_LONG_SIDE / Math.max(1, sheet.width, sheet.height))),
+      );
   while (
     scale > 1 &&
     Math.round(sheet.width * scale) * Math.round(sheet.height * scale) > CLIP_PIXEL_BUDGET
@@ -2448,12 +2454,13 @@ export async function createClipBuffer(
   const sheetHeight = sheet.height;
   const width = Math.round(sheetWidth * scale);
   const height = Math.round(sheetHeight * scale);
-  // A stage written at its own resolution - 1280x720 or larger - gets a
-  // 144 dpi page; a stage painted larger keeps the page the size a
+  // A stage of 1280x720 or larger is written at twice its resolution, and
+  // its page carries twice the dpi, so the picture is the same size on paper
+  // and twice as detailed. A stage painted larger keeps the page the size a
   // one-pixel-a-unit file would give it.
   const dpi =
-    scale === 1 && Number(project.width) >= CLIP_NATIVE_WIDTH && Number(project.height) >= CLIP_NATIVE_HEIGHT
-      ? CLIP_NATIVE_DPI
+    Number(project.width) >= CLIP_NATIVE_WIDTH && Number(project.height) >= CLIP_NATIVE_HEIGHT
+      ? CLIP_NATIVE_DPI * scale
       : Math.round(72 * scale);
   const template = parseContainer(await loadTemplate());
   let database;
