@@ -2,6 +2,8 @@ import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend } from "./core/platform.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
+import { buildTimeSheetLayout, todayStamp } from "./core/time-sheet-image.js";
+import { renderTimeSheetPage, timeSheetPngBytes } from "./time-sheet-render.js";
 import { decodeSound, soundPeaks } from "./audio.js";
 import {
   clipMaskFromSpans,
@@ -7449,6 +7451,7 @@ async function handleAction(action) {
     if (action === "importPictures") return chooseAndImportPictures();
     if (action === "importFLA") return chooseAndImportFLA();
     if (action === "exportSettings") return openExportSettings();
+    if (action === "exportTimeSheet") return openTimeSheet();
     const kind = EXPORT_ACTIONS[action];
     if (kind) return exportKind(kind);
   } catch (error) {
@@ -8345,6 +8348,214 @@ function openExportSettings() {
   for (const [target, type, handler] of listeners) target.addEventListener(type, handler);
 }
 
+/* ------------------------------------------------------------- time sheet */
+
+// The header of the last sheet is remembered for the next one, because a
+// series is drawn with the same title, episode and author over and over.
+const timeSheetMemory = {
+  title: "",
+  episode: "",
+  cut: "",
+  author: "",
+  date: "",
+  notes: "",
+  camera: true,
+};
+
+function timeSheetStem() {
+  return state.currentPath
+    ? baseName(state.currentPath).replace(/\.[^.]+$/, "")
+    : state.suggestedName?.replace(/\.tvmini$/i, "") || "untitled";
+}
+
+function openTimeSheet() {
+  const project = state.project;
+  const modal = document.getElementById("timeSheetModal");
+  const titleInput = document.getElementById("timeSheetTitleInput");
+  const episodeInput = document.getElementById("timeSheetEpisode");
+  const cutInput = document.getElementById("timeSheetCut");
+  const authorInput = document.getElementById("timeSheetAuthor");
+  const dateInput = document.getElementById("timeSheetDate");
+  const fromInput = document.getElementById("timeSheetFrom");
+  const toInput = document.getElementById("timeSheetTo");
+  const notesInput = document.getElementById("timeSheetNotes");
+  const cameraInput = document.getElementById("timeSheetCamera");
+  const list = document.getElementById("timeSheetLayers");
+  const summary = document.getElementById("timeSheetSummary");
+  const countLabel = document.getElementById("timeSheetLayerCount");
+  const create = document.getElementById("timeSheetCreate");
+  const stem = timeSheetStem();
+  const base = buildTimeSheetLayout(project, { name: stem });
+  const layers = project.layers ?? [];
+
+  /* The layer tree: a folder is one row, and every drawing layer under it is
+     a row of its own. Choosing a folder chooses all of them. */
+  const boxes = new Map();
+  const folders = [];
+  list.replaceChildren();
+  const addRow = (index, depth) => {
+    const layer = layers[index];
+    if (!layer || layer.type === "guide" || layer.type === "mask") return;
+    const row = document.createElement("label");
+    row.className = `time-sheet-layer${layer.type === "group" ? " is-folder" : ""}`;
+    row.style.paddingLeft = `${6 + depth * 15}px`;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = true;
+    input.dataset.layerIndex = String(index);
+    const name = document.createElement("span");
+    name.className = "time-sheet-layer-name";
+    name.textContent = layer.name || `Layer ${index + 1}`;
+    row.append(input, name);
+    list.append(row);
+    boxes.set(index, input);
+    if (layer.type === "group") {
+      folders.push(index);
+      for (const child of childrenOf(project, index)) addRow(child, depth + 1);
+    }
+  };
+  for (const index of childrenOf(project, -1)) addRow(index, 0);
+
+  const drawingDescendants = (folderIndex) => {
+    const out = [];
+    const visit = (parent) => {
+      for (const child of childrenOf(project, parent)) {
+        const layer = layers[child];
+        if (!layer) continue;
+        if (layer.type === "group") visit(child);
+        else if (layer.type !== "guide" && layer.type !== "mask") out.push(child);
+      }
+    };
+    visit(folderIndex);
+    return out;
+  };
+  const drawingBoxes = () => [...boxes.keys()].filter((index) => layers[index]?.type !== "group");
+  const syncFolders = () => {
+    for (const index of folders) {
+      const children = drawingDescendants(index);
+      const box = boxes.get(index);
+      const checked = children.filter((child) => boxes.get(child)?.checked).length;
+      box.checked = children.length > 0 && checked === children.length;
+      box.indeterminate = checked > 0 && checked < children.length;
+    }
+  };
+  const selection = () => [...boxes].filter(([, box]) => box.checked).map(([index]) => index);
+
+  const read = () => ({
+    name: stem,
+    title: titleInput.value,
+    episode: episodeInput.value,
+    cut: cutInput.value,
+    author: authorInput.value,
+    date: dateInput.value,
+    notes: notesInput.value,
+    from: Math.floor(Number(fromInput.value)),
+    to: Math.floor(Number(toInput.value)),
+    camera: cameraInput.checked,
+    layers: selection(),
+  });
+  const refreshSummary = () => {
+    const layout = buildTimeSheetLayout(project, read());
+    const pages = layout.pageCount;
+    countLabel.textContent = `${layout.layerCount} of ${drawingBoxes().length} layers`;
+    summary.textContent =
+      `${layout.frameCount} frames · ${layout.duration} at ${layout.fps} fps · ` +
+      `${pages} page${pages === 1 ? "" : "s"}`;
+    create.disabled = layout.layerCount === 0;
+  };
+  const remember = () => {
+    timeSheetMemory.title = titleInput.value;
+    timeSheetMemory.episode = episodeInput.value;
+    timeSheetMemory.cut = cutInput.value;
+    timeSheetMemory.author = authorInput.value;
+    timeSheetMemory.date = dateInput.value;
+    timeSheetMemory.notes = notesInput.value;
+    timeSheetMemory.camera = cameraInput.checked;
+  };
+  const close = () => {
+    remember();
+    modal.hidden = true;
+  };
+
+  titleInput.value = timeSheetMemory.title || stem;
+  episodeInput.value = timeSheetMemory.episode;
+  cutInput.value = timeSheetMemory.cut;
+  authorInput.value = timeSheetMemory.author;
+  dateInput.value = timeSheetMemory.date || todayStamp();
+  notesInput.value = timeSheetMemory.notes;
+  cameraInput.checked = timeSheetMemory.camera;
+  fromInput.value = base.startFrame;
+  toInput.value = base.endFrame;
+  syncFolders();
+  refreshSummary();
+  modal.hidden = false;
+
+  for (const [index, box] of boxes) {
+    const folder = layers[index]?.type === "group";
+    box.addEventListener("change", () => {
+      if (folder) {
+        for (const child of drawingDescendants(index)) {
+          const childBox = boxes.get(child);
+          if (childBox) childBox.checked = box.checked;
+        }
+        box.indeterminate = false;
+        syncFolders();
+      }
+      refreshSummary();
+    });
+  }
+  const checkAll = (checked) => {
+    for (const box of boxes.values()) {
+      box.checked = checked;
+      box.indeterminate = false;
+    }
+    refreshSummary();
+  };
+  document.getElementById("timeSheetLayersAll").onclick = () => checkAll(true);
+  document.getElementById("timeSheetLayersNone").onclick = () => checkAll(false);
+  document.getElementById("timeSheetCancel").onclick = close;
+  for (const input of [titleInput, episodeInput, cutInput, authorInput, dateInput, fromInput, toInput, notesInput, cameraInput]) {
+    input.oninput = refreshSummary;
+    input.onchange = refreshSummary;
+  }
+
+  create.onclick = async () => {
+    const options = read();
+    if (!options.layers.length) return;
+    close();
+    stopPlayback();
+    try {
+      setStatus("Building the time sheet image…");
+      const layout = buildTimeSheetLayout(project, options);
+      for (let index = 0; index < layout.pages.length; index += 1) {
+        setStatus(`Drawing time sheet page ${index + 1} of ${layout.pages.length}…`);
+        const canvas = renderTimeSheetPage(layout, index, { scale: 2 });
+        const bytes = await timeSheetPngBytes(canvas);
+        const name =
+          layout.pages.length === 1
+            ? `${stem}-timesheet.png`
+            : `${stem}-timesheet-${index + 1}.png`;
+        setStatus(`Saving time sheet page ${index + 1} of ${layout.pages.length}…`);
+        const saved = await backend.saveBytes(bytes, name, "Save the time sheet image");
+        if (!saved) {
+          setStatus("The time sheet was cancelled, so no file was written.");
+          return;
+        }
+      }
+      const pages = layout.pageCount === 1 ? "1 page" : `${layout.pageCount} pages`;
+      setStatus(
+        `Exported the time sheet (${pages}, ${layout.frameCount} frames, ` +
+          `${layout.layerCount} layer${layout.layerCount === 1 ? "" : "s"}).`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[tvmini] the time sheet image failed", error);
+      reportToServer(`the time sheet image failed: ${message}`);
+      setStatus(message, true);
+    }
+  };
+}
+
 /* ------------------------------------------------------------- file modal */
 
 let picker = null;
@@ -9235,6 +9446,7 @@ async function boot() {
     else if (action === "save") save();
     else if (action === "export-png") exportPng();
     else if (action === "export-clip") exportClip();
+    else if (action === "export-time-sheet") openTimeSheet();
   });
 }
 

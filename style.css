@@ -544,6 +544,108 @@ body.hide-inspector.hide-stage .workspace {
   gap: 6px;
 }
 
+.modal-card.modal-card-timesheet {
+  width: min(900px, 94vw);
+}
+
+.time-sheet-body {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(260px, 1.15fr);
+  gap: 18px;
+  align-items: start;
+  min-height: 0;
+  overflow: auto;
+}
+
+.time-sheet-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+}
+
+.time-sheet-fields .time-sheet-wide {
+  grid-column: 1 / -1;
+}
+
+.time-sheet-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.time-sheet-range input {
+  width: 100%;
+  min-width: 0;
+}
+
+.time-sheet-layer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-sheet-layer-tools button {
+  padding: 3px 9px;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-btn);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.time-sheet-layer-tools button:hover {
+  border-color: var(--seam-strong);
+}
+
+.time-sheet-count {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.time-sheet-layers {
+  min-height: 120px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+}
+
+.time-sheet-layer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.time-sheet-layer:hover {
+  background: var(--seam);
+}
+
+.time-sheet-layer.is-folder {
+  font-weight: 600;
+}
+
+.time-sheet-layer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .time-sheet-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

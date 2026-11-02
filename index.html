@@ -150,6 +150,7 @@
             <button role="menuitem" data-action="exportSequence">Export image sequence (ZIP)…</button>
             <button role="menuitem" data-action="exportXdts">Export timesheet .xdts…</button>
             <button role="menuitem" data-action="exportCsv">Export timesheet .csv…</button>
+            <button role="menuitem" data-action="exportTimeSheet">Export time sheet image…</button>
             <button role="menuitem" data-action="exportSettings">Export settings &amp; presets…</button>
             <hr />
             <div class="submenu">
@@ -1218,6 +1219,73 @@
           <button id="exportSettingsClose" class="primary">Done</button>
         </div>
       </div>
+    </div>
+
+    <div id="timeSheetModal" class="modal" hidden>
+      <div class="modal-card modal-card-timesheet" role="dialog" aria-modal="true" aria-labelledby="timeSheetModalTitle">
+        <h2 id="timeSheetModalTitle">Export time sheet image</h2>
+        <p class="hint">
+          An A4 portrait sheet: one row for each frame, one column for each drawing layer. A drawing number sits
+          on the frame it starts and a line holds it down. A long cut is split into pages.
+        </p>
+        <div class="time-sheet-body">
+          <div class="time-sheet-fields">
+            <label class="field time-sheet-wide">
+              <span>Title</span>
+              <input id="timeSheetTitleInput" type="text" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>Episode</span>
+              <input id="timeSheetEpisode" type="text" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>Cut no.</span>
+              <input id="timeSheetCut" type="text" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>Author</span>
+              <input id="timeSheetAuthor" type="text" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>Date</span>
+              <input id="timeSheetDate" type="text" spellcheck="false" />
+            </label>
+            <div class="field time-sheet-wide">
+              <span>Frames</span>
+              <div class="time-sheet-range">
+                <input id="timeSheetFrom" type="number" min="0" step="1" aria-label="First frame" />
+                <span>to</span>
+                <input id="timeSheetTo" type="number" min="0" step="1" aria-label="Last frame" />
+              </div>
+            </div>
+            <label class="field time-sheet-wide">
+              <span>Memo (printed in the footer)</span>
+              <input id="timeSheetNotes" type="text" spellcheck="false" />
+            </label>
+          </div>
+          <div class="field time-sheet-layers-field">
+            <span>Layers on the sheet</span>
+            <div class="time-sheet-layer-tools">
+              <button type="button" id="timeSheetLayersAll">All</button>
+              <button type="button" id="timeSheetLayersNone">None</button>
+              <span id="timeSheetLayerCount" class="time-sheet-count"></span>
+            </div>
+            <div id="timeSheetLayers" class="time-sheet-layers"></div>
+            <p class="hint">Choose a folder to put every drawing layer inside it on the sheet.</p>
+          </div>
+        </div>
+        <label class="field checkbox">
+          <input id="timeSheetCamera" type="checkbox" checked />
+          <span>Camera column (pan, track up/down, rotation)</span>
+        </label>
+        <p class="hint" id="timeSheetSummary"></p>
+        <div class="modal-actions">
+          <button id="timeSheetCancel">Cancel</button>
+          <button id="timeSheetCreate" class="primary">Choose where to save…</button>
+        </div>
+      </div>
+    </div>
+
     <div id="drawingSettingsModal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="drawingSettingsTitle">
         <h2 id="drawingSettingsTitle">Drawing Settings</h2>

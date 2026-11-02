@@ -225,6 +225,24 @@ function createServerBackend(hooks) {
       return serverRequest("POST", "/api/export", { path: target, project });
     },
 
+    /**
+     * Save bytes the page has already made - the time sheet image is drawn on
+     * a canvas, not by the server - through the file dialog of the machine.
+     */
+    async saveBytes(bytes, name, title = "Save image") {
+      const target = await hooks.pickPath({ mode: "save", title, name });
+      if (!target) return null;
+      const clean = /\.[^\\/]*$/.test(target.trim()) ? target.trim() : `${target.trim()}.png`;
+      const info = await askAboutPath(clean);
+      if (info.dir) throw new Error("that path is a folder, not a file");
+      if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+      const data = await serverRequest("POST", "/api/save-file", {
+        path: clean,
+        data: bytesToBase64(bytes),
+      });
+      return { path: data.path, bytes: data.bytes };
+    },
+
     async exportClip(project, stem, sourcePath, onPath = null, picker = {}) {
       const target = await hooks.pickPath({
         mode: "save",
@@ -480,6 +498,12 @@ function createBrowserBackend(hooks) {
       const saved = await saveFile(name, new Uint8Array(buffer), "png");
       if (!saved) return null;
       return { path: saved.name, bytes: buffer.length, width, height };
+    },
+
+    async saveBytes(bytes, name) {
+      const saved = await saveFile(name, bytes, "png");
+      if (!saved) return null;
+      return { path: saved.name, bytes: bytes.length };
     },
 
     async exportClip(project, stem, sourceName, onPath = null, picker = {}) {
