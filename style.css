@@ -646,6 +646,42 @@ body.hide-inspector.hide-stage .workspace {
   }
 }
 
+/* The veil shown while a file is dragged over the window. It takes no
+   pointer events, so the drop itself still lands on the page beneath it. */
+#dropOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(16, 18, 20, 0.55);
+  pointer-events: none;
+}
+
+#dropOverlay .drop-card {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  max-width: min(520px, 90vw);
+  padding: 28px 40px;
+  border: 2px dashed var(--seam-strong);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  box-shadow: var(--elev), var(--elev-dialog);
+  color: var(--text);
+  text-align: center;
+}
+
+#dropOverlay .drop-card strong {
+  font-size: 18px;
+}
+
+#dropOverlay .drop-card span {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

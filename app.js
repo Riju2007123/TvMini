@@ -1,6 +1,8 @@
 import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
-import { detectBackend } from "./core/platform.js";
+import { detectBackend, bytesToBase64 } from "./core/platform.js";
+import { planDrop } from "./core/drop-import.js";
+import { normalizeProject } from "./core/model.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { buildTimeSheetLayout, todayStamp } from "./core/time-sheet-image.js";
 import { renderTimeSheetPage, timeSheetPngBytes } from "./time-sheet-render.js";
@@ -8236,10 +8238,8 @@ async function exportKind(kind) {
   refreshTitle();
 }
 
-async function chooseAndImportPictures() {
-  if (!confirmDiscard()) return;
-  const data = await backend.chooseAndImportPictures();
-  if (!data) return;
+/** Put imported pictures onto the canvas (shared by the dialog and a drop). */
+function applyImportedPictures(data) {
   stopPlayback();
   showDocument(data.project, {
     suggestedName: `${data.name.replace(/\.[^.]+$/, "")}.tvmini`,
@@ -8250,6 +8250,167 @@ async function chooseAndImportPictures() {
   setStatus(
     `Imported ${data.name} (${data.project.width}x${data.project.height}): ${cells} cell${cells === 1 ? "" : "s"} at ${data.project.fps} fps. Save as .tvmini to keep it.`,
   );
+}
+
+async function chooseAndImportPictures() {
+  if (!confirmDiscard()) return;
+  const data = await backend.chooseAndImportPictures();
+  if (!data) return;
+  applyImportedPictures(data);
+}
+
+/* ----------------------------------------------------------- drag and drop */
+
+/**
+ * Any file the program can open or import may be dropped on the window: the
+ * same work the File menu does, without the dialogs. A browser never knows
+ * the path of a dropped file, so the bytes travel - on the desktop the
+ * bridge hands over the real path and the file is read from there, and
+ * without one the server keeps a copy of its own for the importers to read.
+ */
+
+/** True while any dialog of the page is open: a drop must not fight it. */
+function aModalIsOpen() {
+  return [...document.querySelectorAll(".modal")].some((element) => !element.hidden);
+}
+
+/** The folder the copies of one drop are staged in, so names never collide. */
+function dropSessionId() {
+  return `drop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+}
+
+async function readDroppedFiles(fileList) {
+  return Promise.all(
+    [...fileList].map(async (file) => ({
+      name: file.name,
+      path: window.tvminiDesktop?.pathForFile ? String(window.tvminiDesktop.pathForFile(file) || "") : "",
+      bytes: new Uint8Array(await file.arrayBuffer()),
+    })),
+  );
+}
+
+/** Open a dropped `.tvmini`: from its path when there is one, else its bytes. */
+async function dropProject(entry) {
+  if (entry.path) return openPath(entry.path, { discardConfirmed: true });
+  const text = new TextDecoder().decode(entry.bytes);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("not a valid TVMini project: the file is not JSON");
+  }
+  const project = normalizeProject(parsed);
+  stopPlayback();
+  showDocument(project, { suggestedName: entry.name });
+  const recent = await backend.rememberProject?.(entry.name, text);
+  if (recent) {
+    state.recent = recent;
+    renderRecent();
+  }
+  setStatus(`Opened ${entry.name}`);
+}
+
+async function importDroppedFiles(fileList) {
+  const dropped = await readDroppedFiles(fileList);
+  const plan = planDrop(dropped.map((entry) => entry.name));
+  if (!plan.kind) {
+    setStatus(
+      `${plan.ignored[0] ?? "That file"} cannot be opened by TVMini - drop a .tvmini, .clip, ` +
+        ".tvpp, .fla or .xfl, a picture (PNG, GIF, BMP, TGA) or a sound.",
+      true,
+    );
+    return;
+  }
+  const chosen = plan.entries.map((index) => dropped[index]);
+  const entry = chosen[0];
+
+  // A sound joins the document that is open; everything else replaces it.
+  if (plan.kind !== "audio" && !confirmDiscard()) return;
+
+  const session = dropSessionId();
+  try {
+    if (plan.kind === "project") return await dropProject(entry);
+
+    if (plan.kind === "clip") {
+      const data = entry.path
+        ? await backend.importClip(entry.path)
+        : await backend.importClipDropped(session, entry.name, entry.bytes);
+      if (data) applyImportedProject(data, "clip");
+      return;
+    }
+
+    if (plan.kind === "tvpp") {
+      const data = entry.path
+        ? await backend.importTvpp(entry.path)
+        : await backend.importTvppDropped(session, entry.name, entry.bytes);
+      if (data) applyImportedProject(data, "tvpp");
+      return;
+    }
+
+    if (plan.kind === "fla") {
+      const data = entry.path
+        ? await backend.importFl(entry.path)
+        : await backend.importFlaDropped(session, entry.name, entry.bytes);
+      if (data) applyImportedFla(data);
+      return;
+    }
+
+    if (plan.kind === "pictures") {
+      const data =
+        chosen.every((item) => item.path) && typeof backend.importPicturesPaths === "function"
+          ? await backend.importPicturesPaths(chosen.map((item) => item.path))
+          : await backend.importPicturesDropped(
+              session,
+              chosen.map((item) => ({ name: item.name, bytes: item.bytes })),
+            );
+      if (data) applyImportedPictures(data);
+      return;
+    }
+
+    await importAudio(entry.name, bytesToBase64(entry.bytes));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[tvmini] the dropped file failed", error);
+    reportToServer(`the dropped file failed: ${message}`);
+    setStatus(message, true);
+  }
+}
+
+/** The veil over the window while a file is dragged over it. */
+function wireDropTarget() {
+  const overlay = document.getElementById("dropOverlay");
+  let depth = 0;
+  const carriesFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes("Files");
+
+  window.addEventListener("dragenter", (event) => {
+    if (!carriesFiles(event) || aModalIsOpen()) return;
+    event.preventDefault();
+    depth += 1;
+    overlay.hidden = false;
+  });
+  window.addEventListener("dragover", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    // "none" tells the machine the drop is not wanted while a dialog is
+    // open, so the file is not swallowed by the page by accident.
+    if (event.dataTransfer) event.dataTransfer.dropEffect = aModalIsOpen() ? "none" : "copy";
+  });
+  window.addEventListener("dragleave", () => {
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) overlay.hidden = true;
+  });
+  window.addEventListener("drop", (event) => {
+    depth = 0;
+    overlay.hidden = true;
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    if (aModalIsOpen()) {
+      setStatus("Close the open dialog first - a drop is not taken while it is up.", true);
+      return;
+    }
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (files.length) importDroppedFiles(files);
+  });
 }
 
 function openExportSettings() {
@@ -9448,6 +9609,9 @@ async function boot() {
     else if (action === "export-clip") exportClip();
     else if (action === "export-time-sheet") openTimeSheet();
   });
+
+  // A file dragged from the machine onto the window is opened or imported.
+  wireDropTarget();
 }
 
 boot();

@@ -196,6 +196,55 @@ function createServerBackend(hooks) {
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
+    /**
+     * A file dropped on the window has no path the page could know, so it is
+     * staged in a folder of the server's own and imported from there - the
+     * very same importers a picked path goes through. The bytes travel as
+     * base64, so a file of roughly 24 MB or more is too much for one request.
+     */
+    async stageDrop(session, name, bytes) {
+      const data = await serverRequest("POST", "/api/drop-file", {
+        session,
+        name,
+        data: bytesToBase64(bytes),
+      });
+      return data.path;
+    },
+
+    async importClipDropped(session, name, bytes) {
+      return this.importClip(await this.stageDrop(session, name, bytes));
+    },
+
+    async importTvppDropped(session, name, bytes) {
+      return this.importTvpp(await this.stageDrop(session, name, bytes));
+    },
+
+    async importFlaDropped(session, name, bytes) {
+      return this.importFl(await this.stageDrop(session, name, bytes));
+    },
+
+    async importPicturesPaths(paths) {
+      const data = await serverRequest("POST", "/api/import-pictures", { paths });
+      return { name: data.name, path: data.path, project: data.project };
+    },
+
+    async importPicturesDropped(session, files) {
+      const paths = [];
+      for (const file of files) {
+        paths.push(await this.stageDrop(session, file.name, file.bytes));
+      }
+      return this.importPicturesPaths(paths);
+    },
+
+    /**
+     * A project opened from a drop has no path of its own until it is saved,
+     * so it does not join a recent list that is made of paths. (The browser
+     * backend keeps the file's content instead.)
+     */
+    async rememberProject() {
+      return null;
+    },
+
     async saveProject(project, currentName, options = {}) {
       const target = currentName || (await hooks.pickPath({
         mode: "save",
@@ -483,6 +532,50 @@ function createBrowserBackend(hooks) {
       return { name: picked.name, path: picked.name, data: bytesToBase64(picked.bytes) };
     },
 
+    /**
+     * A file dropped on the window is imported from the bytes it already
+     * carries - no dialog, no staging. The session argument is ignored: it
+     * only matters to the server backend.
+     */
+    async importClipDropped(_session, name, bytes) {
+      const [document, layers] = await Promise.all([
+        readClipDocumentFromBytes(bytes),
+        readClipLayersFromBytes(bytes, { includePaper: true }),
+      ]);
+      const project = clipToProject(document, layers);
+      clipSourceBytes = bytes;
+      return { name, path: name, project };
+    },
+
+    async importTvppDropped(_session, name, bytes) {
+      const imported = importTvppBytes(bytes);
+      return { name, path: name, project: imported.project, warnings: imported.warnings };
+    },
+
+    async importFlaDropped(_session, name, bytes) {
+      const parsed = parseFla(name || "untitled.fla", bytes);
+      return {
+        name,
+        path: name,
+        project: normalizeProject(parsed),
+        warnings: parsed.warnings ?? [],
+      };
+    },
+
+    async importPicturesDropped(_session, files) {
+      const project = importPictures(files);
+      return { name: files[0].name, path: files[0].name, project };
+    },
+
+    /**
+     * A project opened from a drop keeps its content in the recent list, the
+     * way a project opened from the picker does - a browser cannot re-read a
+     * file by path, so the content is what makes the entry useful.
+     */
+    async rememberProject(name, text) {
+      return addRecent(name, text);
+    },
+
     async saveProject(project, currentName) {
       const text = `${JSON.stringify(project, null, 2)}\n`;
       const bytes = new TextEncoder().encode(text);
@@ -655,7 +748,7 @@ function withTvppExtension(name) {
   return /\.[^\\/]*$/.test(clean) ? clean : `${clean}.tvpp`;
 }
 
-function bytesToBase64(bytes) {
+export function bytesToBase64(bytes) {
   let binary = "";
   const chunk = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunk) {
