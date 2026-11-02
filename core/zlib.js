@@ -9,13 +9,20 @@
  * Clip Studio Paint EX v3.0.0. In the browser there is no native zlib, so
  * the vendored MIT `fflate` package is used instead; it reads and writes the
  * same format.
+ *
+ * The answer of both helpers is always a `Buffer`, never the bare
+ * `Uint8Array` fflate hands over: the readers of the tiles copy their rows
+ * with `Buffer.copy`, and a plain array view has no such method - a `.clip`
+ * imported in the browser would die with "raw.copy is not a function" in the
+ * middle of its first painted layer.
  */
 import { zlibSync, unzlibSync } from "../vendor/fflate.js";
+import { Buffer } from "./bytes.js";
 
 const isNode = typeof process !== "undefined" && Boolean(process.versions?.node);
 
-let deflate = (bytes) => zlibSync(bytes, { level: 6 });
-let inflate = (bytes) => unzlibSync(bytes);
+let deflate = (bytes) => Buffer.from(zlibSync(bytes, { level: 6 }));
+let inflate = (bytes) => Buffer.from(unzlibSync(bytes));
 
 // The level is 6, not 9: a `.clip` write deflates every tile of every layer,
 // and the pure JavaScript deflate of fflate costs several times more at
