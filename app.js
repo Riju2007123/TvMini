@@ -1889,10 +1889,17 @@ function drawOnionSkins(project, layer, frame) {
  * it, the way Flash keeps a fixed work area around the stage. The strip does
  * not grow with the strokes, so a drawing that reaches far off the stage does
  * not blow the canvas up; it is simply clipped at the edge of the sheet.
+ *
+ * A document that was imported keeps the size of its source instead: its
+ * sheet is the canvas, so the stage shows exactly the resolution the file
+ * was made in and a write-back of it matches what is on screen.
  */
 const PASTEBOARD_FRACTION = 0.25;
 
 function documentSize(project) {
+  if (project.pasteboard === false) {
+    return { width: project.width, height: project.height };
+  }
   return {
     width: Math.round(project.width * (1 + PASTEBOARD_FRACTION * 2)),
     height: Math.round(project.height * (1 + PASTEBOARD_FRACTION * 2)),

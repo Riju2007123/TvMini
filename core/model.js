@@ -1077,6 +1077,12 @@ export function normalizeProject(input) {
     ...(Array.isArray(input.warnings) && input.warnings.length
       ? { warnings: input.warnings.map((warning) => String(warning)) }
       : {}),
+    // A document that was imported keeps the size of its source: the stage
+    // shows the canvas exactly, without the pasteboard a drawn project has
+    // around it. The flag only travels when it was set, so every project
+    // that was drawn here - and every Flash document, which lives on a
+    // pasteboard of its own - keeps the work area it is used to.
+    ...(input.pasteboard === false ? { pasteboard: false } : {}),
   };
 }
 

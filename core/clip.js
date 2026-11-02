@@ -591,6 +591,12 @@ export function clipToProject(document, layers, fallback = {}) {
   );
   project.layers = projectLayers.length ? projectLayers : [createProject(width, height).layers[0]];
 
+  // The sheet of the studio is the canvas exactly. A document from Clip
+  // Studio Paint is shown at the resolution it was made in, so what the
+  // stage holds is what a write-back to a .clip will hold; the pasteboard
+  // around the stage belongs to the documents TVMini and Flash draw.
+  project.pasteboard = false;
+
   // The camera of the document, when it has one.
   //
   // A camera is a track of kind 2005. Its curves give the size of the frame

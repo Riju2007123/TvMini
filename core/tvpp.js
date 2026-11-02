@@ -894,6 +894,8 @@ export function importTvppBytes(input) {
     currentLayer: 0,
     currentFrame: startFrame,
     loop: true,
+    // A TVPaint document is shown at its own size as well: no pasteboard.
+    pasteboard: false,
     layers,
   });
 
