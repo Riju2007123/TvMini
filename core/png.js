@@ -520,7 +520,10 @@ export function decodePng(input) {
  */
 const pictureCache = new Map();
 let pictureCacheBytes = 0;
-const PICTURE_CACHE_LIMIT = 128 * 1024 * 1024;
+// A canvas from an imported document is a good part of a hundred megabytes
+// once it is decoded, so the limit counts pictures, not drawings: too small
+// and an export of a big animation decodes the same picture over and over.
+const PICTURE_CACHE_LIMIT = 512 * 1024 * 1024;
 
 /** Decode a picture, or hand back the one that was decoded before. */
 export function decodePicture(source) {
@@ -1232,9 +1235,12 @@ const CRC_TABLE = (() => {
 })();
 
 function crc32(buffer) {
+  // An indexed loop, not for..of: a canvas-sized payload runs this over
+  // millions of bytes, and the iterator protocol costs twenty times more
+  // than the plain loop on the same work.
   let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  for (let index = 0; index < buffer.length; index += 1) {
+    crc = CRC_TABLE[(crc ^ buffer[index]) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
@@ -1524,7 +1530,7 @@ export function renderDrawingRgba(project, drawing, scale = 1) {
   );
 }
 /** Encode an RGBA buffer as a PNG (colour type 6, 8 bits per channel). */
-export function encodeRgbaPng(width, height, data) {
+export function encodeRgbaPng(width, height, data, options = {}) {
   if (data.length !== width * height * 4) {
     throw new Error("pixel buffer does not match the image size");
   }
@@ -1551,7 +1557,7 @@ export function encodeRgbaPng(width, height, data) {
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr),
-    chunk("IDAT", deflateSync(raw)),
+    chunk("IDAT", deflateSync(raw, options)),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }

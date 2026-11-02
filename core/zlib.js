@@ -15,19 +15,23 @@
  * with `Buffer.copy`, and a plain array view has no such method - a `.clip`
  * imported in the browser would die with "raw.copy is not a function" in the
  * middle of its first painted layer.
+ *
+ * `deflateSync` takes `options.level`: the default writes files as small as
+ * the readers of the formats expect, and an importer that only keeps
+ * pictures in memory passes a lower level to spend its seconds on the user
+ * instead of on a few kilobytes of file.
  */
 import { zlibSync, unzlibSync } from "../vendor/fflate.js";
 import { Buffer } from "./bytes.js";
 
 const isNode = typeof process !== "undefined" && Boolean(process.versions?.node);
 
-let deflate = (bytes) => Buffer.from(zlibSync(bytes, { level: 6 }));
-let inflate = (bytes) => Buffer.from(unzlibSync(bytes));
+const LEVEL_NODE = 9;
+const LEVEL_BROWSER = 6;
 
-// The level is 6, not 9: a `.clip` write deflates every tile of every layer,
-// and the pure JavaScript deflate of fflate costs several times more at
-// level 9 than at 6 for a few bytes more. Under Node the native zlib below
-// takes the work over anyway.
+let deflate = (bytes, options = {}) =>
+  Buffer.from(zlibSync(bytes, { level: options.level ?? LEVEL_BROWSER }));
+let inflate = (bytes) => Buffer.from(unzlibSync(bytes));
 
 if (isNode) {
   // The native zlib is picked up as soon as the module loads. Without an
@@ -35,14 +39,15 @@ if (isNode) {
   // exe), and until the swap lands the fflate functions are used, which
   // write the same zlib stream.
   import("node:zlib").then((nodeZlib) => {
-    deflate = (bytes) => nodeZlib.deflateSync(bytes, { level: 9 });
+    deflate = (bytes, options = {}) =>
+      nodeZlib.deflateSync(bytes, { level: options.level ?? LEVEL_NODE });
     inflate = (bytes) => nodeZlib.inflateSync(bytes);
   });
 }
 
 /** Compress to a zlib stream. */
-export function deflateSync(bytes) {
-  return deflate(bytes);
+export function deflateSync(bytes, options = {}) {
+  return deflate(bytes, options);
 }
 
 /** Decompress a zlib stream. */

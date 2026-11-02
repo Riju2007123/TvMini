@@ -1060,7 +1060,7 @@ function projectImage() {
   if (data !== previewKey) {
     previewKey = data;
     previewImage = new Image();
-    previewImage.onload = () => renderCanvas();
+    previewImage.onload = queueCanvasRepaint;
     previewImage.src = `data:image/png;base64,${data}`;
   }
 
@@ -1099,11 +1099,28 @@ function drawingImageElement(drawing) {
   let element = drawingImages.get(drawing.image.data);
   if (!element) {
     element = new Image();
-    element.onload = () => renderCanvas();
+    element.onload = queueCanvasRepaint;
     element.src = `data:image/png;base64,${drawing.image.data}`;
     drawingImages.set(drawing.image.data, element);
   }
   return element.complete ? element : null;
+}
+
+/**
+ * One repaint for however many pictures arrive.
+ *
+ * An imported document hands the stage dozens of pictures at once, and each
+ * of them finishes decoding on its own moment. A repaint per picture would
+ * walk the whole document dozens of times for nothing; the requests are
+ * gathered into the next frame instead.
+ */
+function queueCanvasRepaint() {
+  if (state.canvasRepaintQueued) return;
+  state.canvasRepaintQueued = true;
+  requestAnimationFrame(() => {
+    state.canvasRepaintQueued = false;
+    renderCanvas();
+  });
 }
 
 const MIN_PRESSURE_SCALE = 0.2;
@@ -2158,7 +2175,10 @@ function drawCameraOverlay(camera, frame) {
  * within reach.
  */
 function timelineColumnCount() {
-  return Math.max(300, Math.min(MAX_COLUMNS, timelineColumns(state.project, 300)));
+  // The floor is the empty room a fresh document shows; a long document gets
+  // its own length plus a little, not three hundred columns of buttons for
+  // every row of a imported document with hundreds of layers.
+  return Math.max(64, Math.min(MAX_COLUMNS, timelineColumns(state.project, 64)));
 }
 
 /* ------------------------------------------------------------------ camera */
@@ -3799,10 +3819,151 @@ function frameNumberWidth(digits) {
   return 2 + digits * 5.6 + 1;
 }
 
+/**
+ * The rows whose cells wait for the viewport.
+ *
+ * Building on the scroll of the pane, not on an observer: the scroll of the
+ * timeline is the only thing that changes which rows are on screen, and a
+ * builder driven by it works the same on every machine. The scan runs at
+ * most a few times a second, and only over the rows that still wait.
+ */
+let pendingTimelineRows = [];
+let timelineBuildTimer = 0;
+
+function watchTimelineRow(row, build) {
+  pendingTimelineRows.push({ row, build });
+}
+
+/** Build the cells of every waiting row that is on screen or close to it. */
+function buildNearbyTimelineRows() {
+  if (!pendingTimelineRows.length) return;
+  const scroll = timelineEl.closest(".timeline-scroll");
+  if (!scroll) return;
+  const bounds = scroll.getBoundingClientRect();
+  const top = bounds.top - 480;
+  const bottom = bounds.bottom + 480;
+  const stillWaiting = [];
+  for (const item of pendingTimelineRows) {
+    const rect = item.row.getBoundingClientRect();
+    if (rect.bottom >= top && rect.top <= bottom) item.build();
+    else stillWaiting.push(item);
+  }
+  pendingTimelineRows = stillWaiting;
+}
+
+/** Ask for a build soon; the calls of one scroll land in one build. */
+function scheduleTimelineBuild() {
+  if (timelineBuildTimer) return;
+  timelineBuildTimer = setTimeout(() => {
+    timelineBuildTimer = 0;
+    buildNearbyTimelineRows();
+  }, 120);
+}
+
+timelineEl.closest(".timeline-scroll")?.addEventListener("scroll", scheduleTimelineBuild, {
+  passive: true,
+});
+// A pointer over the pane is about to become an interaction with a row, and
+// the rows near it are built for it - this also covers the cases where the
+// pane moved its rows without a scroll of its own.
+timelineEl.closest(".timeline-scroll")?.addEventListener("pointerdown", scheduleTimelineBuild, {
+  passive: true,
+});
+timelineEl.closest(".timeline-scroll")?.addEventListener("pointermove", scheduleTimelineBuild, {
+  passive: true,
+});
+// A pane that is made taller shows rows it did not before.
+new ResizeObserver(scheduleTimelineBuild).observe(
+  timelineEl.closest(".timeline-scroll") ?? timelineEl,
+);
+
+/** The buttons of one row of the timeline, from the first frame to the last. */
+function buildLayerRowCells(cells, project, layer, index, columns, start) {
+  // A folder shows the cells of the layers inside it, the way an animation
+  // folder shows the cells of an animation.
+  const folder = isGroup(layer) ? folderCells(project, index) : null;
+
+  for (let i = 0; i < columns; i += 1) {
+    const frame = start + i;
+    const info = exposureInfo(layer, frame);
+    const cell = element("button", `tl-cell ${info.kind}`);
+    cell.dataset.frame = String(frame);
+    cell.type = "button";
+    // Every cell is placed by hand, so the column of the playhead can sit
+    // over the row.
+    cell.style.gridColumn = `${i + 1} / span 1`;
+    cell.style.gridRow = "1";
+    if (frame === project.currentFrame) cell.classList.add("current");
+    if (i === 0) cell.classList.add("first");
+
+    let owner = index;
+    if (folder) {
+      const entry = folder.get(frame);
+      if (!entry) {
+        cell.textContent = "";
+        cell.title = `Empty frame ${frame}`;
+        cell.addEventListener("click", () => selectFrame(frame));
+        cells.append(cell);
+        continue;
+      }
+      owner = entry.layer;
+      cell.classList.remove(info.kind);
+      cell.classList.add(entry.name ? "head" : "hold");
+      cell.textContent = (state.showCellNames && entry.name) || "●";
+      cell.title = entry.name
+        ? `Cell "${entry.name}" on frame ${frame} — ${entry.count} frame${entry.count === 1 ? "" : "s"}`
+        : `Held frame — ${entry.remaining} of ${entry.count} remaining`;
+      cell.addEventListener("click", () => selectFrame(frame, owner));
+      // The head of a cell is the frame where nothing of it is left, so it
+      // is the frame where the whole cell is still to come.
+      addCellHandles(
+        cell,
+        entry.layer,
+        frame,
+        entry.remaining === 1,
+        entry.remaining === entry.count,
+      );
+      cells.append(cell);
+      continue;
+    }
+
+    if (info.kind === "head") {
+      const drawing = info.drawing;
+      const label = state.showCellNames ? drawing?.name : null;
+      cell.textContent = label || "●";
+      cell.title = label
+        ? `Cell "${label}" — ${info.count} frame${info.count === 1 ? "" : "s"}`
+        : `Drawing starts here — ${info.count} frame${info.count === 1 ? "" : "s"}`;
+    } else if (info.kind === "hold") {
+      cell.textContent = "·";
+      cell.title = `Held frame — ${info.remaining} of ${info.count} remaining`;
+    } else if (info.kind === "virtual") {
+      cell.textContent = "◌";
+      cell.title = `Pre/post behaviour shows frame ${info.sourceFrame}`;
+    } else {
+      cell.textContent = "";
+      cell.title = `Empty frame ${frame}`;
+    }
+
+    cell.addEventListener("click", () => selectFrame(frame, index));
+    cell.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      renameCell(index, frame);
+    });
+    addCellHandles(cell, index, frame, info.remaining === 1, info.kind === "head");
+    cells.append(cell);
+  }
+
+  appendPlayhead(cells, project, columns, start);
+}
+
 function renderTimeline() {
   const project = state.project;
   const columns = timelineColumnCount();
   const start = project.startFrame;
+
+  // The rows of the last build are gone; the waiting list starts over.
+  pendingTimelineRows = [];
 
   timelineEl.replaceChildren();
 
@@ -3966,83 +4127,17 @@ function renderTimeline() {
     const cells = element("div", "tl-cells");
     cells.style.setProperty("--frames", String(columns));
     if (!state.showCellNames) cells.classList.add("no-names");
+    // The cells of a row are built when the row comes near the screen. A
+    // document from Clip Studio carries hundreds of layers, and building a
+    // button for every frame of every one of them held the page for seconds
+    // on every change. The head is built at once, so the row keeps its
+    // height while its cells wait.
+    cells.classList.add("pending");
+    watchTimelineRow(row, () => {
+      buildLayerRowCells(cells, project, layer, index, columns, start);
+      cells.classList.remove("pending");
+    });
 
-    // A folder shows the cells of the layers inside it, the way an animation
-    // folder shows the cells of an animation.
-    const folder = isGroup(layer) ? folderCells(project, index) : null;
-
-    for (let i = 0; i < columns; i += 1) {
-      const frame = start + i;
-      const info = exposureInfo(layer, frame);
-      const cell = element("button", `tl-cell ${info.kind}`);
-      cell.dataset.frame = String(frame);
-      cell.type = "button";
-      // Every cell is placed by hand, so the column of the playhead can sit
-      // over the row.
-      cell.style.gridColumn = `${i + 1} / span 1`;
-      cell.style.gridRow = "1";
-      if (frame === project.currentFrame) cell.classList.add("current");
-      if (i === 0) cell.classList.add("first");
-
-      let owner = index;
-      if (folder) {
-        const entry = folder.get(frame);
-        if (!entry) {
-          cell.textContent = "";
-          cell.title = `Empty frame ${frame}`;
-          cell.addEventListener("click", () => selectFrame(frame));
-          cells.append(cell);
-          continue;
-        }
-        owner = entry.layer;
-        cell.classList.remove(info.kind);
-        cell.classList.add(entry.name ? "head" : "hold");
-        cell.textContent = (state.showCellNames && entry.name) || "●";
-        cell.title = entry.name
-          ? `Cell "${entry.name}" on frame ${frame} — ${entry.count} frame${entry.count === 1 ? "" : "s"}`
-          : `Held frame — ${entry.remaining} of ${entry.count} remaining`;
-        cell.addEventListener("click", () => selectFrame(frame, owner));
-        // The head of a cell is the frame where nothing of it is left, so it
-        // is the frame where the whole cell is still to come.
-        addCellHandles(
-          cell,
-          entry.layer,
-          frame,
-          entry.remaining === 1,
-          entry.remaining === entry.count,
-        );
-        cells.append(cell);
-        continue;
-      }
-
-      if (info.kind === "head") {
-        const drawing = info.drawing;
-        const label = state.showCellNames ? drawing?.name : null;
-        cell.textContent = label || "●";
-        cell.title = label
-          ? `Cell "${label}" — ${info.count} frame${info.count === 1 ? "" : "s"}`
-          : `Drawing starts here — ${info.count} frame${info.count === 1 ? "" : "s"}`;
-      } else if (info.kind === "hold") {
-        cell.textContent = "·";
-        cell.title = `Held frame — ${info.remaining} of ${info.count} remaining`;
-      } else if (info.kind === "virtual") {
-        cell.textContent = "◌";
-        cell.title = `Pre/post behaviour shows frame ${info.sourceFrame}`;
-      } else {
-        cell.textContent = "";
-        cell.title = `Empty frame ${frame}`;
-      }
-
-      cell.addEventListener("click", () => selectFrame(frame, index));
-      cell.addEventListener("dblclick", (event) => {
-        event.preventDefault();
-        renameCell(index, frame);
-      });
-      addCellHandles(cell, index, frame, info.remaining === 1, info.kind === "head");
-      cells.append(cell);
-    }
-
-    appendPlayhead(cells, project, columns, start);
     row.append(head, cells);
     timelineEl.append(row);
   }
@@ -4083,6 +4178,11 @@ function renderTimeline() {
   grid.append(lines);
   timelineEl.append(grid);
 
+  // The rows near the screen are built now; the rest wait for a scroll.
+  buildNearbyTimelineRows();
+  // The build carries the playhead of this very frame; the next move of the
+  // playhead only has to change the column it steps onto.
+  state.playheadFrame = project.currentFrame;
   updatePlayhead();
   updateFrameReadout();
 }
@@ -4407,12 +4507,22 @@ function audioWaveformPicture(columns, start) {
 
 function updatePlayhead() {
   const project = state.project;
+  const previous = state.playheadFrame ?? null;
+  const current = project.currentFrame;
   for (const row of timelineEl.querySelectorAll(".tl-row[data-layer]")) {
     row.classList.toggle("selected", Number(row.dataset.layer) === project.currentLayer);
   }
-  for (const cell of timelineEl.querySelectorAll(".tl-cell[data-frame]")) {
-    cell.classList.toggle("current", Number(cell.dataset.frame) === project.currentFrame);
+  // Only the columns the playhead moved between change: walking every cell
+  // of every row on every step of the playhead cost more than the frame
+  // itself on a document with hundreds of rows.
+  const selector =
+    previous === null || previous === current
+      ? `.tl-cell[data-frame="${current}"]`
+      : `.tl-cell[data-frame="${previous}"], .tl-cell[data-frame="${current}"]`;
+  for (const cell of timelineEl.querySelectorAll(selector)) {
+    cell.classList.toggle("current", Number(cell.dataset.frame) === current);
   }
+  state.playheadFrame = current;
 }
 
 /**

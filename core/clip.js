@@ -306,24 +306,50 @@ export function clipToProject(document, layers, fallback = {}) {
     return result;
   };
 
-  /** The picture of a layer, as the base of a drawing. */
+  /**
+   * The picture of a layer, as the base of a drawing.
+   *
+   * The encode is kept per raster: two layers that sit on one cel share it,
+   * and a document whose cells are revisited does not encode the same
+   * picture twice. A raster without a single painted pixel answers null -
+   * a fully transparent PNG of the whole canvas costs a good part of a
+   * second to say "nothing is here". The compression runs at the fast
+   * level, because the picture is kept in memory rather than hung on a
+   * wall; the next save of the project carries it as it is.
+   */
+  const picturesById = new Map();
   const pictureOf = (node) => {
-    const raster = rasterById.get(Number(node.id));
-    if (!raster || !raster.pixels) return null;
-    const picture = placeRgba(
-      raster.pixels,
-      raster.width,
-      raster.height,
-      width,
-      height,
-      raster.offsetX ?? 0,
-      raster.offsetY ?? 0,
-    );
-    return {
-      data: Buffer.from(encodeRgbaPng(width, height, picture)).toString("base64"),
-      width,
-      height,
-    };
+    const id = Number(node.id);
+    if (picturesById.has(id)) return picturesById.get(id);
+    const raster = rasterById.get(id);
+    let picture = null;
+    if (raster && raster.pixels) {
+      const placed = placeRgba(
+        raster.pixels,
+        raster.width,
+        raster.height,
+        width,
+        height,
+        raster.offsetX ?? 0,
+        raster.offsetY ?? 0,
+      );
+      let painted = false;
+      for (let index = 3; index < placed.length; index += 4) {
+        if (placed[index] !== 0) {
+          painted = true;
+          break;
+        }
+      }
+      if (painted) {
+        picture = {
+          data: Buffer.from(encodeRgbaPng(width, height, placed, { level: 1 })).toString("base64"),
+          width,
+          height,
+        };
+      }
+    }
+    picturesById.set(id, picture);
+    return picture;
   };
 
   /**
@@ -435,7 +461,6 @@ export function clipToProject(document, layers, fallback = {}) {
     }
 
     if (!folder) {
-      const picture = pictureOf(node);
       // A cell shows on every frame the track names it, so it can carry more
       // than one drawing. Without a track, the name of the cell is the only
       // evidence there is, and it holds a single frame. A layer inside a cell
@@ -451,6 +476,9 @@ export function clipToProject(document, layers, fallback = {}) {
           : insideAnimation
             ? []
             : [{ frame, hold: span }];
+      // The picture is only built when a drawing will carry it: a layer that
+      // the track keeps off screen pays no encode at all.
+      const picture = spots.length ? pictureOf(node) : null;
       for (const spot of spots) {
         const drawing = {
           at: spot.frame,
