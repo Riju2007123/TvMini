@@ -1112,6 +1112,10 @@ body.hide-inspector.hide-stage .workspace {
   padding: 2px 0 6px;
   overflow: auto;
   user-select: none;
+  /* The list is drawn again from nothing on every change. Scroll anchoring
+     would grab a fresh row as its anchor each time and slide the list on a
+     plain click, so the browser is told to keep its hands off the scroll. */
+  overflow-anchor: none;
 }
 
 .layer-row {
@@ -2237,6 +2241,9 @@ body.pane-dragging .pane-header {
   min-height: 0;
   overflow: auto;
   background: var(--well);
+  /* The rows are drawn again from nothing on every change, and anchoring
+     would slide the sheet on a plain click, so the scroll stays put. */
+  overflow-anchor: none;
 }
 
 /* The rail under the strip is thin, so it does not eat a row of frames. */
