@@ -334,6 +334,10 @@ function tvppLayerChunks(project, layer, first, last) {
  * in FCFG, audio refs, TLNT tail room) are simply omitted. TVPaint reads
  * compressed `ZCHK` files and bare files alike, but this needs one round
  * trip through real TVPaint before we claim full fidelity.
+ *
+ * Folders are left behind — a .tvpp has no folders — and every drawing
+ * layer is written, even one with no drawing yet: it comes back as a
+ * layer of one empty frame, so the layer count survives a round trip.
  */
 export function createTvppBuffer(project) {
   const width = project.width;
@@ -405,9 +409,18 @@ export function createTvppBuffer(project) {
   be32(tlnt, 40);
   pushChunk("TLNT", Buffer.concat([Buffer.from(tlnt), Buffer.alloc(68)]));
 
-  // TVPaint layer 1 is topmost, exactly like our layers[0].
+  // TVPaint layer 1 is topmost, exactly like our layers[0]. Folders do not
+  // exist in a .tvpp, so they stay behind; a layer with no drawing yet is
+  // still written - as one empty frame - so the layer count survives a
+  // round trip.
+  let exported = 0;
   for (const layer of project.layers) {
-    if (layer.drawings.length === 0) continue;
+    if (layer.type === "group") continue;
+    exported += 1;
+    if (layer.drawings.length === 0) {
+      media.push(...tvppLayerChunks(project, layer, project.startFrame, project.startFrame));
+      continue;
+    }
     const first = Math.max(project.startFrame, layer.drawings[0].at);
     const last = layer.drawings.reduce(
       (max, drawing) => Math.max(max, drawing.at + drawing.hold - 1),
@@ -431,7 +444,7 @@ export function createTvppBuffer(project) {
     ["StartFrame", "1"],
     ["UniqueID", projectMetaId()],
     ["Shots", "1"],
-    ["Drawings", String(project.layers.length)],
+    ["Drawings", String(exported)],
     ["Name", "TVMini project"],
   ]);
 
@@ -737,12 +750,25 @@ export function readTvpp(input) {
   const meta = metaNode ? readStringRecords(buf, metaNode.body, metaNode.size) : {};
 
   const one = (id) => chunks.find((chunk) => chunk.id === id) || null;
+  // The canvas size lives in DLOC; a document whose chunk is missing can
+  // still say its size in the meta records.
+  let width = 0;
+  let height = 0;
   const dloc = one("DLOC");
-  if (!dloc) throw new Error(".tvpp has no DLOC (canvas size)");
-  const width = buf.readUInt16BE(dloc.off);
-  const height = buf.readUInt16BE(dloc.off + 2);
+  if (dloc) {
+    width = buf.readUInt16BE(dloc.off);
+    height = buf.readUInt16BE(dloc.off + 2);
+  }
+  if (!width || !height) {
+    width = width || Math.round(Number(meta.Width) || 0);
+    height = height || Math.round(Number(meta.Height) || 0);
+  }
+  if (!width || !height) throw new Error(".tvpp has no canvas size (no DLOC, no meta)");
   const frat = one("FRAT");
-  const fps = frat ? buf.readUInt32BE(frat.off) / 1000 : 24;
+  let fps = frat
+    ? buf.readUInt32BE(frat.off) / 1000
+    : Number.parseFloat(meta.FrameRate);
+  if (!Number.isFinite(fps) || fps <= 0) fps = 24;
 
   const layers = [];
   let current = null;
@@ -754,6 +780,8 @@ export function readTvpp(input) {
         opacity: 255,
         blendCode: 0,
         start: 1,
+        last: 1,
+        behaviorWord: null,
         frames: [],
       };
       layers.push(current);
@@ -762,15 +790,20 @@ export function readTvpp(input) {
       if (wide) current.name = wide;
     } else if (current && chunk.id === "LRHD") {
       current.start = chunk.size >= 8 ? buf.readUInt32BE(chunk.off + 4) : 1;
+      current.last = chunk.size >= 12 ? buf.readUInt32BE(chunk.off + 8) : current.start;
       current.opacity = chunk.size >= 20 ? buf.readUInt32BE(chunk.off + 16) : 255;
       current.hidden = chunk.size >= 32 && (buf.readUInt32BE(chunk.off + 28) & 1) === 1;
       current.blendCode = chunk.size >= 64 ? buf.readUInt32BE(chunk.off + 60) : 0;
+      // word[11] packs the behaviors: post*65536 + pre (none 0, repeat 1,
+      // hold 3). The behaviors say what the layer shows before its first
+      // and after its last image.
+      current.behaviorWord = chunk.size >= 48 ? buf.readUInt32BE(chunk.off + 44) : null;
     } else if (current && (chunk.id === "ZCHK" || chunk.id === "DBOD" || chunk.id === "SRAW")) {
       current.frames.push(chunk);
     }
   }
 
-  return { meta, width, height, fps, _buf: buf, layers };
+  return { meta, width, height, fps, _buf: buf, warnings: [], layers };
 }
 
 /**
@@ -778,21 +811,43 @@ export function readTvpp(input) {
  * `{ kind: 'empty'|'same'|'full', rgba? }` records. `same` means "repeat
  * the previous frame's image"; history references (SRAW sel=1) share tile
  * buffers, so layers decode in file order.
+ *
+ * Anything that cannot be read is read as an empty frame and said so in
+ * `parsed.warnings`, with the layer and the frame number, so a damaged
+ * file comes back with everything that survived and a list of what did
+ * not. The warnings are capped, because a broken file could otherwise
+ * name hundreds of frames.
  */
 export function decodeTvppLayers(parsed) {
+  const warnings = parsed.warnings ?? (parsed.warnings = []);
+  const capped = () => warnings.length >= 8;
   for (const layer of parsed.layers) {
     const history = [];
     let previous = null;
     const decoded = [];
-    for (const frame of layer.frames) {
-      const { tag, data } = chunkPayload(parsed._buf, frame);
+    layer.decoded = decoded;
+    layer.frames.forEach((frame, position) => {
+      const frameNumber = layer.start + position;
+      const note = (text) => {
+        if (capped()) return;
+        warnings.push(`layer "${layer.name}" frame ${frameNumber}: ${text}`);
+      };
+      let tag;
+      let data;
+      try {
+        ({ tag, data } = chunkPayload(parsed._buf, frame));
+      } catch (error) {
+        note(`a compressed image failed to open (${error.message}); read as empty`);
+        decoded.push({ kind: "empty" });
+        return;
+      }
       if (tag === "SRAW" && data.length === 28 && data.readUInt32BE(8) === 5) {
         // Explicit-empty directive; its payload words must all be zero.
         let empty = true;
         for (let o = 12; empty && o < 28; o += 4) empty = empty && data.readUInt32BE(o) === 0;
         if (empty) {
           decoded.push({ kind: "empty" });
-          continue;
+          return;
         }
       }
       if (tag === "SRAW" && data.length === 20) {
@@ -800,33 +855,51 @@ export function decodeTvppLayers(parsed) {
         const index = data.readUInt32BE(16);
         if (kind === 6 && previous) {
           decoded.push({ kind: "same" });
-          continue;
+          return;
         }
+        if (kind === 6) note("a repeat directive had no image before it; read as empty");
         if (kind === 2 && history[index]) {
           previous = history[index];
           decoded.push({ kind: "full", rgba: assembleTiles(previous, parsed.width, parsed.height) });
-          continue;
+          return;
         }
+        if (kind === 2) note("an image reference pointed at nothing; read as empty");
+        if (kind !== 6 && kind !== 2) note(`an unknown image directive (${kind}) was skipped`);
         decoded.push({ kind: "empty" });
-        continue;
+        return;
       }
       if (tag !== "DBOD" && tag !== "SRAW") {
+        note(`an unsupported image chunk "${tag}" was skipped; read as empty`);
         decoded.push({ kind: "empty" });
-        continue;
+        return;
       }
       const tiles =
         tag === "DBOD"
           ? decodeTiles(data, parsed.width, parsed.height)
           : decodeSrawTiles(data, parsed.width, parsed.height, previous);
       if (!tiles) {
+        note("the image data was incomplete or damaged; read as empty");
         decoded.push({ kind: "empty" });
-        continue;
+        return;
       }
       previous = tiles;
       history.push(tiles);
       decoded.push({ kind: "full", rgba: assembleTiles(tiles, parsed.width, parsed.height) });
+    });
+    // The frame chunks should cover the range the layer header declares.
+    if (layer.last > layer.start && layer.frames.length !== layer.last - layer.start + 1) {
+      if (!capped()) {
+        warnings.push(
+          `layer "${layer.name}": the header says ${layer.last - layer.start + 1} frames ` +
+            `but ${layer.frames.length} image entries were found`,
+        );
+      }
     }
-    layer.decoded = decoded;
+  }
+  if (warnings.length > 8) {
+    const extra = warnings.length - 8;
+    warnings.length = 8;
+    warnings.push(`…and ${extra} more reading notes`);
   }
   return parsed;
 }
@@ -834,11 +907,15 @@ export function decodeTvppLayers(parsed) {
 /**
  * One-call import: `.tvpp` bytes -> a validated TVMini project plus
  * warnings. Consecutive identical frames on a layer merge into one drawing
- * with a longer hold, matching our exposure model.
+ * with a longer hold, matching our exposure model. The behaviors of a
+ * layer (what it shows before its first and after its last image) come
+ * back from the layer header.
  */
+const TVPP_BEHAVIOR_NAMES = { 0: "none", 1: "repeat", 3: "hold" };
+
 export function importTvppBytes(input) {
-  const warnings = [];
   const parsed = decodeTvppLayers(readTvpp(input));
+  const warnings = parsed.warnings;
   const { width, height } = parsed;
 
   let fps = Math.round(parsed.fps * 1000) / 1000;
@@ -857,6 +934,22 @@ export function importTvppBytes(input) {
     const layer = createLayer(source.name || `Layer ${index + 1}`);
     layer.visible = !source.hidden;
     layer.opacity = Math.min(1, Math.max(0, source.opacity / 255));
+
+    // The behaviors come back from the header word: post*65536 + pre. A
+    // code we do not know falls back to the default of a new layer.
+    if (Number.isFinite(source.behaviorWord)) {
+      const word = source.behaviorWord;
+      layer.postBehavior = TVPP_BEHAVIOR_NAMES[Math.floor(word / 65536)] ?? "hold";
+      layer.preBehavior = TVPP_BEHAVIOR_NAMES[word % 65536] ?? "none";
+    }
+
+    // A blending we cannot name is read as normal and said so: the pixels
+    // survive, the way the layer composes does not.
+    if (source.blendCode !== 0 && warnings.length < 8) {
+      warnings.push(
+        `layer "${layer.name}": TVPaint blend code ${source.blendCode} is not supported, read as normal`,
+      );
+    }
 
     let drawing = null;
     source.decoded.forEach((frame, position) => {
