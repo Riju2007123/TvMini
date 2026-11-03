@@ -1,4 +1,4 @@
-import { Buffer } from "./bytes.js";
+﻿import { Buffer } from "./bytes.js";
 import { openDatabase } from "./sqlite.js";
 import { MAX_SIZE, MIN_SIZE, ValidationError } from "./model.js";
 import { decodeBlockPayload, parseAttribute } from "./clip-blocks.js";
@@ -217,7 +217,7 @@ export function clipToProject(document, layers, fallback = {}) {
   }
   if (width > MAX_SIZE || height > MAX_SIZE) {
     throw new ValidationError(
-      `this .clip canvas is ${width}×${height}; TVMini supports up to ${MAX_SIZE} px`,
+      `this .clip canvas is ${width}Ã—${height}; TVMini supports up to ${MAX_SIZE} px`,
     );
   }
 
@@ -440,6 +440,11 @@ export function clipToProject(document, layers, fallback = {}) {
       // type 512. The flag keeps that folder a camera folder, so that the
       // camera track of an imported document can be written back on it.
       ...(Number(node.type) === 512 ? { camera: true } : {}),
+      // An animation folder is a track of the timeline, the way Clip Studio
+      // Paint shows one: the folder is the row, its cels are the cells on
+      // it, and the layers inside the cels keep out of the timeline. The
+      // flag is what tells the timeline which folders are tracks.
+      ...(folder && node.animationFolder ? { animationFolder: true } : {}),
       visible: node.visible !== false,
       locked: Boolean(node.locked),
       opacity: typeof node.opacity === "number" && Number.isFinite(node.opacity) ? node.opacity : 1,
@@ -458,6 +463,23 @@ export function clipToProject(document, layers, fallback = {}) {
     if (folder && isCel) {
       const place = cellTransform(inheritedTransform, cellFrame);
       if (place) layer.transform = place;
+      // A folder that is a cel of an animation folder shows on the row of
+      // that folder as one cell, the way Clip Studio Paint puts a folder
+      // used as a cel on its track. The cell carries no picture of its own -
+      // the picture is the layers inside the folder - but the track needs to
+      // know where the cel sits and how long it holds, so the cel is
+      // recorded here. A folder inside a cel is part of the picture of that
+      // cel, not a cel of the track, and records nothing.
+      if (!insideCell) {
+        for (const spot of runs ?? [{ frame: cellFrame, hold: 1 }]) {
+          layer.drawings.push({
+            at: spot.frame,
+            hold: spot.hold,
+            strokes: [],
+            name: cellName ?? ownName,
+          });
+        }
+      }
     }
 
     if (!folder) {
@@ -504,27 +526,64 @@ export function clipToProject(document, layers, fallback = {}) {
     // the transform of the track goes down with the placement.
     const childTransform = node.animationFolder ? transformOf_(node) : null;
 
-    let kids = childrenOf(node).filter((child) => !isDocumentRow(child));
+    let children;
     if (node.animationFolder) {
-      const frameOf = (child) => {
-        const spot = childPlacement?.get(child.name ?? "")?.[0];
-        if (spot) return spot.frame;
-        const found = frameOfCellName(child.name ?? "");
-        return found === null ? Number.MAX_SAFE_INTEGER : found;
-      };
-      kids = chainOf(node).sort((a, b) => frameOf(a) - frameOf(b));
+      // The folder itself is the row of the timeline and its cels are the
+      // cells on it, the way Clip Studio Paint shows an animation folder: a
+      // cel that is a layer carries its picture, a cel that is a folder
+      // carries the layers that make the picture of the cel. The cels keep
+      // the shape the document stores - the layer palette shows them, the
+      // timeline shows only the row of the folder - so nothing is dissolved
+      // and nothing is renamed.
+      children = [];
+      for (const cel of chainOf(node)) {
+        if (isDocumentRow(cel)) continue;
+        children.push(
+          buildLayer(
+            cel,
+            true,
+            isCel ? frame : inheritedFrame,
+            isCel ? cellName : inheritedName,
+            childPlacement,
+            isCel ? (runs?.[0]?.hold ?? 1) : inheritedHold,
+            childTransform,
+          ),
+        );
+      }
+    } else {
+      const kids = childrenOf(node).filter((child) => !isDocumentRow(child));
+      children = kids.map((child) =>
+        buildLayer(
+          child,
+          insideAnimation,
+          isCel ? frame : inheritedFrame,
+          isCel ? cellName : inheritedName,
+          childPlacement,
+          isCel ? (runs?.[0]?.hold ?? 1) : inheritedHold,
+          childTransform,
+        ),
+      );
+      // A cel folder the track shows more than once: the layers inside it
+      // were put on the frame of the first spot, and every other spot the
+      // track names shows the same picture, so their drawings follow the cel
+      // to every frame it sits on.
+      if (folder && isCel && !insideCell && runs && runs.length > 1) {
+        const follow = (parent) => {
+          for (const child of parent.children ?? []) {
+            follow(child);
+            const extra = [];
+            for (const spot of runs.slice(1)) {
+              for (const drawing of child.drawings) {
+                extra.push({ ...drawing, at: spot.frame, hold: spot.hold });
+              }
+            }
+            child.drawings.push(...extra);
+            child.drawings.sort((one, two) => one.at - two.at);
+          }
+        };
+        follow(layer);
+      }
     }
-    const children = kids.map((child) =>
-      buildLayer(
-        child,
-        insideAnimation || Boolean(node.animationFolder),
-        isCel ? frame : inheritedFrame,
-        isCel ? cellName : inheritedName,
-        childPlacement,
-        isCel ? (runs?.[0]?.hold ?? 1) : inheritedHold,
-        childTransform,
-      ),
-    );
     if (folder) layer.children = children;
     return layer;
   };
@@ -675,7 +734,7 @@ export async function readClipPreviewFromBytes(data) {
 
   if (width < MIN_SIZE || height < MIN_SIZE || width > MAX_SIZE || height > MAX_SIZE) {
     throw new ValidationError(
-      `the .clip canvas is ${width}×${height}; TVMini supports ${MIN_SIZE}–${MAX_SIZE} px`,
+      `the .clip canvas is ${width}Ã—${height}; TVMini supports ${MIN_SIZE}â€“${MAX_SIZE} px`,
     );
   }
 

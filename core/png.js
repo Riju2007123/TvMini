@@ -1145,6 +1145,10 @@ export function renderProject(project, frame = project.currentFrame) {
 
   for (let index = project.layers.length - 1; index >= 0; index -= 1) {
     const layer = project.layers[index];
+    // A folder paints nothing of its own: the layers inside it paint, and a
+    // folder that is a cel of an animation folder carries the cel only to
+    // say where it sits on the track.
+    if (layer.type === "group") continue;
     // A layer inside a folder that is hidden is hidden too, and the opacity
     // of the folders above it counts, the way Clip Studio Paint paints it.
     if (!layerIsVisible(project, index)) continue;

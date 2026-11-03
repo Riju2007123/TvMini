@@ -2300,8 +2300,11 @@ export function clipSheetSize(width, height) {
   return { pasteX, pasteY, width: safeWidth + pasteX * 2, height: safeHeight + pasteY * 2 };
 }
 
-export function clipExportScale(width, height) {
-  const sheet = clipSheetSize(width, height);
+export function clipExportScale(width, height, { pasteboard = true } = {}) {
+  // A document that came from a .clip is written at its own size, so its
+  // scale is measured on the canvas itself; a document drawn here keeps the
+  // work area around its stage and is measured with it.
+  const sheet = pasteboard ? clipSheetSize(width, height) : { width, height };
   // A stage that is already 1280x720 or larger is painted at twice its
   // resolution, so the lines stay clean when the picture is zoomed or
   // printed. The pixel budget still caps a canvas that would be too large.
@@ -2447,7 +2450,15 @@ export async function createClipBuffer(
   // the work area, a sketch that runs off the stage - comes along too. The
   // sheet is the one `clipExportScale` sizes the canvas from, so the scale
   // the caller asks for and the canvas it is applied to cannot drift apart.
-  const sheet = clipSheetSize(project.width, project.height);
+  // A document that was imported keeps its own size: its file is written at
+  // the resolution it was made in, with no pasteboard around it, so what
+  // comes back out is what Clip Studio Paint put in. The sheet, with the
+  // work area around the stage, belongs to the documents TVMini and Flash
+  // draw.
+  const pasteboard = project.pasteboard !== false;
+  const sheet = pasteboard
+    ? clipSheetSize(project.width, project.height)
+    : { pasteX: 0, pasteY: 0, width: project.width, height: project.height };
   const pasteX = sheet.pasteX;
   const pasteY = sheet.pasteY;
   const sheetWidth = sheet.width;
@@ -2619,11 +2630,15 @@ export async function createClipBuffer(
     // The work area: a layer under everything that paints the pasteboard
     // grey and leaves the stage clear, so the paper (the colour of the
     // stage) shows through it. That is how the stage and the blank space
-    // around it read in the app, and the exported file keeps the look.
-    const pasteboardLayer = cloneLayer(database, templateLayer.MainId, "Pasteboard", {
-      __width: width,
-      __height: height,
-    });
+    // around it read in the app, and the exported file keeps the look. A
+    // document that was imported keeps its own size and has no work area, so
+    // no such layer is written for it.
+    const pasteboardLayer = project.pasteboard === false
+      ? null
+      : cloneLayer(database, templateLayer.MainId, "Pasteboard", {
+          __width: width,
+          __height: height,
+        });
 
     const background = [
       parseInt(project.background.slice(1, 3), 16),
@@ -2634,7 +2649,7 @@ export async function createClipBuffer(
     setPaperColor(database, background);
 
     const pixels = new Map();
-    {
+    if (pasteboardLayer) {
       // The pasteboard sheet: grey, with the stage left clear for the paper.
       const stageX = pasteX * scale;
       const stageY = pasteY * scale;
@@ -2758,7 +2773,7 @@ export async function createClipBuffer(
 
     // Every layer that was filled has to end up with its pixels in the file.
     if (imageLayer) assertLayerHasPixels(database, imageLayer.layerId, pixels);
-    assertLayerHasPixels(database, pasteboardLayer.layerId, pixels);
+    if (pasteboardLayer) assertLayerHasPixels(database, pasteboardLayer.layerId, pixels);
     for (let index = 0; index < tree.nodes.length; index += 1) {
       if (isFolderNode(tree.nodes[index])) continue;
       assertLayerHasPixels(database, created[index].layerId, pixels);
@@ -2772,7 +2787,7 @@ export async function createClipBuffer(
     // The pasteboard comes next, then the picture of the document, and the
     // layers of the canvas above them.
     const floor = [paper.MainId];
-    floor.push(pasteboardLayer.layerId);
+    if (pasteboardLayer) floor.push(pasteboardLayer.layerId);
     if (imageLayer) floor.push(imageLayer.layerId);
     linkTree(database, tree, floor, canvas.CanvasRootFolder);
     writeComposition(database, tree, floor, canvas.CanvasRootFolder);

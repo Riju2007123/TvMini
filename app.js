@@ -72,7 +72,9 @@ import {
   holdDrawing,
   insertDrawing,
   insertLayer,
+  isAnimationFolder,
   isGroup,
+  insideAnimationFolder,
   keyframes,
   layerBounds,
   layerDepth,
@@ -196,6 +198,8 @@ const layerOpacityOut = document.getElementById("layerOpacityOut");
 const layerLockButton = document.getElementById("layerLock");
 const panelAddLayerButton = document.getElementById("panelAddLayer");
 const panelAddFolderButton = document.getElementById("panelAddFolder");
+const panelAddAnimationFolderButton = document.getElementById("panelAddAnimationFolder");
+const panelDuplicateLayerButton = document.getElementById("panelDuplicateLayer");
 const panelUnfoldButton = document.getElementById("panelUnfold");
 const panelDeleteLayerButton = document.getElementById("panelDeleteLayer");
 const panelLayerUpButton = document.getElementById("panelLayerUp");
@@ -3700,12 +3704,22 @@ function renderCameraRow(columns, start) {
  *
  * The list is depth first, so a folder is followed by the layers it holds,
  * and a folder that is closed hides the layers inside it.
+ *
+ * The cels of an animation folder keep out of the timeline, the way Clip
+ * Studio Paint shows a track: the folder is the row and its cels are the
+ * cells on it, so the layers inside it get no rows of their own - the layer
+ * palette holds them. A nested animation folder is a track of its own.
  */
 function visibleLayers(project) {
   const out = [];
   const walk = (parent, hidden) => {
     for (const child of childrenOf(project, parent)) {
       if (hidden) {
+        walk(child, true);
+        continue;
+      }
+      const layer = project.layers[child];
+      if (!isAnimationFolder(layer) && insideAnimationFolder(project, child)) {
         walk(child, true);
         continue;
       }
@@ -3796,11 +3810,109 @@ function addLayerBeside(index) {
   const at = inside ? index + 1 : index;
   const created = createLayer(`Layer ${project.layers.length + 1}`);
   insertLayer(project, at, created, parent);
+  syncTrackCel(project, at);
   project.currentLayer = at;
   recordHistory(before);
   markDirty();
   afterChange();
   setStatus(`Added ${currentLayer().name}`);
+}
+
+/**
+ * Make a cel on the track of an animation folder.
+ *
+ * A frame specified on an empty track of Clip Studio Paint makes a cel
+ * there: a layer of its own in the folder, named after the frame, that shows
+ * on that frame. The next stroke drawn goes into the cel.
+ */
+function addCelToTrack(trackIndex, frame) {
+  const project = state.project;
+  if (project.layers.length >= MAX_LAYERS) {
+    setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  created.drawings = [
+    { at: frame, hold: 1, strokes: [], name: cellName(created, frame) },
+  ];
+  insertLayer(project, trackIndex + 1, created, trackIndex);
+  syncTrackCel(project, trackIndex + 1);
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  selectFrame(frame, trackIndex + 1);
+  setStatus(
+    `Added cel ${created.drawings[0].name} to ${project.layers[trackIndex].name}`,
+  );
+}
+
+/**
+ * Add an animation folder: a track of the timeline.
+ *
+ * The folder is put above the current layer and the current layer goes
+ * inside it as its first cel, the way a new animation folder of Clip Studio
+ * Paint takes the layer it is made from. The cells of the track are the
+ * cels; drawing on one of them puts a cell on the row of the folder.
+ */
+function addAnimationFolder() {
+  const project = state.project;
+  if (project.layers.length >= MAX_LAYERS) {
+    setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+  const current = project.currentLayer;
+  const layer = project.layers[current];
+  const parent = layer.parent ?? -1;
+  const group = createGroup(`Animation folder ${project.layers.length + 1}`);
+  group.animationFolder = true;
+  insertLayer(project, current, group, parent);
+  // The layer that was selected now sits inside the new folder as its cel.
+  project.layers[current + 1].parent = current;
+  syncTrackCel(project, current + 1);
+  project.currentLayer = current;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Added ${currentLayer().name}`);
+}
+
+/**
+ * The cel a folder shows on the track it sits in.
+ *
+ * A folder inside an animation folder is a cel of that track: it shows as
+ * one cell on the row of the track, the way a folder dropped on the timeline
+ * of Clip Studio Paint lands there. The cell carries no picture - the layers
+ * inside the folder make the picture - so the folder records where the cel
+ * sits, and forgets it when it leaves the track. A drawing layer that
+ * becomes a cel plays the way a cel plays: it holds until the next cel and
+ * shows nothing after the last one.
+ */
+function syncTrackCel(project, index) {
+  const layer = project.layers[index];
+  if (!layer) return;
+  if (insideAnimationFolder(project, index)) {
+    if (!isGroup(layer)) {
+      layer.postBehavior = "none";
+      return;
+    }
+    layer.preBehavior = "none";
+    layer.postBehavior = "none";
+    if (!(layer.drawings ?? []).length) {
+      layer.drawings = [
+        { at: project.currentFrame, hold: 1, strokes: [], name: layer.name },
+      ];
+    }
+  } else if (isGroup(layer) && layer.animationFolder !== true) {
+    layer.drawings = (layer.drawings ?? []).filter(
+      (drawing) => (drawing.strokes?.length ?? 0) > 0 || drawing.image,
+    );
+  }
 }
 
 /**
@@ -3909,7 +4021,13 @@ function buildLayerRowCells(cells, project, layer, index, columns, start) {
       if (!entry) {
         cell.textContent = "";
         cell.title = `Empty frame ${frame}`;
-        cell.addEventListener("click", () => selectFrame(frame));
+        cell.addEventListener("click", () => {
+          // A frame specified on an empty track makes a cel there, the way
+          // Clip Studio Paint makes one when a frame of an empty animation
+          // folder is specified. An ordinary folder just moves the frame.
+          if (isAnimationFolder(layer)) addCelToTrack(index, frame);
+          else selectFrame(frame);
+        });
         cells.append(cell);
         continue;
       }
@@ -4050,7 +4168,7 @@ function renderTimeline() {
 
     const head = element("div", "tl-head");
 
-    if (isGroup(layer)) {
+    if (isGroup(layer) && !isAnimationFolder(layer)) {
       const toggle = iconButton(
         "tl-icon tl-fold",
         state.collapsed.has(layer.name) ? "i-fold-closed" : "i-fold-open",
@@ -4078,7 +4196,11 @@ function renderTimeline() {
     kind.title = isGroup(layer) ? "A folder that holds other layers" : "A drawing layer";
 
     const name = element("button", "tl-name", layer.name);
-    if (isGroup(layer)) {
+    if (isAnimationFolder(layer)) {
+      const count = childrenOf(project, index).length;
+      name.textContent = `${layer.name} : ${count} : cel`;
+      name.title = `Animation folder with ${count} cel${count === 1 ? "" : "s"} (double-click to rename)`;
+    } else if (isGroup(layer)) {
       const count = childrenOf(project, index).length;
       name.textContent = `${layer.name} : ${count}`;
       name.title = `Folder with ${count} layer${count === 1 ? "" : "s"} (double-click to rename)`;
@@ -4121,13 +4243,17 @@ function renderTimeline() {
     });
     head.append(add);
 
+    // Clicking the row selects the layer; the eye, the fold button and the
+    // add button stop their own clicks, so a press on one is never taken for
+    // a click on the row.
     head.addEventListener("click", (event) => {
-      if (event.target === head) selectLayer(index);
+      if (event.target.closest(".tl-icon, .tl-add")) return;
+      selectLayer(index);
     });
     // The row can be dragged to another place in the list.
     head.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if (event.target === visibility || event.target === lock) return;
+      if (event.target.closest(".tl-icon, .tl-add")) return;
       startLayerDrag(event, index);
     });
 
@@ -4376,14 +4502,16 @@ function renderLayerPanel() {
       row.append(element("span", "layer-current", "✎"));
     }
 
-    row.addEventListener("click", (event) => {
-      if (event.target === row) selectLayer(index);
-    });
+    // Clicking anywhere on the row selects the layer - the thumbnail, the
+    // name and the space beside them - the way a row of Clip Studio Paint
+    // works. The eye and the fold button stop their own clicks.
+    row.addEventListener("click", () => selectLayer(index));
     // A layer can be dragged to another place, and onto a folder, which
-    // puts it inside.
+    // puts it inside. A press on a control belongs to the control, not to
+    // the drag.
     row.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if (event.target === eye || event.target === fold) return;
+      if (event.target.closest(".layer-eye, .layer-fold, input")) return;
       startLayerDrag(event, index, [...layerTreeEl.querySelectorAll(".layer-row")]);
     });
 
@@ -4441,6 +4569,12 @@ function syncLayerPanelControls() {
   panelDeleteLayerButton.title = folder
     ? `Delete ${layer.name} and the layers inside it`
     : `Delete ${layer.name}`;
+
+  panelAddAnimationFolderButton.title = `Start an animation folder at ${layer.name}`;
+  panelDuplicateLayerButton.disabled = project.layers.length >= MAX_LAYERS;
+  panelDuplicateLayerButton.title = folder
+    ? `Duplicate ${layer.name} and the layers inside it`
+    : `Duplicate ${layer.name}`;
 }
 
 /** The sound row: the name, a remove button and the waveform. */
@@ -4737,6 +4871,7 @@ function addLayer() {
   const index = inside ? current + 1 : current;
   const created = createLayer(`Layer ${project.layers.length + 1}`);
   insertLayer(project, index, created, parent);
+  syncTrackCel(project, index);
   project.currentLayer = index;
   recordHistory(before);
   markDirty();
@@ -4766,11 +4901,76 @@ function addGroup() {
   insertLayer(project, current, group, parent);
   // The layer that was selected now sits inside the new folder.
   project.layers[current + 1].parent = current;
+  // A folder that landed inside an animation folder is a cel of its track,
+  // and so is the layer that went inside it.
+  syncTrackCel(project, current);
+  syncTrackCel(project, current + 1);
   project.currentLayer = current;
   recordHistory(before);
   markDirty();
   afterChange();
   setStatus(`Added ${currentLayer().name}`);
+}
+
+/**
+ * Duplicate the layer that is selected.
+ *
+ * A folder is copied together with everything inside it, exactly as it is,
+ * and the copy is put straight after the original, the way the duplicate
+ * button of the Clip Studio Paint layer palette works. The copy is selected
+ * so the artist can move it or draw on it at once.
+ */
+function duplicateLayer() {
+  const project = state.project;
+  const index = project.currentLayer;
+  const layer = project.layers[index];
+  if (!layer) return;
+
+  const count = blockSize(project, index);
+  if (project.layers.length + count > MAX_LAYERS) {
+    setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
+    return;
+  }
+
+  stopPlayback();
+  const before = snapshot();
+
+  // Take the copies before the list changes, so every source still sits at
+  // the index it had.
+  const copies = [];
+  for (let offset = 0; offset < count; offset += 1) {
+    const source = project.layers[index + offset];
+    const copy = structuredClone(source);
+    copy.name = `${source.name} copy`;
+    copies.push({ source: index + offset, layer: copy });
+  }
+
+  // Put the copies in from the bottom of the block up, all at the same
+  // place after the block. Each insert pushes the copies already there to
+  // the right, which leaves the copies in their original order.
+  const at = index + count;
+  for (let offset = copies.length - 1; offset >= 0; offset -= 1) {
+    const { source, layer: copy } = copies[offset];
+    insertLayer(project, at, copy, project.layers[source].parent ?? -1);
+  }
+
+  // The parent numbers of the copies pointed at the originals. A parent
+  // that is part of the copied block now points at its copy instead.
+  for (let offset = 0; offset < copies.length; offset += 1) {
+    const { source, layer: copy } = copies[offset];
+    const parent = project.layers[source].parent ?? -1;
+    copy.parent =
+      parent >= index && parent < index + count
+        ? at + (parent - index)
+        : parent;
+    syncTrackCel(project, at + offset);
+  }
+
+  project.currentLayer = at;
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(`Duplicated ${layer.name}`);
 }
 
 /**
@@ -4799,7 +4999,10 @@ function removeGroup() {
   const firstChild = children.length ? (removed.get(children[0]) ?? 0) : 0;
   for (const child of children) {
     const at = removed.get(child);
-    if (at !== undefined) project.layers[at].parent = newParent;
+    if (at !== undefined) {
+      project.layers[at].parent = newParent;
+      syncTrackCel(project, at);
+    }
   }
   project.currentLayer = Math.min(firstChild, project.layers.length - 1);
   recordHistory(before);
@@ -4837,6 +5040,7 @@ function takeOutOfFolder() {
   if (!indexOf) return;
   const moved = indexOf.get(layer);
   project.layers[moved].parent = grandParent;
+  syncTrackCel(project, moved);
   project.currentLayer = moved;
 
   recordHistory(before);
@@ -4939,6 +5143,17 @@ function moveLayer(delta) {
 let layerDrag = null;
 
 /**
+ * A press that may become a drag.
+ *
+ * A click on a row selects the layer, so a press is not a drag yet: the
+ * pointer has to travel a few pixels before the row is picked up. Without
+ * that, the tiny movement of an ordinary click was enough to drop the layer
+ * on the row beside it, and the layer the artist clicked jumped away.
+ */
+let pendingLayerDrag = null;
+const LAYER_DRAG_THRESHOLD = 4;
+
+/**
  * Move a layer to a new place in the list.
  *
  * The list is drawn top first, so a smaller index is a higher layer. A
@@ -4970,6 +5185,9 @@ function reorderLayer(from, to) {
   project.layers[moved].parent = intoFolder
     ? (indexOf.get(target) ?? -1)
     : (target.parent ?? -1);
+  // A folder that moved into or out of an animation folder gains or drops
+  // the cel it shows on the track.
+  syncTrackCel(project, moved);
 
   project.currentLayer = moved;
   recordHistory(before);
@@ -4993,15 +5211,36 @@ function startLayerDrag(event, index, rows = null) {
   const list = rows ?? [...timelineEl.querySelectorAll(".tl-row[data-layer]")];
   if (list.length < 2) return;
 
-  layerDrag = { index, rows: list, target: index };
+  pendingLayerDrag = {
+    index,
+    rows: list,
+    startX: event.clientX,
+    startY: event.clientY,
+  };
   event.preventDefault();
   window.addEventListener("pointermove", onLayerDragMove);
   window.addEventListener("pointerup", onLayerDragEnd, { once: true });
   window.addEventListener("pointercancel", onLayerDragEnd, { once: true });
 }
 
-/** Work out which row the pointer is over and mark it. */
+/**
+ * Work out which row the pointer is over and mark it.
+ *
+ * The press only becomes a drag once the pointer has travelled far enough
+ * that it cannot be a click, so selecting a layer never moves it.
+ */
 function onLayerDragMove(event) {
+  if (pendingLayerDrag && !layerDrag) {
+    const dx = event.clientX - pendingLayerDrag.startX;
+    const dy = event.clientY - pendingLayerDrag.startY;
+    if (Math.hypot(dx, dy) < LAYER_DRAG_THRESHOLD) return;
+    layerDrag = { ...pendingLayerDrag, target: pendingLayerDrag.index };
+    for (const row of layerDrag.rows) {
+      if (Number(row.dataset.layer) === layerDrag.index) {
+        row.classList.add("dragging");
+      }
+    }
+  }
   if (!layerDrag) return;
   const y = event.clientY;
   let target = layerDrag.index;
@@ -5027,11 +5266,18 @@ function onLayerDragMove(event) {
 /** Finish the drag and move the layer if it went somewhere else. */
 function onLayerDragEnd() {
   window.removeEventListener("pointermove", onLayerDragMove);
-  if (!layerDrag) return;
-  const { index, target, rows } = layerDrag;
+  const drag = layerDrag;
+  const press = pendingLayerDrag;
   layerDrag = null;
-  for (const row of rows) row.classList.remove("drop-target");
-  reorderLayer(index, target);
+  pendingLayerDrag = null;
+  // A press that never became a drag is a click: the row's click handler
+  // selects the layer, and nothing is moved.
+  if (!drag) {
+    for (const row of press?.rows ?? []) row.classList.remove("dragging");
+    return;
+  }
+  for (const row of drag.rows) row.classList.remove("drop-target", "dragging");
+  reorderLayer(drag.index, drag.target);
 }
 
 function addDrawing() {
@@ -7312,6 +7558,8 @@ layerDownButton.addEventListener("click", () => moveLayer(1));
 /* The layers panel does the same things as the toolbar of the timeline. */
 panelAddLayerButton.addEventListener("click", addLayer);
 panelAddFolderButton.addEventListener("click", addGroup);
+panelAddAnimationFolderButton.addEventListener("click", addAnimationFolder);
+panelDuplicateLayerButton.addEventListener("click", duplicateLayer);
 panelDeleteLayerButton.addEventListener("click", deleteLayer);
 panelLayerUpButton.addEventListener("click", () => moveLayer(-1));
 panelLayerDownButton.addEventListener("click", () => moveLayer(1));
@@ -7406,7 +7654,7 @@ menuOnion.addEventListener("change", () => {
 });
 menuAddFolder.addEventListener("click", () => {
   closeMenus();
-  addGroup();
+  addAnimationFolder();
 });
 menuFirstFrame.addEventListener("click", () => {
   closeMenus();

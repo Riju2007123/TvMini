@@ -24,6 +24,24 @@ export function isGroup(layer) {
   return layer?.type === "group";
 }
 
+/**
+ * An animation folder is a track of the timeline, the way Clip Studio Paint
+ * shows one: the folder is the row, its children are the cels, and the cells
+ * on the row are the cels.
+ */
+export function isAnimationFolder(layer) {
+  return isGroup(layer) && layer.animationFolder === true;
+}
+
+/**
+ * Whether a layer sits inside an animation folder: a cel of its track, or a
+ * layer inside such a cel. The layer palette holds these layers; the
+ * timeline shows only the row of the track they belong to.
+ */
+export function insideAnimationFolder(project, index) {
+  return ancestorsOf(project, index).some((at) => isAnimationFolder(project.layers[at]));
+}
+
 /** A guide layer is visible while authoring but skipped during render/export. */
 export function isGuide(layer) {
   return layer?.type === "guide";

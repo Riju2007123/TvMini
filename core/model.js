@@ -695,6 +695,11 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   // folder is the layer the camera track hangs on, so that an imported
   // document gets its camera layer back on export.
   const camera = value.camera === true && type === "group";
+  // A folder can be an animation folder: a track of the timeline whose
+  // children are its cels, the way Clip Studio Paint shows one. The flag
+  // keeps a document that was imported from Clip Studio Paint a timeline of
+  // tracks instead of a timeline of every layer inside every cel.
+  const animationFolder = value.animationFolder === true && type === "group";
   // A layer that came from a Clip Studio document keeps the uuid of that
   // document, so that the track of the layer can be found again when the
   // project is written back out.
@@ -823,6 +828,7 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
     ...(color ? { color } : {}),
     ...(outlineMode ? { outlineMode: true } : {}),
     ...(camera ? { camera: true } : {}),
+    ...(animationFolder ? { animationFolder: true } : {}),
     ...(uuid ? { uuid } : {}),
     ...(transform ? { transform } : {}),
     visible,

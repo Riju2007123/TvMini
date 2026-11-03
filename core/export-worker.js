@@ -12,7 +12,11 @@ import { createClipBuffer, clipExportScale } from "./clip-write.js";
 
 self.onmessage = async ({ data }) => {
   try {
-    const scale = data.scale ?? clipExportScale(data.project.width, data.project.height);
+    const scale =
+      data.scale ??
+      clipExportScale(data.project.width, data.project.height, {
+        pasteboard: data.project.pasteboard !== false,
+      });
     const built = await createClipBuffer(data.project, {
       name: data.name,
       animation: data.animation ?? null,

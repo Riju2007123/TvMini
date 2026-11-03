@@ -620,7 +620,11 @@ function createBrowserBackend(hooks) {
       skeletons.push(true);
       // The layers of a `.clip` are pictures, and Clip Studio Paint fits a
       // small canvas to its window, so they are painted larger than the stage.
-      const scale = clipExportScale(project.width, project.height);
+      // A document that came from a .clip is measured on its own canvas: it
+      // is written back at the resolution it was made in.
+      const scale = clipExportScale(project.width, project.height, {
+        pasteboard: project.pasteboard !== false,
+      });
       // When the browser would not show the dialog, the file goes the way of
       // the download instead; the status bar is told why at the same point
       // it is normally told that the building has begun.
