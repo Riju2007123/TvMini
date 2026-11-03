@@ -4742,13 +4742,97 @@ function syncLayerControls() {
   syncCameraControls();
 }
 
+/**
+ * The frame of the cel the track of a layer shows.
+ *
+ * Clicking a layer in the palette selects its track, and the playhead goes
+ * to a cel of that track, the way Clip Studio Paint puts the playhead on
+ * the cel of the track that was chosen. A frame the track already shows a
+ * picture on is kept, so the artist stays where they are; a frame in a gap
+ * goes to the cel nearest to it - the earlier one when two are equally
+ * near. A layer with no cel leaves the playhead alone.
+ */
+function nearestCelFrame(project, index, frame) {
+  const layer = project.layers[index];
+  if (!layer) return frame;
+
+  let covered;
+  let starts;
+  if (isGroup(layer)) {
+    const cells = folderCells(project, index);
+    if (!cells.size) return frame;
+    covered = (at) => cells.has(at);
+    starts = [...cells.keys()];
+  } else {
+    const drawings = layer.drawings ?? [];
+    if (!drawings.length) return frame;
+    covered = (at) =>
+      drawings.some(
+        (drawing) => at >= drawing.at && at < drawing.at + Math.max(1, drawing.hold ?? 1),
+      );
+    starts = drawings.map((drawing) => drawing.at);
+  }
+  if (covered(frame)) return frame;
+
+  let best = null;
+  for (const at of starts) {
+    if (best === null) {
+      best = at;
+      continue;
+    }
+    const near = Math.abs(at - frame) < Math.abs(best - frame);
+    const tie = Math.abs(at - frame) === Math.abs(best - frame) && at < best;
+    if (near || tie) best = at;
+  }
+  return best;
+}
+
+/**
+ * Keep the column of the playhead inside the pane.
+ *
+ * A frame that was reached by choosing a layer can sit past the edge of the
+ * timeline, where the artist would not see where the playhead went.
+ */
+function revealPlayhead() {
+  const scroll = timelineEl.closest(".timeline-scroll");
+  if (!scroll) return;
+  const project = state.project;
+  const column = project.currentFrame - project.startFrame;
+  const cell = timelineCellWidth();
+  const head =
+    parseFloat(getComputedStyle(timelineEl).getPropertyValue("--tl-head-w")) || 0;
+  const left = head + column * cell;
+  const right = left + cell;
+  if (left < scroll.scrollLeft + head) {
+    scroll.scrollLeft = Math.max(0, left - head);
+  } else if (right > scroll.scrollLeft + scroll.clientWidth) {
+    scroll.scrollLeft = right - scroll.clientWidth;
+  }
+}
+
 function selectLayer(index) {
   stopPlayback();
-  state.project.currentLayer = index;
+  const project = state.project;
+  project.currentLayer = index;
+  // The frame follows the cel of the layer that was chosen, the way Clip
+  // Studio Paint moves the playhead onto the track that was selected.
+  const frame = Math.min(
+    MAX_FRAME,
+    Math.max(project.startFrame, nearestCelFrame(project, index, project.currentFrame)),
+  );
+  const moved = frame !== project.currentFrame;
+  if (moved) project.currentFrame = frame;
   updatePlayhead();
   syncLayerControls();
   renderLayerPanel();
-  setStatus(`Layer ${index + 1}: ${currentLayer().name}`);
+  if (moved) {
+    updateFrameLabel();
+    renderCanvas();
+    revealPlayhead();
+    setStatus(`Layer ${index + 1}: ${currentLayer().name} — frame ${frame}`);
+  } else {
+    setStatus(`Layer ${index + 1}: ${currentLayer().name}`);
+  }
 }
 
 function selectFrame(frame, layerIndex) {
