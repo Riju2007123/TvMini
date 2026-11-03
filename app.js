@@ -4428,6 +4428,13 @@ function renderLayerPanel() {
   layerTreeEl.replaceChildren();
 
   for (const index of layerTree(project)) {
+    // A folder that is closed hides the layers inside it, the way the
+    // timeline hides the rows of a closed folder.
+    const hidden = ancestorsOf(project, index).some((at) =>
+      state.collapsed.has(project.layers[at].name),
+    );
+    if (hidden) continue;
+
     const layer = project.layers[index];
     const folder = isGroup(layer);
     const depth = layerDepth(project, index);
