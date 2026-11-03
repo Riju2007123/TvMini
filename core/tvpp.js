@@ -37,23 +37,28 @@
  * length][zlib bytes]. The blocks carry the wrapped chunk deflated, 64 KiB
  * of it at a time, and read back by inflating and joining.
  *
- * Small `SRAW` stubs are directives:
+ * Small `SRAW` stubs are directives (the [6][1][0] repeat stub verified
+ * byte-for-byte against a real TVPaint document):
  *   body words [6][1][0]       -> frame repeats the previous frame's image
  *   body words [2][0][b]       -> frame reuses history image number b
- *   body words [5][0][0][0][0] -> explicitly empty frame
+ *   body words [5][0][0][0][0] -> explicitly empty frame (legacy; real
+ *          files write a full DBOD of transparent pixels instead, which
+ *          is what this writer emits for blank frames)
  * Full image payloads:
  *   DBOD = a PackBits-32 stream of w*h BGRA *premultiplied* pixels in
  *          row-major frame order (runs may cross 64x64 tile borders).
  *   SRAW = [BE32 x][BE32 thumbLen][thumb bytes][BE32 tileCount] then per
  *          tile [BE32 len] + (len ? PackBits tile data : [BE32 sel]
  *          [BE32 index]) where sel=0 reuses tile `index` of this same
- *          image and sel=1 of the previous image.
+ *          image and sel=1 of the previous image. The tile records walk
+ *          to exactly the chunk end.
  * PackBits-32 codes: 0..127 = literal run of n+1 pixels (4 bytes each);
  * 129..255 = repeat one pixel 257-n times; 128 = skip. Pixels are BGRA.
  * LRHD layer header (26 BE32 words), the ones we use:
- *   [1]=first frame [2]=last frame [3]=frame count [4]=opacity*255
- *   [7]&1=layer hidden [11]=post*65536+pre (none 0, repeat 1, hold 3)
- *   [15]=blend code (we write 0, "Color") [16]=65537
+ *   [1]=first frame (0-based) [2]=last frame [3]=frame count
+ *   [4]=opacity*255 [7]=32, +1 when hidden [11]=post*65536+pre
+ *   (none 0, repeat 1, hold 3) [15]=blend code (we write 0, "Color")
+ *   [16]=0 (real files carry 0 here)
  */
 
 import { Buffer } from "./bytes.js";
@@ -64,6 +69,147 @@ import { createLayer, createProject, normalizeProject } from "./model.js";
 const TVPP_TILE = 64;
 const TVPP_BLOCK = 65536;
 const FORMAT_TVPP = "TVPP";
+
+/**
+ * The settings text TVPaint closes every document with, copied verbatim
+ * from a real TVPaint 11.0.8 save. The writer emits it as the final FCFG
+ * chunk so a written file ends the way TVPaint's own files end.
+ */
+const TVPP_FCFG_TEMPLATE = `\ufeff[Info]
+creationversion=TVP Animation 11 Pro (11.0.8-64 bits) en
+userinfo3=2026:06:29 17:50:04
+creationbuild=Nov  2 2017
+lastchangeversion=TVP Animation 11 Pro (11.0.8-64 bits) en
+creationdate=2026:06:29 17:50:04
+creationos=WIN64
+creationhost=TVP Animation 11 Pro (11.0)
+lastchangedate=2026:07:01 17:26:33
+
+[GUIObjectColors]
+imagemarkdisplayed00=0
+imagemarkdisplayed01=1
+imagemarkdisplayed02=0
+imagemarkdisplayed03=0
+imagemarkdisplayed04=0
+imagemarkdisplayed05=0
+imagemarkdisplayed10=0
+imagemarkdisplayed06=0
+imagemarkdisplayed11=0
+imagemarkdisplayed07=0
+imagemarkdisplayed12=0
+imagemarkdisplayed08=0
+imagemarkdisplayed09=0
+protected10=0
+protected11=0
+protected12=0
+layergroupdisplayed00=1
+layergroupdisplayed01=0
+layergroupdisplayed02=0
+layergroupdisplayed03=0
+layergroupdisplayed04=0
+layergroupdisplayed05=0
+layergroupdisplayed06=0
+layergroupdisplayed07=0
+layergroupdisplayed08=0
+layergroupdisplayed09=0
+color00=49 49 54 255
+color01=167 55 55 255
+color02=195 115 40 255
+color03=214 183 22 255
+layergroupdisplayed10=0
+color04=165 179 57 255
+layergroupdisplayed11=0
+color05=82 157 79 255
+layergroupdisplayed12=0
+color06=71 142 165 255
+color07=64 103 172 255
+color08=60 49 187 255
+color09=108 66 170 255
+name00=Default
+name01=Red
+name02=Orange
+name03=Yellow
+name04=Light Green
+name05=Green
+visibility00=1
+name06=Light Blue
+visibility01=1
+name07=Blue
+visibility02=1
+name08=Dark Blue
+visibility03=1
+name09=Purple
+visibility04=1
+visibility05=1
+visibility10=1
+visibility06=1
+visibility11=1
+visibility07=1
+visibility12=1
+visibility08=1
+visibility09=1
+color10=161 75 140 255
+color11=111 29 108 255
+color12=255 255 255 255
+protected00=0
+protected01=0
+protected02=0
+protected03=0
+protected04=0
+protected05=0
+protected06=0
+protected07=0
+protected08=0
+protected09=0
+name10=Pink
+name11=Dark Pink
+name12=White
+
+[XSheet]
+showxsheetonly=0
+
+[AUDIO]
+volume=1
+annotation.count=0
+mute=0
+trackcount=0
+disclosed=0
+
+[Guideline]
+snap=1
+count=0
+visible=1
+
+[Layers]
+attenuation=0.2
+attenuationactivate=0
+
+[LayersScribbles]
+checkboardvalue1=0.1
+checkboardvalue2=-0.1
+
+[TimelineNotes]
+lock=0
+playerdisplayoffset=1
+displayproject=0
+displaypreview=0
+playerdisplaysize=0.5
+playerdisplaymode=1
+
+[CameraData]
+mprofile_prof_point0=0 0
+mprofile_prof_point1=1 1
+mprofile_prof_numpoint=2
+meditedpoint=-1
+mprofile_prof_name=Preset
+mmotionblur=0
+mprofile_prof_current=0
+pathcount=0
+mmode=2
+mprofile_prof_linear=1
+mlockall=0
+
+`;
 
 const GUID_PROJECT = "3384780ebc4011d785af00105aafaaab";
 const GUID_META = "3385553abc4011d79e7c00105aafaaab";
@@ -260,17 +406,14 @@ function tvppSameChunk() {
   return Buffer.from(head);
 }
 
-/** [SRAW][20][5][0][0][0][0] — this frame is empty. */
-function tvppEmptyChunk() {
-  const head = [];
-  asciiInto(head, "SRAW");
-  be32(head, 20);
-  be32(head, 5);
-  be32(head, 0);
-  be32(head, 0);
-  be32(head, 0);
-  be32(head, 0);
-  return Buffer.from(head);
+/** A UUID the way TVPaint lists them in LEXT. */
+function tvppUuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const hex = (digits) =>
+    Math.floor(Math.random() * 16 ** digits)
+      .toString(16)
+      .padStart(digits, "0");
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${hex(1)[0] === "8" ? "8" : "9"}${hex(3)}-${hex(12)}`;
 }
 
 function isBlankRgba(rgba) {
@@ -310,11 +453,15 @@ function tvppLayerChunks(project, layer, first, last) {
   words[2] = last - 1;
   words[3] = last - first + 1;
   words[4] = Math.min(255, Math.max(0, Math.round(layer.opacity * 255)));
-  words[7] = layer.visible === false ? 1 : 0;
+  // TVPaint writes 32 here on every layer we have inspected (bit 5 set);
+  // the low bit is the hidden flag, so a hidden layer carries 33.
+  words[7] = layer.visible === false ? 33 : 32;
   words[11] = behaviorCode(layer.postBehavior) * 65536 + behaviorCode(layer.preBehavior);
   words[13] = 1;
   words[15] = 0; // blend code: TVPaint "Color"
-  words[16] = 65537;
+  // Real TVPaint layers carry 0 here; a 65537 written here once made it
+  // open files with every picture scattered over the canvas.
+  words[16] = 0;
   const header = [];
   for (const word of words) be32(header, word);
   chunks.push(iffChunk("LRHD", Buffer.from(header)));
@@ -346,26 +493,27 @@ function tvppLayerChunks(project, layer, first, last) {
 
   // Emit chunks and collect the LEXT naming entries in one pass. Every
   // frame chunk leaves wrapped in a ZCHK, the way TVPaint writes them.
+  // A blank frame is a full DBOD of transparent pixels - the shape
+  // TVPaint itself writes for an erased frame - not a stub, which no
+  // real file contains.
   const iniEntries = [];
   let imageIndex = 0;
   plan.forEach((entry, position) => {
     if (entry.kind === "empty") {
-      chunks.push(tvppZchkChunk(tvppEmptyChunk()));
+      chunks.push(tvppZchkChunk(tvppDbodChunk(new Uint8Array(project.width * project.height * 4), project.width, project.height)));
     } else if (entry.kind === "same") {
       chunks.push(tvppZchkChunk(tvppSameChunk()));
     } else {
       chunks.push(tvppZchkChunk(tvppDbodChunk(entry.rgba, project.width, project.height)));
-      iniEntries.push(`${imageIndex}=${name}-c${first + position}`);
-      imageIndex += 1;
     }
+    iniEntries.push(`${position}=${tvppUuid()}`);
+    imageIndex += 1;
   });
 
   const ini =
-    "\ufeff[Images Name]\n" +
-    iniEntries.join("\n") +
-    "\n\n[Images Auid]\n" +
-    Array.from({ length: imageIndex }, (_, index) => `${index}=tvmini-${index}`).join("\n") +
-    "\n\n";
+    "\ufeff[Images Auid]\n" +
+    iniEntries.map((entry) => `${entry}\n`).join("") +
+    "\n";
   chunks.push(iffChunk("LEXT", Buffer.from(ini, "utf8")));
 
   // UDAT node: one frame-record node per frame in this layer's range.
@@ -437,7 +585,13 @@ export function createTvppBuffer(project) {
 
   pushChunk("CRLR", Buffer.from([0, 0, 0, 0]));
   pushChunk("BGP1", Buffer.from([255, 255, 255, 255]));
-  pushChunk("BGP2", Buffer.from([240, 240, 240, 255]));
+  // The second background color, the value real files carry.
+  pushChunk("BGP2", Buffer.from([233, 233, 233, 255]));
+  // The project's Info text, present in every real file.
+  pushChunk(
+    "ANNO",
+    Buffer.from("TVPaint opens doors to your imagination. \0", "latin1"),
+  );
 
   const frat = [];
   be32(frat, Math.round(project.fps * 1000));
@@ -482,8 +636,11 @@ export function createTvppBuffer(project) {
     media.push(...tvppLayerChunks(project, layer, first, last));
   }
 
-  pushChunk("STCK", Buffer.from("\ufeff[stack]\ncount=0\n\n", "utf8"));
-  pushChunk("XSRC", Buffer.from("\ufeff[xsheet sources]\ncount=0\n\n", "utf8"));
+  pushChunk("STCK", Buffer.from("\ufeff[Stack]\ncount=0\n\n", "utf8"));
+  pushChunk("XSRC", Buffer.from("\ufeff[XSheet Sources]\ncount=0\n\n", "utf8"));
+  // The settings text real TVPaint saves close every file with; copied
+  // verbatim from a real document so the shape TVPaint expects is exact.
+  pushChunk("FCFG", Buffer.from(TVPP_FCFG_TEMPLATE, "utf8"));
 
   const mediaBody = Buffer.concat(media);
   const mediaChunk = iffChunk("FORM", mediaBody);
@@ -495,7 +652,7 @@ export function createTvppBuffer(project) {
     ["PixelAspectRatio", "1.000000"],
     ["FieldOrder", "0"],
     ["StartFrame", "1"],
-    ["UniqueID", projectMetaId()],
+    ["UniqueID", tvppUuid()],
     ["Shots", "1"],
     ["Drawings", String(exported)],
     ["Name", "TVMini project"],
@@ -518,11 +675,6 @@ export function createTvppBuffer(project) {
   ]);
 
   const shot = stringRecords([["Name", "TVMini project"], ["Drawings", "1"]]);
-
-  function projectMetaId() {
-    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-    return `tvmini-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-  }
 
   return node(GUID_PROJECT, [
     node(GUID_META, [meta]),
