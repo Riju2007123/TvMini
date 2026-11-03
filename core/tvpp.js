@@ -803,7 +803,32 @@ export function readTvpp(input) {
     }
   }
 
+  normalizeFrameBase();
   return { meta, width, height, fps, _buf: buf, warnings: [], layers };
+
+  /**
+   * Lift every frame number into our 1-based timeline.
+   *
+   * TVPaint numbers frames from the document's own first frame, and a
+   * document can begin at frame 0 — this one does (meta StartFrame 0, and
+   * a layer header that says first frame 0). Our timeline starts at 1, so
+   * every number is lifted by the base the document and its layers agree
+   * on: the smallest first frame among the layers that carry images, or
+   * the meta StartFrame when it is smaller still.
+   */
+  function normalizeFrameBase() {
+    const metaStart = Number(meta.StartFrame);
+    let base = Number.isFinite(metaStart) ? metaStart : null;
+    for (const layer of layers) {
+      if (!layer.frames.length) continue;
+      base = base === null ? layer.start : Math.min(base, layer.start);
+    }
+    if (base === null) return;
+    for (const layer of layers) {
+      layer.start = layer.start - base + 1;
+      layer.last = layer.last - base + 1;
+    }
+  }
 }
 
 /**
