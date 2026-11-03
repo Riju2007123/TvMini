@@ -25,12 +25,19 @@
  *   DGBL DPEL DLOC BGMD ARAT CRLR BGP1 BGP2 FRAT FILD MARK XSHT TLNT
  *   per layer: LNAM LNAW LRHD <frame chunks...> LEXT UDAT  then STCK XSRC.
  *
- * Frame chunks: images appear either as `ZCHK` wrappers around
- * `DBOD`/`SRAW`, or — in files saved without compression — as bare
- * `DBOD`/`SRAW` chunks. Both decode identically: the image payload always
- * starts with [4CC][BE32 payloadSize] followed by the data, so the
- * unwrapped `ZCHK` content and a bare chunk have the same shape. Small
- * `SRAW` stubs are directives:
+ * Frame chunks: every frame chunk TVPaint 11 writes is a `ZCHK` wrapper
+ * around a `DBOD`/`SRAW` chunk; files saved without compression carry the
+ * bare `DBOD`/`SRAW` chunks instead, and we read both. The writer wraps
+ * every frame in a `ZCHK`, because TVPaint 11 scatters the picture of a
+ * bare chunk across the canvas.
+ *
+ * A `ZCHK` body holds the wrapped chunk - [4CC][BE32 size][body] - followed
+ * by the `czmp` mark, the size of the block section, the block count, and
+ * one record per block: [BE32 100][BE32 inflated length][BE32 packed
+ * length][zlib bytes]. The blocks carry the wrapped chunk deflated, 64 KiB
+ * of it at a time, and read back by inflating and joining.
+ *
+ * Small `SRAW` stubs are directives:
  *   body words [6][1][0]       -> frame repeats the previous frame's image
  *   body words [2][0][b]       -> frame reuses history image number b
  *   body words [5][0][0][0][0] -> explicitly empty frame
@@ -50,11 +57,12 @@
  */
 
 import { Buffer } from "./bytes.js";
-import { inflateSync } from "./zlib.js";
+import { inflateSync, deflateSync } from "./zlib.js";
 import { encodeRgbaPng, renderDrawingRgba } from "./png.js";
 import { createLayer, createProject, normalizeProject } from "./model.js";
 
 const TVPP_TILE = 64;
+const TVPP_BLOCK = 65536;
 const FORMAT_TVPP = "TVPP";
 
 const GUID_PROJECT = "3384780ebc4011d785af00105aafaaab";
@@ -202,6 +210,45 @@ function tvppDbodChunk(rgba, width, height) {
   return out;
 }
 
+/**
+ * Wrap a frame chunk the way TVPaint writes them: a `ZCHK` whose blocks
+ * carry the whole chunk deflated, 64 KiB at a time.
+ *
+ * The body keeps the shape of the wrapped chunk itself - [tag][BE32 size]
+ * [body] - followed by the `czmp` mark, the size of the block section, the
+ * block count, and one record per block: [BE32 100][BE32 inflated length]
+ * [BE32 packed length][zlib bytes]. Read back, the blocks simply inflate
+ * and join into the chunk again. TVPaint 11 opens a file whose frames are
+ * bare chunks with its picture scattered across the canvas; wrapped this
+ * way it reads every frame where it belongs.
+ */
+function tvppZchkChunk(chunk) {
+  const blocks = [];
+  for (let at = 0; at < chunk.length; at += TVPP_BLOCK) {
+    const piece = chunk.subarray(at, Math.min(at + TVPP_BLOCK, chunk.length));
+    blocks.push([piece.length, deflateSync(piece, { level: 6 })]);
+  }
+  const recordsLen = blocks.reduce((sum, [, packed]) => sum + 12 + packed.length, 0);
+  const body = Buffer.alloc(20 + recordsLen);
+  chunk.copy(body, 0); // the inner [tag][BE32 size] of the wrapped chunk
+  body.write("czmp", 8, "ascii");
+  body.writeUInt32BE(12 + recordsLen, 12);
+  body.writeUInt32BE(blocks.length, 16);
+  let at = 20;
+  for (const [inflated, packed] of blocks) {
+    body.writeUInt32BE(100, at);
+    body.writeUInt32BE(inflated, at + 4);
+    body.writeUInt32BE(packed.length, at + 8);
+    packed.copy(body, at + 12);
+    at += 12 + packed.length;
+  }
+  const out = Buffer.alloc(8 + body.length + (body.length % 2));
+  out.write("ZCHK", 0, "ascii");
+  out.writeUInt32BE(body.length, 4);
+  body.copy(out, 8);
+  return out;
+}
+
 /** [SRAW][12][6][1][0] — repeat the previous frame's image. */
 function tvppSameChunk() {
   const head = [];
@@ -255,8 +302,12 @@ function tvppLayerChunks(project, layer, first, last) {
 
   const words = new Array(26).fill(0);
   words[0] = 1;
-  words[1] = first;
-  words[2] = last;
+  // TVPaint counts frames from 0 in the header: a real document of one
+  // frame carries first 0 and last 0, and a layer written with first 1
+  // shows its cel one frame late. The names of the cells stay counted
+  // from 1, as TVPaint names them.
+  words[1] = first - 1;
+  words[2] = last - 1;
   words[3] = last - first + 1;
   words[4] = Math.min(255, Math.max(0, Math.round(layer.opacity * 255)));
   words[7] = layer.visible === false ? 1 : 0;
@@ -293,16 +344,17 @@ function tvppLayerChunks(project, layer, first, last) {
     }
   }
 
-  // Emit chunks and collect the LEXT naming entries in one pass.
+  // Emit chunks and collect the LEXT naming entries in one pass. Every
+  // frame chunk leaves wrapped in a ZCHK, the way TVPaint writes them.
   const iniEntries = [];
   let imageIndex = 0;
   plan.forEach((entry, position) => {
     if (entry.kind === "empty") {
-      chunks.push(tvppEmptyChunk());
+      chunks.push(tvppZchkChunk(tvppEmptyChunk()));
     } else if (entry.kind === "same") {
-      chunks.push(tvppSameChunk());
+      chunks.push(tvppZchkChunk(tvppSameChunk()));
     } else {
-      chunks.push(tvppDbodChunk(entry.rgba, project.width, project.height));
+      chunks.push(tvppZchkChunk(tvppDbodChunk(entry.rgba, project.width, project.height)));
       iniEntries.push(`${imageIndex}=${name}-c${first + position}`);
       imageIndex += 1;
     }
@@ -328,12 +380,13 @@ function tvppLayerChunks(project, layer, first, last) {
 /**
  * Export a validated project as a `.tvpp` byte buffer.
  *
- * INFERRED for real TVPaint: images are written uncompressed (bare DBOD
- * chunks — a variant real files contain when the save options disable
- * compression), and optional chunks we do not model (ANNO, camera entries
- * in FCFG, audio refs, TLNT tail room) are simply omitted. TVPaint reads
- * compressed `ZCHK` files and bare files alike, but this needs one round
- * trip through real TVPaint before we claim full fidelity.
+ * Frames are written the way TVPaint 11 writes them: every frame chunk
+ * wrapped in a `ZCHK` of deflated 64 KiB blocks, proven against a real
+ * TVPaint 11.0.8 document (read back there with every pixel in place).
+ * Bare `DBOD`/`SRAW` chunks — the variant files saved without compression
+ * contain — are still read, for compatibility. Optional chunks we do not
+ * model (ANNO, camera entries in FCFG, audio refs, TLNT tail room) are
+ * simply omitted.
  *
  * Folders are left behind — a .tvpp has no folders — and every drawing
  * layer is written, even one with no drawing yet: it comes back as a
