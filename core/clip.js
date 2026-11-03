@@ -174,8 +174,9 @@ function pngDimensions(bytes) {
  * is cut away, the way Clip Studio Paint draws it. Scaling it would move
  * every stroke of the layer and squash it.
  *
- * A layer sits at the place its own offset says, and the part of the picture
- * that the offset pushes out of the canvas is cut away with it.
+ * The buffer is placed at the canvas origin: the tiles of a layer sit in
+ * canvas coordinates already, and the part of a buffer that reaches past
+ * the canvas is cut away.
  */
 function placeRgba(source, sourceWidth, sourceHeight, width, height, offsetX = 0, offsetY = 0) {
   if (offsetX === 0 && offsetY === 0 && sourceWidth === width && sourceHeight === height) {
@@ -316,6 +317,12 @@ export function clipToProject(document, layers, fallback = {}) {
    * second to say "nothing is here". The compression runs at the fast
    * level, because the picture is kept in memory rather than hung on a
    * wall; the next save of the project carries it as it is.
+   *
+   * The tiles sit in canvas coordinates already: the layer's own offset
+   * and the offscreen render offset of the document always cancel each
+   * other out (one is the negative of the other), so placing the buffer at
+   * the layer offset would carry the picture away from where Clip Studio
+   * Paint draws it.
    */
   const picturesById = new Map();
   const pictureOf = (node) => {
@@ -324,15 +331,7 @@ export function clipToProject(document, layers, fallback = {}) {
     const raster = rasterById.get(id);
     let picture = null;
     if (raster && raster.pixels) {
-      const placed = placeRgba(
-        raster.pixels,
-        raster.width,
-        raster.height,
-        width,
-        height,
-        raster.offsetX ?? 0,
-        raster.offsetY ?? 0,
-      );
+      const placed = placeRgba(raster.pixels, raster.width, raster.height, width, height);
       let painted = false;
       for (let index = 3; index < placed.length; index += 4) {
         if (placed[index] !== 0) {
@@ -1159,9 +1158,10 @@ export async function readClipLayersFromBytes(data, { includePaper = false } = {
         name: String(layer.LayerName ?? ""),
         width: attribute.width,
         height: attribute.height,
-        // Where the picture sits on the canvas: the place of the layer
-        // itself. The offset of the layer's own buffer says where the layer
-        // was drawn from, not where its picture is.
+        // The offset columns of the document: the layer offset and the
+        // offscreen render offset always cancel each other out, so the
+        // tiles are already in canvas coordinates and nothing is placed
+        // with them. They are kept here only as evidence for inspection.
         offsetX: Number(layer.LayerOffsetX ?? 0),
         offsetY: Number(layer.LayerOffsetY ?? 0),
         tiles: records,
