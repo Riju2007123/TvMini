@@ -351,14 +351,25 @@ export function readTrackRange(document) {
  */
 export function celPlacementFromKeys(
   keys,
-  { frameRate = 30, tickRate = 60, startFrame = 1, endFrame = startFrame, endTick = null } = {},
+  { frameRate = 30, tickRate = 60, startFrame = 1, endFrame = startFrame, endTick = null, startTick = null } = {},
 ) {
   const placement = new Map();
   if (!keys?.length) return placement;
 
   const fps = Number(frameRate) > 0 ? Number(frameRate) : 30;
   const ticks = Number(tickRate) > 0 ? Number(tickRate) : 60;
-  const frameOf = (time) => startFrame + Math.round((Number(time) * fps) / ticks);
+  // The keys of a track are timed from its first key, and the track plays
+  // inside a clip of the timeline: the clip begins where the ruler says
+  // (clipRange.start), and the first cel is shown at that very frame. A
+  // track of the first clip begins at the first frame, which is why a
+  // document of one clip needs no shift at all.
+  const clipStart = Number.isFinite(Number(startTick)) ? Number(startTick) : 0;
+  const firstTime = Number(keys[0]?.time ?? 0) || 0;
+  const frameOf = (time) =>
+    startFrame + Math.round(((clipStart + (Number(time) - firstTime)) * fps) / ticks);
+  // The end of the clip is said in the time of the whole ruler, so it is
+  // turned into a frame without the shift of the keys.
+  const frameOfRuler = (time) => startFrame + Math.round((Number(time) * fps) / ticks);
 
   // Two keys can land on the same frame when the document plays slower than
   // its ticks. The later one is the cell that is left on screen.
@@ -381,7 +392,9 @@ export function celPlacementFromKeys(
   // longer than the frames the document plays), and what lies beyond the last
   // frame is never shown, so the hold stops at the timeline.
   const timelineStop = Number(endFrame) + 1;
-  const boundary = Number.isFinite(endTick) ? Math.min(frameOf(endTick), timelineStop) : timelineStop;
+  const boundary = Number.isFinite(endTick)
+    ? Math.min(frameOfRuler(endTick), timelineStop)
+    : timelineStop;
   const stop = Math.max(spots[spots.length - 1].frame + 1, boundary);
 
   for (let index = 0; index < spots.length; index += 1) {

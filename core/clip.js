@@ -269,6 +269,7 @@ export function clipToProject(document, layers, fallback = {}) {
         startFrame,
         endFrame,
         endTick: action.clipRange?.end,
+        startTick: action.clipRange?.start,
       }));
     } else if (action.celSequence?.length) {
       placementsByUuid.set(key, celPlacement(action.celSequence, startFrame));
