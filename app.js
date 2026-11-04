@@ -8465,7 +8465,7 @@ const importCancelledNames = new Set();
 function importProgressFromBackend(payload) {
   if (!payload) return;
   if (payload.start) {
-    showImportLoading(payload.name || "file", payload.phase || "Preparing files and artwork");
+    showImportLoading(payload.name || "file", payload.phase || "Preparing what you cooked");
     return;
   }
   if (payload.phase) setImportLoadingPhase(payload.phase);

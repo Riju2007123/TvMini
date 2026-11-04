@@ -165,14 +165,14 @@ function createServerBackend(hooks) {
     async chooseAndImportClip() {
       const path = await hooks.pickPath({ mode: "open", title: "Import .clip" });
       if (!path) return null;
-      const data = await announce(baseName(path), "Preparing files and artwork", () =>
+      const data = await announce(baseName(path), "Preparing what you cooked", () =>
         serverRequest("POST", "/api/import-clip", { path }),
       );
       return { name: data.name, path: data.path, project: data.project };
     },
 
     async importClip(path) {
-      const data = await announce(baseName(path), "Preparing files and artwork", () =>
+      const data = await announce(baseName(path), "Preparing what you cooked", () =>
         serverRequest("POST", "/api/import-clip", { path }),
       );
       return { name: data.name, path: data.path, project: data.project };
