@@ -1395,6 +1395,21 @@
       </div>
     </div>
 
+    <div id="importLoading" class="modal" hidden>
+      <div class="modal-card import-loading-card" role="dialog" aria-modal="true" aria-labelledby="importLoadingTitle">
+        <h2 id="importLoadingTitle">Loading Project</h2>
+        <div class="import-loading-file" id="importLoadingName"></div>
+        <div class="import-loading-phase" id="importLoadingPhase">Preparing files and artwork</div>
+        <div class="import-loading-bar">
+          <div class="import-loading-fill" id="importLoadingFill"></div>
+        </div>
+        <div class="import-loading-foot">
+          <button id="importLoadingCancel" class="import-loading-cancel" type="button">Cancel</button>
+          <div class="import-loading-percent" id="importLoadingPercent">0%</div>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="app.js"></script>
     <script type="module" src="shell.js"></script>
   </body>

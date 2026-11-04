@@ -114,9 +114,25 @@ async function serverRequest(method, endpoint, body) {
 }
 
 /**
- * @param {{pickPath: (options: {mode: string, title: string, name?: string}) => Promise<string|null>}} hooks
+ * @param {{pickPath: (options: {mode: string, title: string, name?: string}) => Promise<string|null>, importProgress?: (payload: object) => void}} hooks
  */
 function createServerBackend(hooks) {
+  // The loading window of an import: the UI is told when the work starts,
+  // which file it is on, and when it ends. The parsing itself happens on
+  // the server, so the window animates while it waits.
+  const progress = (payload) => {
+    try {
+      hooks.importProgress?.(payload);
+    } catch {
+      // A hiccup in the UI must not stop the import.
+    }
+  };
+  const announce = (name, phase, work) => {
+    progress({ start: true, name, phase });
+    return work().finally(() => progress({ done: true }));
+  };
+  /** The file name at the end of a server path, for the loading window. */
+  const baseName = (path) => String(path).split(/[\\/]/).pop() || String(path);
   return {
     mode: "server",
 
@@ -149,19 +165,25 @@ function createServerBackend(hooks) {
     async chooseAndImportClip() {
       const path = await hooks.pickPath({ mode: "open", title: "Import .clip" });
       if (!path) return null;
-      const data = await serverRequest("POST", "/api/import-clip", { path });
+      const data = await announce(baseName(path), "Preparing files and artwork", () =>
+        serverRequest("POST", "/api/import-clip", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project };
     },
 
     async importClip(path) {
-      const data = await serverRequest("POST", "/api/import-clip", { path });
+      const data = await announce(baseName(path), "Preparing files and artwork", () =>
+        serverRequest("POST", "/api/import-clip", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project };
     },
 
     async chooseAndImportTvpp() {
       const path = await hooks.pickPath({ mode: "open", title: "Import .tvpp (TVPaint)" });
       if (!path) return null;
-      const data = await serverRequest("POST", "/api/import-tvpp", { path });
+      const data = await announce(baseName(path), "Reading TVPaint frames", () =>
+        serverRequest("POST", "/api/import-tvpp", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
@@ -175,12 +197,16 @@ function createServerBackend(hooks) {
     async chooseAndImportFLA() {
       const path = await hooks.pickPath({ mode: "open", title: "Import .fla / .xfl (Flash)" });
       if (!path) return null;
-      const data = await serverRequest("POST", "/api/import-fla", { path });
+      const data = await announce(baseName(path), "Reading the Flash layers", () =>
+        serverRequest("POST", "/api/import-fla", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
     async importFl(path) {
-      const data = await serverRequest("POST", "/api/import-fla", { path });
+      const data = await announce(baseName(path), "Reading the Flash layers", () =>
+        serverRequest("POST", "/api/import-fla", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
@@ -192,7 +218,9 @@ function createServerBackend(hooks) {
     },
 
     async importTvpp(path) {
-      const data = await serverRequest("POST", "/api/import-tvpp", { path });
+      const data = await announce(baseName(path), "Reading TVPaint frames", () =>
+        serverRequest("POST", "/api/import-tvpp", { path }),
+      );
       return { name: data.name, path: data.path, project: data.project, warnings: data.warnings };
     },
 
@@ -458,6 +486,18 @@ function createBrowserBackend(hooks) {
   // of that file into the one it writes, and the timeline with them.
   let clipSourceBytes = null;
 
+  // The loading window of an import: the parsing happens here in the page,
+  // so the work is cut into stages with a breath between them and the
+  // window can say where the import is.
+  const progress = (payload) => {
+    try {
+      hooks.importProgress?.(payload);
+    } catch {
+      // A hiccup in the UI must not stop the import.
+    }
+  };
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 30));
+
   return {
     mode: "browser",
 
@@ -498,14 +538,23 @@ function createBrowserBackend(hooks) {
       const picked = await pickFile(".clip");
       if (!picked) return null;
       // The whole file comes in: the folders, the animation folders and the
-      // layers inside them, each carrying its own picture.
-      const [document, layers] = await Promise.all([
-        readClipDocumentFromBytes(picked.bytes),
-        readClipLayersFromBytes(picked.bytes, { includePaper: true }),
-      ]);
-      const project = clipToProject(document, layers);
-      clipSourceBytes = picked.bytes;
-      return { name: picked.name, path: picked.name, project };
+      // layers inside them, each carrying its own picture. The work runs in
+      // stages so the loading window can say where the import is.
+      progress({ start: true, name: picked.name, phase: "Reading the file" });
+      try {
+        await tick();
+        const clipDocument = await readClipDocumentFromBytes(picked.bytes);
+        progress({ phase: "Decoding the layers" });
+        await tick();
+        const layers = await readClipLayersFromBytes(picked.bytes, { includePaper: true });
+        progress({ phase: "Building the project" });
+        await tick();
+        const project = clipToProject(clipDocument, layers);
+        clipSourceBytes = picked.bytes;
+        return { name: picked.name, path: picked.name, project };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async importClip(name) {
@@ -517,8 +566,14 @@ function createBrowserBackend(hooks) {
     async chooseAndImportTvpp() {
       const picked = await pickFile(".tvpp");
       if (!picked) return null;
-      const imported = importTvppBytes(picked.bytes);
-      return { name: picked.name, path: picked.name, project: imported.project, warnings: imported.warnings };
+      progress({ start: true, name: picked.name, phase: "Reading TVPaint frames" });
+      try {
+        await tick();
+        const imported = importTvppBytes(picked.bytes);
+        return { name: picked.name, path: picked.name, project: imported.project, warnings: imported.warnings };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async importTvpp(name) {
@@ -538,28 +593,50 @@ function createBrowserBackend(hooks) {
      * only matters to the server backend.
      */
     async importClipDropped(_session, name, bytes) {
-      const [document, layers] = await Promise.all([
-        readClipDocumentFromBytes(bytes),
-        readClipLayersFromBytes(bytes, { includePaper: true }),
-      ]);
-      const project = clipToProject(document, layers);
-      clipSourceBytes = bytes;
-      return { name, path: name, project };
+      progress({ start: true, name: name || "file", phase: "Reading the file" });
+      try {
+        await tick();
+        const clipDocument = await readClipDocumentFromBytes(bytes);
+        progress({ phase: "Decoding the layers" });
+        await tick();
+        const layers = await readClipLayersFromBytes(bytes, { includePaper: true });
+        progress({ phase: "Building the project" });
+        await tick();
+        const project = clipToProject(clipDocument, layers);
+        clipSourceBytes = bytes;
+        return { name, path: name, project };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async importTvppDropped(_session, name, bytes) {
-      const imported = importTvppBytes(bytes);
-      return { name, path: name, project: imported.project, warnings: imported.warnings };
+      progress({ start: true, name: name || "file", phase: "Reading TVPaint frames" });
+      try {
+        await tick();
+        const imported = importTvppBytes(bytes);
+        return { name, path: name, project: imported.project, warnings: imported.warnings };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async importFlaDropped(_session, name, bytes) {
-      const parsed = parseFla(name || "untitled.fla", bytes);
-      return {
-        name,
-        path: name,
-        project: normalizeProject(parsed),
-        warnings: parsed.warnings ?? [],
-      };
+      progress({ start: true, name: name || "untitled.fla", phase: "Reading the Flash layers" });
+      try {
+        await tick();
+        const parsed = parseFla(name || "untitled.fla", bytes);
+        progress({ phase: "Building the project" });
+        await tick();
+        return {
+          name,
+          path: name,
+          project: normalizeProject(parsed),
+          warnings: parsed.warnings ?? [],
+        };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async importPicturesDropped(_session, files) {
@@ -703,14 +780,22 @@ function createBrowserBackend(hooks) {
       if (!picked) return null;
       const file = picked[0];
       if (!file) return null;
-      const parsed = parseFla(file.name || "untitled.fla", file.bytes);
-      // Same pipeline the server applies to `.clip` / `.tvpp` imports.
-      return {
-        name: file.name,
-        path: file.name,
-        project: normalizeProject(parsed),
-        warnings: parsed.warnings ?? [],
-      };
+      progress({ start: true, name: file.name || "untitled.fla", phase: "Reading the Flash layers" });
+      try {
+        await tick();
+        const parsed = parseFla(file.name || "untitled.fla", file.bytes);
+        progress({ phase: "Building the project" });
+        await tick();
+        // Same pipeline the server applies to `.clip` / `.tvpp` imports.
+        return {
+          name: file.name,
+          path: file.name,
+          project: normalizeProject(parsed),
+          warnings: parsed.warnings ?? [],
+        };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     async exportTvpp(project, stem, sourceName) {

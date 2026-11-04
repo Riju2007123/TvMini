@@ -3637,3 +3637,67 @@ input[type="range"] {
   gap: 14px;
   margin: 16px 0;
 }
+/* The loading window of an import: the file being read, the step the import
+   is on, a bar that fills as the work goes and a way out. */
+.import-loading-card {
+  width: min(460px, calc(100vw - 40px));
+  gap: 10px;
+}
+
+.import-loading-file {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-loading-phase {
+  font-size: 12px;
+  color: var(--accent-text);
+}
+
+.import-loading-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--seam-strong);
+  overflow: hidden;
+}
+
+.import-loading-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width 0.18s linear;
+}
+
+.import-loading-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.import-loading-percent {
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-loading-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 1px solid rgba(206, 82, 82, 0.55);
+  border-radius: 4px;
+  background: rgba(206, 82, 82, 0.24);
+  color: #f2c4c4;
+  cursor: pointer;
+}
+
+.import-loading-cancel:hover {
+  background: rgba(206, 82, 82, 0.36);
+}

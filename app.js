@@ -8446,6 +8446,97 @@ async function openPath(filePath, { discardConfirmed = false } = {}) {
   setStatus(`Opened ${baseName(data.name)}`);
 }
 
+/* ------------------------------------------------- the loading of an import */
+
+/**
+ * The loading window an import shows: the file being read, the step the
+ * import is on, a bar that fills while the work runs and a way out. The
+ * parsing itself cannot be interrupted, so Cancel hides the window and the
+ * finished import is simply not put on the canvas.
+ */
+let importLoading = null;
+// The names of imports the person cancelled while they were running. The
+// parsing keeps going underneath, so when the result arrives it is checked
+// against this list - keyed by name, because another import may have begun
+// in the meantime and its result must still be applied.
+const importCancelledNames = new Set();
+
+/** The backend reports the steps of an import; this shows them. */
+function importProgressFromBackend(payload) {
+  if (!payload) return;
+  if (payload.start) {
+    showImportLoading(payload.name || "file", payload.phase || "Preparing files and artwork");
+    return;
+  }
+  if (payload.phase) setImportLoadingPhase(payload.phase);
+  if (payload.done) finishImportLoading();
+}
+
+function showImportLoading(name, phase) {
+  const card = document.getElementById("importLoading");
+  document.getElementById("importLoadingName").textContent = name;
+  document.getElementById("importLoadingPhase").textContent = phase;
+  // Importing this file again is a decision of its own, not the cancelled
+  // one coming back.
+  importCancelledNames.delete(name);
+  if (importLoading) {
+    clearTimeout(importLoading.timer);
+    clearTimeout(importLoading.hideTimer);
+  }
+  importLoading = { name, percent: 0, timer: 0, hideTimer: 0 };
+  paintImportLoading();
+  document.getElementById("importLoadingCancel").onclick = () => {
+    if (!importLoading) return;
+    importCancelledNames.add(importLoading.name);
+    hideImportLoading();
+    setStatus("Import cancelled");
+  };
+  card.hidden = false;
+  // The bar walks toward the end while the work runs: an import of a few
+  // seconds reads as progress, and the last stretch fills when it is done.
+  const step = () => {
+    if (!importLoading) return;
+    importLoading.percent = Math.min(90, importLoading.percent + (92 - importLoading.percent) * 0.08);
+    paintImportLoading();
+    importLoading.timer = setTimeout(step, 120);
+  };
+  step();
+}
+
+function setImportLoadingPhase(text) {
+  if (!importLoading) return;
+  document.getElementById("importLoadingPhase").textContent = text;
+}
+
+function paintImportLoading() {
+  const percent = Math.round(importLoading?.percent ?? 0);
+  document.getElementById("importLoadingFill").style.width = `${percent}%`;
+  document.getElementById("importLoadingPercent").textContent = `${percent}%`;
+}
+
+function finishImportLoading() {
+  if (!importLoading) return;
+  clearTimeout(importLoading.timer);
+  importLoading.percent = 100;
+  paintImportLoading();
+  importLoading.hideTimer = setTimeout(() => hideImportLoading(), 240);
+}
+
+function hideImportLoading() {
+  if (!importLoading) return;
+  clearTimeout(importLoading.timer);
+  clearTimeout(importLoading.hideTimer);
+  document.getElementById("importLoading").hidden = true;
+  importLoading = null;
+}
+
+/** Was the import of this file cancelled while it ran? The answer is taken. */
+function importLoadingWasCancelled(name) {
+  if (!name || !importCancelledNames.has(name)) return false;
+  importCancelledNames.delete(name);
+  return true;
+}
+
 /** Put an imported .clip/.tvpp onto the canvas (shared by every import path). */
 function applyImportedProject(data, extension) {
   stopPlayback();
@@ -8478,20 +8569,20 @@ function applyImportedProject(data, extension) {
 
 async function importClip(filePath) {
   const data = await backend.importClip(filePath);
-  if (!data) return;
+  if (!data || importLoadingWasCancelled(data.name)) return;
   applyImportedProject(data, "clip");
 }
 
 async function chooseAndImportClip() {
   if (!confirmDiscard()) return;
   const data = await backend.chooseAndImportClip();
-  if (!data) return;
+  if (!data || importLoadingWasCancelled(data.name)) return;
   applyImportedProject(data, "clip");
 }
 
 async function importTvpp(filePath) {
   const data = await backend.importTvpp(filePath);
-  if (!data) return;
+  if (!data || importLoadingWasCancelled(data.name)) return;
   applyImportedProject(data, "tvpp");
 }
 
@@ -8521,7 +8612,7 @@ function applyImportedFla(data) {
 async function importFl(filePath) {
   try {
     const data = await backend.importFl(filePath);
-    if (data) applyImportedFla(data);
+    if (data && !importLoadingWasCancelled(data.name)) applyImportedFla(data);
   } catch (error) {
     setStatus(`FLA import failed: ${error instanceof Error ? error.message : String(error)}`, true);
     console.error("FLA import error", error);
@@ -8537,6 +8628,7 @@ async function chooseAndImportFLA() {
       setStatus("FLA import cancelled", true);
       return;
     }
+    if (importLoadingWasCancelled(data.name)) return;
     applyImportedFla(data);
   } catch (error) {
     setStatus(`FLA import failed: ${error instanceof Error ? error.message : String(error)}`, true);
@@ -8547,7 +8639,7 @@ async function chooseAndImportFLA() {
 async function chooseAndImportTvpp() {
   if (!confirmDiscard()) return;
   const data = await backend.chooseAndImportTvpp();
-  if (!data) return;
+  if (!data || importLoadingWasCancelled(data.name)) return;
   applyImportedProject(data, "tvpp");
 }
 
@@ -8923,7 +9015,7 @@ async function importDroppedFiles(fileList) {
       const data = entry.path
         ? await backend.importClip(entry.path)
         : await backend.importClipDropped(session, entry.name, entry.bytes);
-      if (data) applyImportedProject(data, "clip");
+      if (data && !importLoadingWasCancelled(data.name)) applyImportedProject(data, "clip");
       return;
     }
 
@@ -8931,7 +9023,7 @@ async function importDroppedFiles(fileList) {
       const data = entry.path
         ? await backend.importTvpp(entry.path)
         : await backend.importTvppDropped(session, entry.name, entry.bytes);
-      if (data) applyImportedProject(data, "tvpp");
+      if (data && !importLoadingWasCancelled(data.name)) applyImportedProject(data, "tvpp");
       return;
     }
 
@@ -8939,7 +9031,7 @@ async function importDroppedFiles(fileList) {
       const data = entry.path
         ? await backend.importFl(entry.path)
         : await backend.importFlaDropped(session, entry.name, entry.bytes);
-      if (data) applyImportedFla(data);
+      if (data && !importLoadingWasCancelled(data.name)) applyImportedFla(data);
       return;
     }
 
@@ -10139,7 +10231,10 @@ document.addEventListener("keydown", (event) => {
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
-  backend = await detectBackend({ pickPath: choosePath });
+  backend = await detectBackend({
+    pickPath: choosePath,
+    importProgress: importProgressFromBackend,
+  });
 
   if (backend.mode !== "server") {
     // Without a server there is no directory to browse, so the built-in
