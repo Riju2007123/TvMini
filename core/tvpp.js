@@ -471,9 +471,15 @@ function tvppZchkChunk(chunk) {
     packed.copy(body, at + 12);
     at += 12 + packed.length;
   }
-  const out = Buffer.alloc(8 + body.length + (body.length % 2));
+  // The size counts the pad byte, so the field is always even: TVPaint's own
+  // writer and moart both do this for frame chunks (bare text chunks keep
+  // the bare length and rely on the pad skip instead). A size that does not
+  // count the pad desyncs TVPaint's image-stream parser on every odd-sized
+  // chunk - a whole document then loads as one empty layer.
+  const padded = body.length + (body.length % 2);
+  const out = Buffer.alloc(8 + padded);
   out.write("ZCHK", 0, "ascii");
-  out.writeUInt32BE(body.length, 4);
+  out.writeUInt32BE(padded, 4);
   body.copy(out, 8);
   return out;
 }
@@ -556,9 +562,10 @@ function tvppLayerChunks(project, layer, first, last) {
   words[2] = last - 1;
   words[3] = last - first + 1;
   words[4] = Math.min(255, Math.max(0, Math.round(layer.opacity * 255)));
-  // TVPaint writes 32 here on every layer we have inspected (bit 5 set);
-  // the low bit is the hidden flag, so a hidden layer carries 33.
-  words[7] = layer.visible === false ? 33 : 32;
+  // TVPaint's eye flag: 0 on screen, 1 off (moart writes the same). The
+  // other bits of this word are state TVPaint sets on its own layers, not
+  // something an import has to claim.
+  words[7] = layer.visible === false ? 1 : 0;
   words[11] = behaviorCode(layer.postBehavior) * 65536 + behaviorCode(layer.preBehavior);
   words[13] = 1;
   words[15] = 0; // blend code: TVPaint "Color"
