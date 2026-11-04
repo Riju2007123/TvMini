@@ -66,7 +66,7 @@
 
 import { Buffer } from "./bytes.js";
 import { inflateSync, deflateSync } from "./zlib.js";
-import { encodeRgbaPng, renderDrawingRgba } from "./png.js";
+import { encodeRgbaPng, renderDrawingRgba, trimRgbaToAlphaBBox } from "./png.js";
 import { createLayer, createProject, normalizeProject } from "./model.js";
 
 const TVPP_TILE = 64;
@@ -1300,15 +1300,24 @@ export function importTvppBytes(input) {
     source.decoded.forEach((frame, position) => {
       const at = source.start + position;
       if (frame.kind === "full") {
+        // A frame usually paints in a small part of the canvas, so only the
+        // box it paints is kept, with the place to put it back - a
+        // full-canvas picture of a big document costs tens of megabytes
+        // once decoded, per frame.
+        const trimmed = trimRgbaToAlphaBBox(frame.rgba, width, height);
         drawing = {
           at,
           hold: 1,
           strokes: [],
-          image: {
-            data: encodeRgbaPng(width, height, frame.rgba).toString("base64"),
-            width,
-            height,
-          },
+          image: trimmed
+            ? {
+              data: encodeRgbaPng(trimmed.width, trimmed.height, trimmed.data).toString("base64"),
+              width: trimmed.width,
+              height: trimmed.height,
+              x: trimmed.x,
+              y: trimmed.y,
+            }
+            : undefined,
         };
         layer.drawings.push(drawing);
       } else if (frame.kind === "same" && drawing) {

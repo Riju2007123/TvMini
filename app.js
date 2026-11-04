@@ -1110,7 +1110,11 @@ const clipCtx = clipCanvas.getContext("2d");
  * drops the least recently seen pictures first.
  */
 const drawingImages = new Map();
-const DRAWING_BITMAP_BUDGET = 384 * 1024 * 1024;
+// Sized to hold every cel of a 4K document that was imported from Clip
+// Studio Paint - its painted boxes add up to a few hundred megabytes once
+// decoded, and letting the cache hold all of them is what keeps playback
+// from re-decoding pictures it has already seen.
+const DRAWING_BITMAP_BUDGET = 768 * 1024 * 1024;
 let drawingBitmapBytes = 0;
 
 function drawingImageElement(drawing) {
@@ -1897,6 +1901,15 @@ function cellBaseSize(project, drawing) {
   return [drawing.image?.width || project.width, drawing.image?.height || project.height];
 }
 
+/**
+ * Where the raster base of a drawing sits on the canvas. A picture trimmed
+ * to the box it paints carries the place of that box; a full-canvas picture
+ * sits at the origin.
+ */
+function cellBaseOrigin(drawing) {
+  return [drawing.image?.x ?? 0, drawing.image?.y ?? 0];
+}
+
 /** Paint one drawing (raster base + strokes) into a scratch canvas. */
 function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targetCanvas = paintCanvas) {
   // The scratch may be larger than the canvas (the sheet holds the
@@ -1904,7 +1917,7 @@ function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targ
   target.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
   target.globalAlpha = alpha;
   const base = drawingImageElement(drawing);
-  if (base) target.drawImage(base, 0, 0, ...cellBaseSize(project, drawing));
+  if (base) target.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
   drawStrokesInto(target, drawing.strokes, drawing.brush);
   target.globalAlpha = 1;
   return targetCanvas;
@@ -2094,7 +2107,7 @@ function renderCanvas(frame = state.project.currentFrame) {
     if (base && !strokes.length) {
       ctx.globalAlpha = opacity;
       withCellTransform(ctx, [layerTransform, transform], docWidth, docHeight, () => {
-        ctx.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
+        ctx.drawImage(base, ...cellBaseOrigin(resolved.drawing), ...cellBaseSize(project, resolved.drawing));
       });
       ctx.globalAlpha = 1;
       continue;
@@ -4406,7 +4419,13 @@ function layerThumbnail(project, index) {
 
   const base = drawingImageElement(drawing);
   if (base) {
-    ctx.drawImage(base, 0, 0, size, size);
+    // A trimmed picture sits in its box on the canvas, so it is placed
+    // where that box falls in the tile, not stretched over the whole of it.
+    const scaleX = size / project.width;
+    const scaleY = size / project.height;
+    const [originX, originY] = cellBaseOrigin(drawing);
+    const [baseWidth, baseHeight] = cellBaseSize(project, drawing);
+    ctx.drawImage(base, originX * scaleX, originY * scaleY, baseWidth * scaleX, baseHeight * scaleY);
     return canvas;
   }
 
@@ -9585,7 +9604,7 @@ function flipPaint(frameNumber) {
   const resolved = resolveDrawing(layer, frameNumber);
   if (resolved) {
     const base = drawingImageElement(resolved.drawing);
-    if (base) context.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
+    if (base) context.drawImage(base, ...cellBaseOrigin(resolved.drawing), ...cellBaseSize(project, resolved.drawing));
     drawStrokesInto(context, resolved.drawing.strokes, resolved.drawing.brush);
   }
   const labelCell = document.getElementById("flipLabel");

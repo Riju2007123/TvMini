@@ -2364,15 +2364,23 @@ function shiftDrawingForSheet(drawing, pasteX, pasteY, scale, width, height, pro
     const picture = decodePng(Buffer.from(drawing.image.data, drawing.image.data instanceof String || typeof drawing.image.data === "string" ? "base64" : undefined));
     const stageW = Math.round(project.width * scale);
     const stageH = Math.round(project.height * scale);
-    const stage = picture.width === stageW && picture.height === stageH
+    // A trimmed picture carries the box of the stage it was cut from: it is
+    // scaled with the stage and pasted there, not stretched over the whole
+    // of it.
+    const trimmed = drawing.image.x !== undefined || drawing.image.y !== undefined;
+    const drawWidth = trimmed ? Math.max(1, Math.round(picture.width * scale)) : stageW;
+    const drawHeight = trimmed ? Math.max(1, Math.round(picture.height * scale)) : stageH;
+    const stage = drawWidth === picture.width && drawHeight === picture.height
       ? picture.data
-      : scaleRgba(picture.data, picture.width, picture.height, stageW, stageH);
+      : scaleRgba(picture.data, picture.width, picture.height, drawWidth, drawHeight);
     const sheet = new Uint8Array(width * height * 4);
-    const top = pasteY * scale;
-    const left = pasteX * scale;
-    for (let y = 0; y < stageH; y += 1) {
+    const left = Math.round((pasteX + (drawing.image.x ?? 0)) * scale);
+    const top = Math.round((pasteY + (drawing.image.y ?? 0)) * scale);
+    const copyWidth = Math.min(drawWidth, width - left);
+    const copyHeight = Math.min(drawHeight, height - top);
+    for (let y = 0; y < copyHeight; y += 1) {
       sheet.set(
-        stage.subarray(y * stageW * 4, (y + 1) * stageW * 4),
+        stage.subarray(y * drawWidth * 4, (y + 1) * drawWidth * 4),
         ((y + top) * width + left) * 4,
       );
     }

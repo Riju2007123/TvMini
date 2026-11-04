@@ -569,6 +569,9 @@ export function clearPictureCache() {
 function directPicture(drawing, width, height) {
   if (!drawing || !drawing.image) return null;
   if (drawing.strokes && drawing.strokes.length) return null;
+  // A trimmed picture does not fill the buffer it is painted into, so it
+  // has to go through the painter, which puts it back in its box.
+  if (drawing.image.x !== undefined || drawing.image.y !== undefined) return null;
   const picture = decodePicture(drawing.image.data);
   if (picture.width !== width || picture.height !== height) return null;
   return picture.data;
@@ -924,7 +927,25 @@ function paintDrawingInner(width, height, drawing, scale = 1) {
       ? drawing.image.data
       : drawing.image.data;
     const image = decodePicture(source);
-    if (image.width === width && image.height === height) {
+    if (drawing.image.x !== undefined || drawing.image.y !== undefined) {
+      // A trimmed picture carries the box of the canvas it was cut from: it
+      // is put back there, at its own size, scaled with the drawing.
+      const drawWidth = Math.max(1, Math.round(image.width * scale));
+      const drawHeight = Math.max(1, Math.round(image.height * scale));
+      const placed = drawWidth === image.width && drawHeight === image.height
+        ? image.data
+        : scaleRgba(image.data, image.width, image.height, drawWidth, drawHeight);
+      blitRgba(
+        paint,
+        width,
+        height,
+        placed,
+        drawWidth,
+        drawHeight,
+        Math.round((drawing.image.x ?? 0) * scale),
+        Math.round((drawing.image.y ?? 0) * scale),
+      );
+    } else if (image.width === width && image.height === height) {
       paint.set(image.data);
     } else {
       // The picture is kept at the size of the document, so a drawing painted
@@ -1294,6 +1315,59 @@ export function scaleRgb(rgb, width, height, outWidth, outHeight) {
     }
   }
   return out;
+}
+
+/**
+ * Cut the transparent border off a picture.
+ *
+ * The picture of an imported cel usually paints in a small part of the
+ * canvas: the rest is transparent, and a full-canvas picture of a 4K
+ * document costs tens of megabytes once decoded - per cel. What comes back
+ * is the smallest box that still holds every painted pixel, with the place
+ * of the box in the original picture, so the caller can put it back where
+ * it was. A picture with no painted pixel answers null.
+ */
+export function trimRgbaToAlphaBBox(data, width, height) {
+  let top = -1;
+  let left = width;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x += 1) {
+      if (data[row + x * 4 + 3] !== 0) {
+        if (top === -1) top = y;
+        bottom = y;
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (right === -1) return null;
+
+  const boxWidth = right - left + 1;
+  const boxHeight = bottom - top + 1;
+  const box = new Uint8Array(boxWidth * boxHeight * 4);
+  for (let y = 0; y < boxHeight; y += 1) {
+    const from = ((top + y) * width + left) * 4;
+    box.set(data.subarray(from, from + boxWidth * 4), y * boxWidth * 4);
+  }
+  return { data: box, width: boxWidth, height: boxHeight, x: left, y: top };
+}
+
+/** Paste a picture into a buffer at a place, clipped to the buffer. */
+function blitRgba(target, targetWidth, targetHeight, source, sourceWidth, sourceHeight, x, y) {
+  const fromX = Math.max(0, x);
+  const fromY = Math.max(0, y);
+  const toX = Math.min(targetWidth, x + sourceWidth);
+  const toY = Math.min(targetHeight, y + sourceHeight);
+  for (let row = fromY; row < toY; row += 1) {
+    const from = ((row - y) * sourceWidth + (fromX - x)) * 4;
+    target.set(
+      source.subarray(from, from + (toX - fromX) * 4),
+      (row * targetWidth + fromX) * 4,
+    );
+  }
 }
 
 /**

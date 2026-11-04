@@ -17,7 +17,7 @@ import {
 import { frameOfCellName } from "../timeline.js";
 import { tickOfFrame } from "./clip-mixer.js";
 import { createProject, normalizeProject } from "./model.js";
-import { encodeRgbaPng } from "./png.js";
+import { encodeRgbaPng, trimRgbaToAlphaBBox } from "./png.js";
 
 /** Every Clip Studio Paint document starts with this 8-byte tag. */
 export const CLIP_MAGIC = "CSFCHUNK";
@@ -341,10 +341,20 @@ export function clipToProject(document, layers, fallback = {}) {
         }
       }
       if (painted) {
+        // Only the box the cel paints is kept: the border of an imported
+        // picture is transparent, and a full-canvas picture of a 4K
+        // document costs tens of megabytes once decoded - per cel. The
+        // place of the box travels with it, so the picture is put back
+        // where Clip Studio Paint had it.
+        const trimmed = trimRgbaToAlphaBBox(placed, width, height);
         picture = {
-          data: Buffer.from(encodeRgbaPng(width, height, placed, { level: 1 })).toString("base64"),
-          width,
-          height,
+          data: Buffer.from(
+            encodeRgbaPng(trimmed.width, trimmed.height, trimmed.data, { level: 1 }),
+          ).toString("base64"),
+          width: trimmed.width,
+          height: trimmed.height,
+          x: trimmed.x,
+          y: trimmed.y,
         };
       }
     }

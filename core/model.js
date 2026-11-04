@@ -405,12 +405,27 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
     throw new ValidationError(`${label} must be an object`);
   }
 
-  const imageWidth = integerInRange(value.width, `${label}.width`, MIN_SIZE, MAX_SIZE);
-  const imageHeight = integerInRange(value.height, `${label}.height`, MIN_SIZE, MAX_SIZE);
+  // A picture may be trimmed to the box of the canvas it paints, with the
+  // place of the box kept beside it - an imported cel carries its picture
+  // this way, so that a sparse cel does not have to hold the whole canvas.
+  // A picture with a place may be smaller than the canvas; one without a
+  // place still has to fill it.
+  const hasPlace = value.x !== undefined || value.y !== undefined;
+  const imageWidth = integerInRange(value.width, `${label}.width`, hasPlace ? 1 : MIN_SIZE, MAX_SIZE);
+  const imageHeight = integerInRange(value.height, `${label}.height`, hasPlace ? 1 : MIN_SIZE, MAX_SIZE);
 
-  if (imageWidth !== width || imageHeight !== height) {
+  let imageX = 0;
+  let imageY = 0;
+  if (hasPlace) {
+    imageX = integerInRange(value.x ?? 0, `${label}.x`, 0, Math.max(0, width - 1));
+    imageY = integerInRange(value.y ?? 0, `${label}.y`, 0, Math.max(0, height - 1));
+    if (imageX + imageWidth > width || imageY + imageHeight > height) {
+      throw new ValidationError(`${label} does not fit in the canvas`);
+    }
+  } else if (imageWidth !== width || imageHeight !== height) {
     throw new ValidationError(`${label} size must match the canvas`);
   }
+
   if (typeof value.data !== "string" || value.data.length === 0) {
     throw new ValidationError(`${label}.data must be base64 text`);
   }
@@ -426,7 +441,9 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
     throw new ValidationError(`${label}.data must be a PNG`);
   }
 
-  return { data: value.data, width: imageWidth, height: imageHeight };
+  return hasPlace
+    ? { data: value.data, width: imageWidth, height: imageHeight, x: imageX, y: imageY }
+    : { data: value.data, width: imageWidth, height: imageHeight };
 }
 
 /**
