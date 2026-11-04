@@ -8,8 +8,9 @@
  * fresh for TVMini. Fact levels follow the project convention: the byte
  * grammar below matches real .tvpp files (cross-checked through that
  * documented validation); where the format allows multiple encodings and
- * we picked one (writing every new image as an uncompressed DBOD chunk) it
- * is marked INFERRED and waits for one true TVPaint round-trip.
+ * we picked one (the first image of a layer as DBOD, later images as
+ * tiled SRAW) it is marked INFERRED and waits for one true TVPaint
+ * round-trip.
  *
  * Container layout (observed):
  *   [16B node GUID][BE32 reserved=0][BE32 size][body]  — nested freely
@@ -37,21 +38,23 @@
  * length][zlib bytes]. The blocks carry the wrapped chunk deflated, 64 KiB
  * of it at a time, and read back by inflating and joining.
  *
- * Small `SRAW` stubs are directives (the [6][1][0] repeat stub verified
- * byte-for-byte against a real TVPaint document):
+ * Small `SRAW` stubs are directives (both verified byte-for-byte against
+ * real TVPaint documents and moart's exporter):
  *   body words [6][1][0]       -> frame repeats the previous frame's image
  *   body words [2][0][b]       -> frame reuses history image number b
- *   body words [5][0][0][0][0] -> explicitly empty frame (legacy; real
- *          files write a full DBOD of transparent pixels instead, which
- *          is what this writer emits for blank frames)
+ *   body words [5][0][0][0][0] -> explicitly empty frame
  * Full image payloads:
  *   DBOD = a PackBits-32 stream of w*h BGRA *premultiplied* pixels in
- *          row-major frame order (runs may cross 64x64 tile borders).
- *   SRAW = [BE32 x][BE32 thumbLen][thumb bytes][BE32 tileCount] then per
- *          tile [BE32 len] + (len ? PackBits tile data : [BE32 sel]
- *          [BE32 index]) where sel=0 reuses tile `index` of this same
- *          image and sel=1 of the previous image. The tile records walk
- *          to exactly the chunk end.
+ *          row-major frame order. Runs restart at every row boundary -
+ *          real streams never let a run cross a row (466k+ runs measured,
+ *          zero crossings) and the decoder reads row by row.
+ *   SRAW = [BE32 x][BE32 thumbLen][BE32 tw][BE32 th][thumb PackBits]
+ *          [BE32 tileCount] then per tile [BE32 len] + (len ? PackBits
+ *          tile data : [BE32 sel][BE32 index]) where sel=0 reuses tile
+ *          `index` of this same image and sel=1 of the previous image.
+ *          The tile records walk to exactly the chunk end. The writer
+ *          emits SRAW for every image after a layer's first, without
+ *          reuse records.
  * PackBits-32 codes: 0..127 = literal run of n+1 pixels (4 bytes each);
  * 129..255 = repeat one pixel 257-n times; 128 = skip. Pixels are BGRA.
  * LRHD layer header (26 BE32 words), the ones we use:
@@ -283,14 +286,18 @@ function stringRecords(pairs) {
 }
 
 /**
- * Encode `pixelCount` premultiplied BGRA pixels (in `bgra`) as a
- * PackBits-32 stream. Codes: 0..127 literal (n+1 pixels), 129..255 repeat
- * (257-n copies of one pixel), 128 skip (never emitted).
+ * Encode premultiplied BGRA pixels (in `bgra`) as a PackBits-32 stream,
+ * row by row. Codes: 0..127 literal (n+1 pixels), 129..255 repeat one
+ * pixel 257-n times (any run of two or more), 128 skip (never emitted).
+ *
+ * Runs never cross a row boundary. Every real TVPaint stream we measured
+ * (466k+ runs across four documents) restarts its runs at each row: the
+ * decoder reads row by row, and a run that crosses would overrun the row
+ * and desync every row after it - the picture shreds horizontally. The
+ * encoder therefore scans each row on its own.
  */
-function encodePackBits32(bgra, pixelCount) {
+function encodePackBits32(bgra, width, height) {
   const parts = [];
-  let literalStart = 0;
-  let cursor = 0;
 
   const samePixel = (a, b) =>
     bgra[a * 4] === bgra[b * 4] &&
@@ -299,41 +306,42 @@ function encodePackBits32(bgra, pixelCount) {
     bgra[a * 4 + 3] === bgra[b * 4 + 3];
 
   const pushRun = (at, take) => {
-    const head = Buffer.from([257 - take]);
-    const pixel = Buffer.from(bgra.subarray(at * 4, at * 4 + 4));
-    parts.push(head, pixel);
+    parts.push(Buffer.from([257 - take]), Buffer.from(bgra.subarray(at * 4, at * 4 + 4)));
   };
 
-  const flushLiterals = (until) => {
-    let start = literalStart;
-    while (start < until) {
-      const take = Math.min(128, until - start);
-      parts.push(Buffer.from([take - 1]), Buffer.from(bgra.subarray(start * 4, (start + take) * 4)));
-      start += take;
-    }
+  const pushLiteral = (start, take) => {
+    parts.push(Buffer.from([take - 1]), Buffer.from(bgra.subarray(start * 4, (start + take) * 4)));
   };
 
-  let scan = cursor;
-  while (scan < pixelCount) {
-    let run = 1;
-    while (scan + run < pixelCount && samePixel(scan, scan + run)) run += 1;
-    if (run < 3) {
-      scan += 1;
-      continue;
+  for (let y = 0; y < height; y += 1) {
+    const base = y * width;
+    let i = 0;
+    while (i < width) {
+      let run = 1;
+      while (run < 128 && i + run < width && samePixel(base + i, base + i + run)) run += 1;
+      if (run >= 2) {
+        pushRun(base + i, run);
+        i += run;
+        continue;
+      }
+      // A lone pixel starts a literal; extend it until a repeat of two or
+      // more begins or the literal caps at 128 pixels.
+      const start = i;
+      i += 1;
+      while (i < width && i - start < 128) {
+        let ahead = 1;
+        while (ahead < 128 && i + ahead < width && samePixel(base + i, base + i + ahead)) ahead += 1;
+        if (ahead >= 2) break;
+        i += 1;
+      }
+      pushLiteral(base + start, i - start);
     }
-    flushLiterals(scan);
-    for (let left = run; left > 0; left -= 128) pushRun(scan, Math.min(128, left));
-    scan += run;
-    literalStart = scan;
-    cursor = scan;
   }
-  flushLiterals(pixelCount);
   return Buffer.concat(parts.map((part) => (Buffer.isBuffer(part) ? part : Buffer.from(part))));
 }
 
-/** Straight-alpha RGBA -> premultiplied BGRA, then PackBits-32. */
-function encodeImagePayload(rgba, width, height) {
-  const pixels = width * height;
+/** Straight-alpha RGBA -> premultiplied BGRA. */
+function premultiplyBgra(rgba, pixels) {
   const bgra = Buffer.alloc(pixels * 4);
   for (let i = 0, j = 0; i < pixels; i += 1, j += 4) {
     const a = rgba[j + 3];
@@ -343,7 +351,12 @@ function encodeImagePayload(rgba, width, height) {
     bgra[j + 2] = Math.round((rgba[j] * a) / 255);
     bgra[j + 3] = a;
   }
-  return encodePackBits32(bgra, pixels);
+  return bgra;
+}
+
+/** Straight-alpha RGBA -> premultiplied BGRA, then PackBits-32 per row. */
+function encodeImagePayload(rgba, width, height) {
+  return encodePackBits32(premultiplyBgra(rgba, width * height), width, height);
 }
 
 /** Bare (uncompressed) DBOD frame chunk with IFF even padding. */
@@ -353,6 +366,76 @@ function tvppDbodChunk(rgba, width, height) {
   out.write("DBOD", 0, "ascii");
   out.writeUInt32BE(payload.length, 4);
   payload.copy(out, 8);
+  return out;
+}
+
+/**
+ * A tiled SRAW frame chunk, the shape real TVPaint documents use for
+ * every image after a layer's first: a small thumbnail followed by one
+ * PackBits record per 64x64 tile. Layout (verified byte-for-byte against
+ * real files, whose tile records walk to exactly the chunk end):
+ *
+ *   [BE32 64][BE32 thumbLen][BE32 tw][BE32 th][thumb PackBits]
+ *   [BE32 tileCount] then per tile [BE32 len][PackBits tile data]
+ *
+ * `thumbLen` counts the tw/th words plus the thumbnail stream. Tiles are
+ * clipped at the canvas edges and their runs restart per tile row, like
+ * the DBOD encoder.
+ */
+function tvppSrawChunk(rgba, width, height) {
+  const bgra = premultiplyBgra(rgba, width * height);
+
+  // Thumbnail: at most 160x120, sampled nearest-neighbour.
+  const scale = Math.min(1, 160 / width, 120 / height);
+  const tw = Math.max(1, Math.round(width * scale));
+  const th = Math.max(1, Math.round(height * scale));
+  const thumb = Buffer.alloc(tw * th * 4);
+  for (let y = 0; y < th; y += 1) {
+    const sy = Math.min(height - 1, Math.floor(y / scale));
+    for (let x = 0; x < tw; x += 1) {
+      const sx = Math.min(width - 1, Math.floor(x / scale));
+      bgra.copy(thumb, (y * tw + x) * 4, (sy * width + sx) * 4, (sy * width + sx) * 4 + 4);
+    }
+  }
+  const thumbPack = encodePackBits32(thumb, tw, th);
+
+  const gx = Math.ceil(width / TVPP_TILE);
+  const gy = Math.ceil(height / TVPP_TILE);
+  const records = [];
+  for (let r = 0; r < gy; r += 1) {
+    for (let c = 0; c < gx; c += 1) {
+      const tileW = Math.min(TVPP_TILE, width - c * TVPP_TILE);
+      const tileH = Math.min(TVPP_TILE, height - r * TVPP_TILE);
+      const tile = Buffer.alloc(tileW * tileH * 4);
+      for (let y = 0; y < tileH; y += 1) {
+        const src = ((r * TVPP_TILE + y) * width + c * TVPP_TILE) * 4;
+        bgra.copy(tile, y * tileW * 4, src, src + tileW * 4);
+      }
+      const packed = encodePackBits32(tile, tileW, tileH);
+      const head = Buffer.alloc(4);
+      head.writeUInt32BE(packed.length, 0);
+      records.push(head, packed);
+    }
+  }
+
+  const body = Buffer.alloc(20 + thumbPack.length);
+  body.writeUInt32BE(64, 0);
+  body.writeUInt32BE(8 + thumbPack.length, 4);
+  body.writeUInt32BE(tw, 8);
+  body.writeUInt32BE(th, 12);
+  thumbPack.copy(body, 16);
+  body.writeUInt32BE(gx * gy, 16 + thumbPack.length);
+
+  const total = body.length + records.reduce((sum, part) => sum + part.length, 0);
+  const out = Buffer.alloc(8 + total + (total % 2));
+  out.write("SRAW", 0, "ascii");
+  out.writeUInt32BE(total, 4);
+  body.copy(out, 8);
+  let at = 8 + body.length;
+  for (const part of records) {
+    part.copy(out, at);
+    at += part.length;
+  }
   return out;
 }
 
@@ -402,6 +485,19 @@ function tvppSameChunk() {
   be32(head, 12);
   be32(head, 6);
   be32(head, 1);
+  be32(head, 0);
+  return Buffer.from(head);
+}
+
+/** [SRAW][20][5][0][0][0][0] — an empty frame after the layer's first. */
+function tvppEmptyChunk() {
+  const head = [];
+  asciiInto(head, "SRAW");
+  be32(head, 20);
+  be32(head, 5);
+  be32(head, 0);
+  be32(head, 0);
+  be32(head, 0);
   be32(head, 0);
   return Buffer.from(head);
 }
@@ -493,18 +589,24 @@ function tvppLayerChunks(project, layer, first, last) {
 
   // Emit chunks and collect the LEXT naming entries in one pass. Every
   // frame chunk leaves wrapped in a ZCHK, the way TVPaint writes them.
-  // A blank frame is a full DBOD of transparent pixels - the shape
-  // TVPaint itself writes for an erased frame - not a stub, which no
-  // real file contains.
+  // The first image of a layer is always a full DBOD - every real layer
+  // starts with one, blank or not. Every later image is a tiled SRAW,
+  // and a blank slot after the first is the empty stub; held exposures
+  // stay repeat stubs. This is the shape moart writes and real TVPaint
+  // documents confirm.
   const iniEntries = [];
   let imageIndex = 0;
   plan.forEach((entry, position) => {
-    if (entry.kind === "empty") {
-      chunks.push(tvppZchkChunk(tvppDbodChunk(new Uint8Array(project.width * project.height * 4), project.width, project.height)));
+    if (position === 0) {
+      // First slot: a full DBOD, transparent when the frame is blank.
+      const rgba = entry.kind === "full" ? entry.rgba : new Uint8Array(project.width * project.height * 4);
+      chunks.push(tvppZchkChunk(tvppDbodChunk(rgba, project.width, project.height)));
+    } else if (entry.kind === "empty") {
+      chunks.push(tvppZchkChunk(tvppEmptyChunk()));
     } else if (entry.kind === "same") {
       chunks.push(tvppZchkChunk(tvppSameChunk()));
     } else {
-      chunks.push(tvppZchkChunk(tvppDbodChunk(entry.rgba, project.width, project.height)));
+      chunks.push(tvppZchkChunk(tvppSrawChunk(entry.rgba, project.width, project.height)));
     }
     iniEntries.push(`${position}=${tvppUuid()}`);
     imageIndex += 1;
@@ -533,8 +635,9 @@ function tvppLayerChunks(project, layer, first, last) {
  * TVPaint 11.0.8 document (read back there with every pixel in place).
  * Bare `DBOD`/`SRAW` chunks — the variant files saved without compression
  * contain — are still read, for compatibility. Optional chunks we do not
- * model (ANNO, camera entries in FCFG, audio refs, TLNT tail room) are
- * simply omitted.
+ * model (camera entries in FCFG, audio refs, TLNT tail room) are simply
+ * omitted; ANNO and the FCFG settings text are written, copied from real
+ * documents.
  *
  * Folders are left behind — a .tvpp has no folders — and every drawing
  * layer is written, even one with no drawing yet: it comes back as a
