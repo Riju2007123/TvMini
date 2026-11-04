@@ -2852,11 +2852,28 @@ function currentBrush() {
  */
 function useBrush(brush, name) {
   const layer = currentLayer();
+  if (!layer) return false;
   if (layer.locked) {
     setStatus("This layer is locked — unlock it first", true);
     return false;
   }
-  const drawing = ensureDrawing(layer, state.project.currentFrame);
+  // The brush is carried with the drawing that is on the paper. A cel that
+  // shows on the frame keeps it; an empty frame of a track carries the
+  // brush with the next stroke instead, so picking a brush leaves nothing
+  // behind on the timeline.
+  let target = layer;
+  let targetFrame = state.project.currentFrame;
+  if (isGroup(layer) && isAnimationFolder(layer)) {
+    const entry = folderCells(state.project, state.project.currentLayer).get(targetFrame);
+    if (!entry) {
+      if (brush) applyBrushSettings(brush);
+      brushImageName.textContent = name;
+      drawBrushShape();
+      return true;
+    }
+    target = state.project.layers[entry.layer];
+  }
+  const drawing = ensureDrawing(target, targetFrame);
   const before = snapshot();
   if (brush) {
     // Everything that shapes the paint is kept with the drawing, so the
@@ -3886,34 +3903,47 @@ function addLayerBeside(index) {
 }
 
 /**
- * Make a cel on the track of an animation folder.
+ * The cel of an animation folder that the ink at a frame goes on.
  *
- * A frame specified on an empty track of Clip Studio Paint makes a cel
- * there: a layer of its own in the folder, named after the frame, that shows
- * on that frame. The next stroke drawn goes into the cel.
+ * The cels of a track are its child layers. A frame that one of them shows
+ * already draws into that cel; an empty frame gets a cel of its own as the
+ * first stroke lands - a layer named after the frame, showing on that one
+ * frame, the way Clip Studio Paint makes a cel when a frame of an empty
+ * animation folder is specified. The selection follows the cel, so the
+ * stroke lands where the person drawing sees it.
+ *
+ * The caller carries the history: the stroke that starts right after this
+ * snapshots the document before it, so cel and ink come back out together.
  */
-function addCelToTrack(trackIndex, frame) {
+function celForDrawing(trackIndex, frame) {
   const project = state.project;
+  const track = project.layers[trackIndex];
+
+  const entry = folderCells(project, trackIndex).get(frame);
+  if (entry) {
+    project.currentLayer = entry.layer;
+    syncLayerControls();
+    return project.layers[entry.layer];
+  }
+
   if (project.layers.length >= MAX_LAYERS) {
     setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
-    return;
+    return null;
   }
 
   stopPlayback();
-  const before = snapshot();
   const created = createLayer(`Layer ${project.layers.length + 1}`);
   created.drawings = [
     { at: frame, hold: 1, strokes: [], name: cellName(created, frame) },
   ];
   insertLayer(project, trackIndex + 1, created, trackIndex);
   syncTrackCel(project, trackIndex + 1);
-  recordHistory(before);
-  markDirty();
-  afterChange();
-  selectFrame(frame, trackIndex + 1);
-  setStatus(
-    `Added cel ${created.drawings[0].name} to ${project.layers[trackIndex].name}`,
-  );
+  project.currentLayer = trackIndex + 1;
+  renderTimeline();
+  renderLayerPanel();
+  syncLayerControls();
+  setStatus(`Added cel ${created.drawings[0].name} to ${track.name}`);
+  return created;
 }
 
 /**
@@ -4088,13 +4118,10 @@ function buildLayerRowCells(cells, project, layer, index, columns, start) {
       if (!entry) {
         cell.textContent = "";
         cell.title = `Empty frame ${frame}`;
-        cell.addEventListener("click", () => {
-          // A frame specified on an empty track makes a cel there, the way
-          // Clip Studio Paint makes one when a frame of an empty animation
-          // folder is specified. An ordinary folder just moves the frame.
-          if (isAnimationFolder(layer)) addCelToTrack(index, frame);
-          else selectFrame(frame);
-        });
+        // Clicking an empty frame of a track only selects it. The cel is
+        // made when ink goes down on the frame, so that walking the
+        // timeline does not leave cells behind on every frame it passes.
+        cell.addEventListener("click", () => selectFrame(frame, index));
         cells.append(cell);
         continue;
       }
@@ -5447,7 +5474,27 @@ function onLayerDragEnd() {
 function addDrawing() {
   const layer = currentLayer();
   if (isGroup(layer)) {
-    setStatus("A folder holds other layers — add a layer inside it instead", true);
+    // An animation folder is a track: the button makes a cel on it at the
+    // frame being looked at, on purpose - clicking the track only selects.
+    if (isAnimationFolder(layer)) {
+      const project = state.project;
+      const entry = folderCells(project, project.currentLayer).get(project.currentFrame);
+      if (entry) {
+        const cel = project.layers[entry.layer];
+        const celDrawing = cel.drawings.find((d) => d.at === project.currentFrame);
+        setStatus(
+          `Frame ${project.currentFrame} already has cel ${celDrawing?.name ?? `on ${cel.name}`}`,
+        );
+        return;
+      }
+      const before = snapshot();
+      if (!celForDrawing(project.currentLayer, project.currentFrame)) return;
+      recordHistory(before);
+      markDirty();
+      afterChange();
+      return;
+    }
+    setStatus("A folder holds other layers - add a layer inside it instead", true);
     return;
   }
   if (layer.locked) {
@@ -6206,11 +6253,23 @@ function restoreOpacityToSee(project, index) {
 }
 
 function layerForDrawing() {
-  const layer = currentLayer();
+  let index = state.project.currentLayer;
+  let layer = currentLayer();
   if (!layer) return null;
   if (isGroup(layer)) {
-    setStatus("A folder holds other layers — select a layer inside it to draw", true);
-    return null;
+    // An animation folder is a track: the ink goes on the cel of the frame
+    // being drawn, and an empty frame picks up a cel of its own now. An
+    // ordinary folder holds other layers - select a layer inside it.
+    if (!isAnimationFolder(layer)) {
+      setStatus("A folder holds other layers - select a layer inside it to draw", true);
+      return null;
+    }
+    const cel = celForDrawing(index, state.project.currentFrame);
+    if (!cel) return null;
+    // The cel is selected now (the layers panel and the track follow it), so
+    // the checks below read the cel's own visibility and lock.
+    index = state.project.currentLayer;
+    layer = cel;
   }
   // A layer that is hidden, or that sits in a folder that is hidden, cannot
   // be seen. Ink on such a layer would vanish in front of the person who
