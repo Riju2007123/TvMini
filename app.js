@@ -1072,13 +1072,16 @@ function projectImage() {
 }
 
 const paintCanvas = document.createElement("canvas");
-const paintCtx = paintCanvas.getContext("2d", { willReadFrequently: true });
+// No willReadFrequently: nothing reads these scratch canvases back, and a
+// GPU-backed one makes the translucent and clipped layers of an imported
+// document compositing work instead of memory traffic.
+const paintCtx = paintCanvas.getContext("2d");
 // Scratch canvas for a layer that is drawn through one: an eraser has to
 // take ink away from its own layer only. It is the size of the screen, so
 // the strokes in it are drawn in the pixels of the screen and a line that
 // is magnified stays sharp.
 const layerCanvas = document.createElement("canvas");
-const layerCtx = layerCanvas.getContext("2d", { willReadFrequently: true });
+const layerCtx = layerCanvas.getContext("2d");
 // Scratch canvas for transparent/blending strokes: the stroke is painted
 // opaque here first, then applied to the paint canvas in a single pass.
 const blendCanvas = document.createElement("canvas");
@@ -1095,19 +1098,70 @@ const maskCtx = maskCanvas.getContext("2d");
 const clipCanvas = document.createElement("canvas");
 const clipCtx = clipCanvas.getContext("2d");
 
-/* Raster bases (imported .tvpp frames) as <img> elements, cached by data. */
+/* Raster bases (imported .clip/.tvpp frames), cached by data.
+ *
+ * An <img> element's decoded pixels live in the browser's image cache,
+ * which throws pictures away under memory pressure. A document from Clip
+ * Studio Paint carries dozens of full-canvas pictures - tens of megabytes
+ * each once decoded - so playback kept evicting and re-decoding them every
+ * frame, and the animation stuttered. An ImageBitmap stays decoded for as
+ * long as we hold it: every picture is decoded once, off the main thread,
+ * and drawn straight away afterwards. The cache keeps a bounded budget and
+ * drops the least recently seen pictures first.
+ */
 const drawingImages = new Map();
+const DRAWING_BITMAP_BUDGET = 384 * 1024 * 1024;
+let drawingBitmapBytes = 0;
 
 function drawingImageElement(drawing) {
   if (!drawing?.image?.data) return null;
-  let element = drawingImages.get(drawing.image.data);
-  if (!element) {
-    element = new Image();
-    element.onload = queueCanvasRepaint;
-    element.src = `data:image/png;base64,${drawing.image.data}`;
-    drawingImages.set(drawing.image.data, element);
+  const data = drawing.image.data;
+  let entry = drawingImages.get(data);
+  if (!entry) {
+    entry = { source: null };
+    drawingImages.set(data, entry);
+    decodeDrawingImage(data, entry);
   }
-  return element.complete ? element : null;
+  // Re-inserting moves the entry to the end of the Map, which is where the
+  // eviction scan looks last - the pictures on screen stay the longest.
+  drawingImages.delete(data);
+  drawingImages.set(data, entry);
+  return entry.source;
+}
+
+async function decodeDrawingImage(data, entry) {
+  try {
+    if (typeof createImageBitmap === "function") {
+      const response = await fetch(`data:image/png;base64,${data}`);
+      entry.source = await createImageBitmap(await response.blob());
+      entry.bytes = entry.source.width * entry.source.height * 4;
+      drawingBitmapBytes += entry.bytes;
+      trimDrawingBitmaps();
+    } else {
+      // A browser without bitmap decoding: the element cache is all we have.
+      const element = new Image();
+      element.onload = () => {
+        entry.source = element;
+        queueCanvasRepaint();
+      };
+      element.src = `data:image/png;base64,${data}`;
+      if (element.complete) entry.source = element;
+    }
+  } catch {
+    entry.source = null; // the layer shows its strokes without the picture
+  }
+  queueCanvasRepaint();
+}
+
+function trimDrawingBitmaps() {
+  if (drawingBitmapBytes <= DRAWING_BITMAP_BUDGET) return;
+  for (const [data, entry] of drawingImages) {
+    if (drawingBitmapBytes <= DRAWING_BITMAP_BUDGET) break;
+    if (!entry.source || !entry.bytes) continue;
+    drawingImages.delete(data);
+    drawingBitmapBytes -= entry.bytes;
+    entry.source = null; // dropped for the collector; drawn again on demand
+  }
 }
 
 /**
