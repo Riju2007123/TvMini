@@ -3660,35 +3660,19 @@ input[type="range"] {
 
 .import-loading-bar {
   height: 18px;
-  padding: 2px;
   border: 2px solid var(--text);
   border-radius: 999px;
-  /* The unfilled stretch: faint stripes, like the tail of the bar. */
-  background: repeating-linear-gradient(
-    45deg,
-    rgba(233, 235, 237, 0.26) 0 6px,
-    transparent 6px 12px
-  );
+  background: transparent;
   overflow: hidden;
 }
 
 .import-loading-fill {
   height: 100%;
   width: 0%;
-  /* The filled stretch: bold stripes that march while the import runs. */
-  background: repeating-linear-gradient(45deg, var(--text) 0 6px, transparent 6px 12px);
+  /* A solid pill whose ends stay round at every width, like the reference. */
+  border-radius: 999px;
+  background: var(--text);
   transition: width 0.18s linear;
-  animation: import-loading-stripes 0.6s linear infinite;
-}
-
-/* One stripe period across the bar: 12 px at 45 degrees walks 12 / sin(45°). */
-@keyframes import-loading-stripes {
-  from {
-    background-position-x: 0;
-  }
-  to {
-    background-position-x: 16.97px;
-  }
 }
 
 .import-loading-foot {
