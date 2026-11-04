@@ -531,8 +531,15 @@ function tvppLayerChunks(project, layer, first, last) {
 
   const name = String(layer.name || "Layer").replace(/\0/g, "");
   const nameAscii = name.replace(/[^\x20-\x7e]/g, "_");
-  chunks.push(iffChunk("LNAM", Buffer.from(`${nameAscii}\0`, "utf8")));
-  chunks.push(iffChunk("LNAW", Buffer.from(`${name}\0`, "utf8")));
+  // Real TVPaint (and moart) write LNAM/LNAW with the body padded to an
+  // even length using nulls and the pad counted in the size, so the size
+  // is always even. Match that byte for byte.
+  const nameBody = (text) => {
+    const bytes = Buffer.from(`${text}\0`, "utf8");
+    return bytes.length % 2 ? Buffer.concat([bytes, Buffer.from([0])]) : bytes;
+  };
+  chunks.push(iffChunk("LNAM", nameBody(nameAscii)));
+  chunks.push(iffChunk("LNAW", nameBody(name)));
 
   const behaviorCode = (value) => {
     const code = TVPP_BEHAVIOR[value];
@@ -562,7 +569,10 @@ function tvppLayerChunks(project, layer, first, last) {
   for (const word of words) be32(header, word);
   chunks.push(iffChunk("LRHD", Buffer.from(header)));
 
-  // Logical frame plan first, then emit chunks from it.
+  // Logical frame plan first, then emit chunks from it. Frames before the
+  // layer's first drawing plan as empty slots, so a layer that starts late
+  // still begins at the project's first frame - the shape every real
+  // TVPaint document uses (LRHD always starts at 0 there).
   const plan = [];
   let nextDrawing = 0;
   for (let frame = first; frame <= last; frame += 1) {
@@ -723,15 +733,13 @@ export function createTvppBuffer(project) {
   // exist in a .tvpp, so they stay behind; a layer with no drawing yet is
   // still written - as one empty frame - so the layer count survives a
   // round trip.
-  let exported = 0;
   for (const layer of project.layers) {
     if (layer.type === "group") continue;
-    exported += 1;
     if (layer.drawings.length === 0) {
       media.push(...tvppLayerChunks(project, layer, project.startFrame, project.startFrame));
       continue;
     }
-    const first = Math.max(project.startFrame, layer.drawings[0].at);
+    const first = project.startFrame;
     const last = layer.drawings.reduce(
       (max, drawing) => Math.max(max, drawing.at + drawing.hold - 1),
       first,
@@ -757,7 +765,11 @@ export function createTvppBuffer(project) {
     ["StartFrame", "1"],
     ["UniqueID", tvppUuid()],
     ["Shots", "1"],
-    ["Drawings", String(exported)],
+    // Real TVPaint documents carry 1 here no matter how many layers they
+    // hold - it counts DRAWING nodes, not layers - and moart writes 1 too.
+    // A layer count here once made TVPaint open the file as one empty
+    // row and frame.
+    ["Drawings", "1"],
     ["Name", "TVMini project"],
   ]);
 
