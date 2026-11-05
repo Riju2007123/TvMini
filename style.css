@@ -1286,26 +1286,45 @@ body.hide-tools .right-column {
   padding: 0;
   flex-direction: column;
   align-items: stretch;
-  gap: 0;
+  gap: 4px;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* The heading of a part of the tool property panel. MoArt writes it as a
-   small quiet caption with no band behind it, so the panel reads as one
-   window with named docks inside. */
-.tool-section-title {
-  flex: none;
-  padding: 4px 8px 1px;
+/* The dock of the tool panel: MoArt's named window inside the panel. The
+   head carries the name and the fold button, the body folds under it. The
+   docks themselves are not boxed - the name is separation enough, the way
+   MoArt's paint window reads. */
+.paint-dock {
+  min-width: 0;
+}
+
+.paint-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 15px;
+  padding: 1px 2px;
+}
+
+.paint-dock-title {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 700;
-  letter-spacing: 0.02em;
-  text-align: left;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.tool-section-title:first-child {
-  padding-top: 6px;
+.paint-win-collapse {
+  flex: 0 0 auto;
+}
+
+.paint-dock.collapsed .paint-dock-body {
+  display: none;
 }
 
 /* The properties of the tool, under their heading. MoArt packs its rows
@@ -3744,11 +3763,7 @@ input[type="range"] {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 10px;
-  margin-bottom: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--seam);
-  border-radius: 4px;
+  padding: 2px 8px 4px;
 }
 
 .f8-opt-group {

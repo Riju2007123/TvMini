@@ -7191,7 +7191,7 @@ const TOOL_PROPS = {
     title: "Brush",
     // The rows of the brush: a few of them are in the panel, the rest wait
     // behind "Hidden items" until they are brought out with the eye.
-    rows: ["brush", "width", "opacity", "flow", "hardness", "thickness", "paper", "stabilizer", "smoothness", "binarize", "blend"],
+    rows: ["brush", "width", "opacity", "flow", "hardness", "thickness", "spacing", "paper", "stabilizer", "smoothness", "binarize", "blend"],
     note: "",
   },
   pencil: {
@@ -7248,8 +7248,7 @@ const TOOL_PROPS = {
 
 const toolPropsTitle = document.getElementById("toolPropsTitle");
 const toolNote = document.getElementById("toolNote");
-const penSectionTitle = document.getElementById("penSectionTitle");
-const penSection = document.getElementById("penSection");
+const penDock = document.getElementById("dockPen");
 const toolPropStrip = document.getElementById("toolPropStrip");
 const toolPropGroup = document.getElementById("toolPropGroup");
 const toolPropAdvBar = document.getElementById("toolPropAdvBar");
@@ -7260,6 +7259,47 @@ const brushHeadRows = [
 ];
 const brushPreviewWrap = document.getElementById("brushPreviewWrap");
 const brushShapeSize = document.getElementById("brushShapeSize");
+
+/* --------------------------------------------------------- the docks */
+
+// The panel is MoArt's paint window: named docks inside it, and each one
+// folds under its head with the button at the right. What is folded is
+// kept between visits.
+const DOCKS_KEY = "tvmini.paintDocks.v1";
+
+function setupPaintDocks() {
+  let folded = {};
+  try {
+    const raw = JSON.parse(localStorage.getItem(DOCKS_KEY) || "{}");
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) folded = raw;
+  } catch {
+    // A blocked store only loses which docks were folded.
+  }
+  for (const dock of document.querySelectorAll(".paint-dock")) {
+    const button = dock.querySelector(".paint-win-collapse");
+    if (!button) continue;
+    const title = dock.querySelector(".paint-dock-title")?.textContent?.trim() ?? dock.id;
+    const apply = () => {
+      const isFolded = folded[dock.id] === true;
+      dock.classList.toggle("collapsed", isFolded);
+      button.setAttribute("aria-expanded", String(!isFolded));
+      button.title = isFolded ? `Expand ${title}` : `Collapse ${title}`;
+      button.setAttribute("aria-label", button.title);
+    };
+    button.addEventListener("click", () => {
+      folded[dock.id] = !(folded[dock.id] === true);
+      try {
+        localStorage.setItem(DOCKS_KEY, JSON.stringify(folded));
+      } catch {
+        // The same as above: best effort.
+      }
+      apply();
+    });
+    apply();
+  }
+}
+
+setupPaintDocks();
 
 /**
  * The rows of the property panel, in the order they are shown.
@@ -7274,13 +7314,17 @@ const PROP_ROW_ORDER = [
   "stabilizer", "binarize", "blend",
 ];
 
-/** The rows a panel starts with, the way the brush panel of MoArt does. */
+/** The rows a panel starts with, the way the brush panel of MoArt does:
+    the three everyday gauges are in the panel, everything else lives in
+    Hidden items and comes back with the eye or from the drawer. */
 const PROP_PINS_DEFAULT = [
-  "width", "opacity", "flow", "hardness", "thickness", "paper", "binarize", "blend",
+  "width", "opacity", "stabilizer",
 ];
 /** How many rows the panel is willing to show at once. */
 const PROP_PINS_MAX = 10;
-const PROP_PINS_KEY = "tvmini.toolPanelPins.v1";
+// v2: the default set shrank to size, opacity and stabilizer, so the pins
+// of the older, longer default do not hold the new one back.
+const PROP_PINS_KEY = "tvmini.toolPanelPins.v2";
 const PROP_ADV_KEY = "tvmini.toolPanelAdv.v1";
 
 const PROP_ROW_ELEMENTS = {
@@ -7546,10 +7590,10 @@ function showToolProps() {
   layoutToolProps();
   toolNote.hidden = !props.note;
   toolNote.textContent = props.note;
-  // The stylus is only of use to the tools that draw a line.
+  // The stylus is only of use to the tools that draw a line, and then the
+  // whole pen dock steps aside with them.
   const draws = state.tool !== "pick" && state.tool !== "camera" && state.tool !== "fill";
-  penSectionTitle.hidden = !draws;
-  penSection.hidden = !draws;
+  if (penDock) penDock.hidden = !draws;
   syncQuickBar();
 }
 

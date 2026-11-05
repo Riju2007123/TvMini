@@ -251,17 +251,33 @@
           </button>
         </div>
         <div class="pane-body tools">
-          <div class="tool-section-title">Colour circle</div>
-          <div class="wheel">
-            <canvas id="wheelCanvas" width="176" height="176"></canvas>
-          </div>
-          <div class="wheel-row">
-            <input id="color" type="color" value="#1f2937" title="The colour of the strokes" />
-            <input id="wheelHex" type="text" maxlength="7" spellcheck="false" value="#1f2937" />
-            <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
-          </div>
+          <section class="paint-dock" id="dockColour">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title">Colour circle</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockColourBody" title="Collapse the colour circle">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockColourBody">
+              <div class="wheel">
+                <canvas id="wheelCanvas" width="176" height="176"></canvas>
+              </div>
+              <div class="wheel-row">
+                <input id="color" type="color" value="#1f2937" title="The colour of the strokes" />
+                <input id="wheelHex" type="text" maxlength="7" spellcheck="false" value="#1f2937" />
+                <button id="wheelTransparent" type="button" title="Switch to the eraser tool">Transparent</button>
+              </div>
+            </div>
+          </section>
 
-          <div class="tool-section-title">Tools</div>
+          <section class="paint-dock" id="dockTools">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title">Tools</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockToolsBody" title="Collapse the tools">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockToolsBody">
           <div class="tool-grid">
             <button id="brushButton" class="active" aria-pressed="true" title="Brush (B)" aria-label="Brush">
               <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -327,8 +343,17 @@
               </svg>
             </button>
           </div>
+            </div>
+          </section>
 
-          <div class="tool-section-title">Options</div>
+          <section class="paint-dock" id="dockOptions">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title">Options</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockOptionsBody" title="Collapse the options">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockOptionsBody">
           <div class="flash8-options" id="flash8Options">
             <!-- Pencil Options -->
             <div id="f8PencilOpts" class="f8-opt-group" hidden>
@@ -443,8 +468,17 @@
               <button id="f8SnapObjectsBtn" class="f8-snap-btn toggle on" type="button" title="Snap to Objects (snaps to endpoints, midpoints, curve vertices)">Snap Objects</button>
             </div>
           </div>
+            </div>
+          </section>
 
-          <div class="tool-section-title">History</div>
+          <section class="paint-dock" id="dockHistory">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title">History</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockHistoryBody" title="Collapse the history">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockHistoryBody">
           <div class="tool-grid pair">
             <button id="undoButton" disabled title="Undo (Ctrl+Z)" aria-label="Undo">
               <svg class="tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -459,8 +493,17 @@
               </svg>
             </button>
           </div>
+            </div>
+          </section>
 
-          <div class="tool-section-title" id="toolPropsTitle">Brush</div>
+          <section class="paint-dock" id="dockProps">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title" id="toolPropsTitle">Brush</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockPropsBody" title="Collapse the properties of the tool">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockPropsBody">
           <div class="tool-props" id="toolPropsBody">
             <div class="brush-preview-wrap" id="brushPreviewWrap">
               <canvas id="brushShapePreview" class="brush-shape-preview" width="220" height="34" aria-label="The shape of the brush that is in the hand"></canvas>
@@ -595,8 +638,17 @@
 
             <p class="tool-note" id="toolNote" hidden></p>
           </div>
+            </div>
+          </section>
 
-          <div class="tool-section-title" id="penSectionTitle">Pen</div>
+          <section class="paint-dock" id="dockPen">
+            <div class="paint-dock-head">
+              <span class="paint-dock-title" id="penSectionTitle">Pen</span>
+              <button class="paint-win-collapse ghost-btn" type="button" aria-expanded="true" aria-controls="dockPenBody" title="Collapse the pen settings">
+                <svg class="tli" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9" /></svg>
+              </button>
+            </div>
+            <div class="paint-dock-body" id="dockPenBody">
           <div class="tool-props" id="penSection">
             <label class="field checkbox">
               <input id="pressure" type="checkbox" checked />
@@ -612,6 +664,8 @@
             </label>
             <div class="meter">Pressure: <output id="pressureValue">—</output></div>
           </div>
+            </div>
+          </section>
         </div>
       </aside>
 
