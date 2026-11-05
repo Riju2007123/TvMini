@@ -1328,6 +1328,54 @@ body.hide-inspector.hide-stage .workspace {
   grid-column: 1;
 }
 
+/* The brush size grid: the presets of TVPaint's Brush Size panel. Every cell
+   holds a dot that grows with the size and the number under it, and the cell
+   of the size the brush is at now is lit. It lives inside the width row, so
+   it follows the row when it is put away or brought back. */
+.brush-size-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.brush-size-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 0 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.brush-size-cell:hover {
+  background: rgba(233, 235, 237, 0.08);
+}
+
+.brush-size-cell.active {
+  border-color: var(--accent);
+  background: rgba(63, 163, 236, 0.18);
+}
+
+.brush-size-dot {
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.brush-size-label {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The eye: the row is in the panel when it is pressed, and in the drawer when
    it is not. It is a small, quiet button — not one of the blue buttons of the
    toolbar — so the state of the panel is written by the icon alone. */

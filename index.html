@@ -479,8 +479,9 @@
               <div class="prop-row" id="toolWidthRow">
                 <label class="field" title="The size of the brush: how wide the line is (px)">
                   <span>Size <output id="widthValue">6</output></span>
-                  <input id="width" type="range" min="1" max="300" value="6" />
+                  <input id="width" type="range" min="0.5" max="800" step="0.1" value="6" />
                 </label>
+                <div class="brush-size-grid" id="brushSizeGrid" role="listbox" aria-label="Brush size presets"></div>
               </div>
               <div class="prop-row" id="toolOpacityRow">
                 <label class="field" title="Transparency of the whole stroke (100 = solid)">
@@ -616,8 +617,9 @@
               id="quickWidth"
               class="quick-width"
               type="range"
-              min="1"
-              max="60"
+              min="0.5"
+              max="800"
+              step="0.1"
               value="6"
               title="Brush width"
               aria-label="Brush width"

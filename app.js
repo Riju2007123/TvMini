@@ -531,6 +531,7 @@ quickWidth?.addEventListener("input", () => {
   if (brushShapeSize) brushShapeSize.textContent = `${quickWidth.value}px`;
   toolSettings().width = Number(quickWidth.value);
   syncQuickBar();
+  syncBrushSizeGrid();
 });
 
 quickUndo?.addEventListener("click", () => undo());
@@ -2904,12 +2905,13 @@ function applyBrushSettings(brush) {
   const settings = toolSettings();
   const size = Number(brush.size);
   if (Number.isFinite(size) && size > 0) {
-    const value = Math.min(Number(widthInput.max) || 300, Math.round(size));
+    const value = Math.min(Number(widthInput.max) || 800, Math.round(size));
     widthInput.value = String(value);
     widthValue.textContent = String(value);
     if (brushShapeSize) brushShapeSize.textContent = `${value}px`;
     settings.width = value;
     syncQuickBar();
+    syncBrushSizeGrid();
   }
   const opacity = Number(brush.opacity);
   if (Number.isFinite(opacity) && opacity > 0) {
@@ -6893,11 +6895,70 @@ widthInput.addEventListener("input", () => {
   // The width belongs to the tool in the hand, so the pencil keeps its own.
   toolSettings().width = Number(widthInput.value);
   syncQuickBar();
+  syncBrushSizeGrid();
   // The shape of the brush under the pointer grows and shrinks with the
   // width, so it is drawn again at once.
   drawBrushShape();
   drawOverlay();
 });
+
+/* --------------------------------------------------------- brush size grid */
+
+// The sizes TVPaint's Brush Size panel offers, from the pinprick to the
+// broadest wash. A press of a cell puts the size in the hand.
+const BRUSH_SIZE_PRESETS = [
+  0.7, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 10, 12, 15, 17, 20, 25, 30, 40, 50,
+  60, 70, 80, 100, 120, 150, 170, 200, 250, 300, 400, 500, 600, 700, 800,
+];
+
+// The diameter of the dot in a cell: it grows with the size but never leaves
+// the cell, so 800 reads as a full dot and 0.7 as a pinprick. The growth is
+// a root, the way TVPaint's own grid reads - the small steps stay visible
+// next to the large ones.
+function brushSizeDotPixels(size) {
+  const full = 13;
+  return Math.round(Math.min(full, Math.max(3, full * Math.pow(size / 800, 0.4))));
+}
+
+function renderBrushSizeGrid() {
+  const grid = document.getElementById("brushSizeGrid");
+  if (!grid) return;
+  for (const size of BRUSH_SIZE_PRESETS) {
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "brush-size-cell";
+    cell.dataset.size = String(size);
+    cell.title = `Brush size ${size}`;
+    const pixels = brushSizeDotPixels(size);
+    const dot = document.createElement("span");
+    dot.className = "brush-size-dot";
+    dot.style.width = `${pixels}px`;
+    dot.style.height = `${pixels}px`;
+    const label = document.createElement("span");
+    label.className = "brush-size-label";
+    label.textContent = String(size);
+    cell.append(dot, label);
+    cell.addEventListener("click", () => {
+      widthInput.value = String(size);
+      // The slider's own listener writes the number, the tool setting, the
+      // quick bar and the picture of the brush, so one event does it all.
+      widthInput.dispatchEvent(new Event("input"));
+    });
+    grid.append(cell);
+  }
+}
+
+/** Light the cell of the size the brush is at now, when it is one of them. */
+function syncBrushSizeGrid() {
+  const grid = document.getElementById("brushSizeGrid");
+  if (!grid) return;
+  const width = Number(widthInput.value);
+  for (const cell of grid.children) {
+    cell.classList.toggle("active", Number(cell.dataset.size) === width);
+  }
+}
+
+renderBrushSizeGrid();
 
 strokeOpacityInput.addEventListener("input", () => {
   const value = Math.max(1, Math.min(100, Math.round(Number(strokeOpacityInput.value) || 100)));
@@ -7313,6 +7374,7 @@ function showToolProps() {
   toolPropsTitle.textContent = props.title;
   widthInput.value = String(settings.width);
   widthValue.textContent = String(settings.width);
+  syncBrushSizeGrid();
   stabilizerInput.value = String(settings.stabilizer);
   stabilizerValue.textContent = String(settings.stabilizer);
   strokeOpacityInput.value = String(settings.opacity);
@@ -7364,7 +7426,7 @@ function showToolProps() {
 /** Take the settings from the panel into the tool in the hand. */
 function saveToolProps() {
   const settings = toolSettings();
-  settings.width = Math.max(1, Math.min(300, Number(widthInput.value) || settings.width));
+  settings.width = Math.max(0.5, Math.min(800, Number(widthInput.value) || settings.width));
   settings.stabilizer = Math.max(0, Math.min(100, Number(stabilizerInput.value) || 0));
   settings.opacity = Math.max(1, Math.min(100, Number(strokeOpacityInput.value) || 100));
   settings.blend = strokeBlendSelect.value;
@@ -7445,10 +7507,11 @@ function selectedWidth() {
 }
 
 function changeWidth(delta) {
-  const next = Math.max(1, Math.min(60, selectedWidth() + delta));
+  const next = Math.max(0.5, Math.min(800, selectedWidth() + delta));
   if (next === selectedWidth()) return;
   widthInput.value = String(next);
   widthValue.textContent = String(next);
+  syncBrushSizeGrid();
   setStatus(`Brush width ${next}`);
 }
 
