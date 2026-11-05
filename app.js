@@ -7322,6 +7322,7 @@ function endStroke(event) {
   // straight into the document instead of the document being built again.
   const wasLive = liveStrokeState.active;
   const liveSource = liveStrokeState.grained ? liveGrainCanvas : liveInkCanvas;
+  let grown = false;
 
   if (state.tool === "brush" || state.tool === "eraser") {
     // The pointer stopped where it left the paper: that last place goes in
@@ -7372,7 +7373,7 @@ function endStroke(event) {
     // A stroke that ran past the sheet grows the sheet, so the room to draw
     // in follows the hand the way Flash's work area does. It rides in the
     // same change as the stroke, so undo takes them back together.
-    growSheetForStroke(committed);
+    grown = growSheetForStroke(committed);
   }
 
   const before = state.strokeBefore;
