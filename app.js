@@ -9407,13 +9407,24 @@ async function importDroppedFiles(fileList) {
   if (!plan.kind) {
     setStatus(
       `${plan.ignored[0] ?? "That file"} cannot be opened by TVMini - drop a .tvmini, .clip, ` +
-        ".tvpp, .fla or .xfl, a picture (PNG, GIF, BMP, TGA) or a sound.",
+        ".tvpp, .fla or .xfl, a .sut brush, a picture (PNG, GIF, BMP, TGA) or a sound.",
       true,
     );
     return;
   }
   const chosen = plan.entries.map((index) => dropped[index]);
   const entry = chosen[0];
+
+  // A brush joins the library and the document that is open is left as it
+  // is, so a brush drop is taken without the question of a discard. Several
+  // brushes come in together, the way they were picked.
+  if (plan.kind === "brush") {
+    const files = chosen.map(
+      (item) => new File([item.bytes], item.name, { type: "application/octet-stream" }),
+    );
+    await importBrushFiles(files);
+    return;
+  }
 
   // A sound joins the document that is open; everything else replaces it.
   if (plan.kind !== "audio" && !confirmDiscard()) return;

@@ -20,12 +20,16 @@ export const DROP_KINDS = [
   { kind: "clip", extensions: [".clip"] },
   { kind: "tvpp", extensions: [".tvpp"] },
   { kind: "fla", extensions: [".fla", ".xfl"] },
+  { kind: "brush", extensions: [".sut"] },
   { kind: "pictures", extensions: [".png", ".gif", ".bmp", ".tga"] },
   { kind: "audio", extensions: [".wav", ".mp3", ".ogg", ".m4a", ".aac", ".flac", ".opus"] },
 ];
 
 /** The one kind of drop that may carry several files at once. */
 export const MULTI_DROP_KIND = "pictures";
+
+/** The kinds that take several files of their own at once. */
+export const MULTI_KINDS = [MULTI_DROP_KIND, "brush"];
 
 /** What kind of file `name` is, or null when the program cannot use it. */
 export function dropKind(name) {
@@ -54,9 +58,11 @@ export function planDrop(names) {
   }
   if (known.length === 0) return { kind: null, entries: [], ignored };
 
-  // Every file a picture: the drop is a sequence of cells.
-  if (known.every((index) => kinds[index] === MULTI_DROP_KIND)) {
-    return { kind: MULTI_DROP_KIND, entries: known, ignored };
+  // Every file of one kind that takes several at once: the drop is that kind.
+  for (const kind of MULTI_KINDS) {
+    if (known.every((index) => kinds[index] === kind)) {
+      return { kind, entries: known, ignored };
+    }
   }
 
   // Otherwise the first file the program understands stands for the drop.
