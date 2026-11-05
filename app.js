@@ -39,7 +39,7 @@ import {
 } from "./core/selection.js";
 import * as shapeModel from "./core/shape-model.js";
 import * as flash8 from "./flash8-ui.js";
-import { dynamicsOf, strokeDabs } from "./core/brush-dynamics.js";
+import { catmullRomResample, dynamicsOf, strokeDabs } from "./core/brush-dynamics.js";
 import { isPlain, pointToPicture, transformAt, transformMatrix, transformOf } from "./core/transform.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -1867,7 +1867,12 @@ function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
  * `brush-dynamics.js`, and both painters use the same reading.
  */
 function strokeStyleOf(brush) {
-  return brush ? dynamicsOf(brush) : dynamicsOf(null);
+  const style = brush ? dynamicsOf(brush) : dynamicsOf(null);
+  // A brush from Clip Studio Paint that carries no pressure curve of its
+  // own draws with a constant width: the ends taper the way Umoupen's
+  // vector engine tapers the strokes of such brushes.
+  if (brush && brushFromSut(brush) && !style.effectors.size) style.taperEnds = true;
+  return style;
 }
 
 /**
@@ -7279,7 +7284,10 @@ canvas.addEventListener("pointermove", (event) => {
     // Clip Studio Paint draws the line the hand drew - its own curves shape
     // the stroke - so the smoothing stands aside for one of those.
     if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
-      state.drawing.points = state.rawSamples.slice();
+      state.drawing.points = catmullRomResample(
+        state.rawSamples,
+        Number(state.drawing.width) || Number(widthInput.value) || 1,
+      );
     } else {
       state.drawing.points = brushSmoothPath(
         state.rawSamples,
@@ -7349,7 +7357,10 @@ function endStroke(event) {
         if (!lastSample || Math.hypot(point[0] - lastSample[0], point[1] - lastSample[1]) > 0.05) {
           run.push(smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10));
           if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
-            state.drawing.points = run.slice();
+            state.drawing.points = catmullRomResample(
+              run,
+              Number(state.drawing.width) || Number(widthInput.value) || 1,
+            );
           } else {
             state.drawing.points = brushSmoothPath(run, flash8.settings.brushSmoothness);
           }
@@ -7410,8 +7421,10 @@ function endStroke(event) {
   // nothing stands over the layer in the hand, when no selection cut the
   // ink, and when the sheet did not grow - a grown sheet is drawn anew
   // anyway, and a cut stroke is not the stroke that was stamped.
+  const liveStyleTapers = liveStrokeState.style?.taperEnds === true;
   const fast =
-    wasLive && !grown && !layerAboveCovers() && !currentSelection();
+    wasLive && !grown && !layerAboveCovers() && !currentSelection()
+    && !liveStyleTapers;
   if (fast) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);

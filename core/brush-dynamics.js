@@ -330,27 +330,91 @@ function segmentsOf(stroke, ellipsePoints) {
  * radius, how flat it is (1 is round), the turn of its tip and the share of
  * the paint it leaves.
  */
+/**
+ * The resampling of a hand-run the way Umoupen's vector engine does it:
+ * every segment of the run is carried through a Catmull-Rom curve
+ * (written in its cubic Bezier form, the basis the decompile of
+ * Umoupen's dab generator shows), subdivided finely enough that a dab
+ * falls inside every half diameter of the brush. The pressure of the
+ * hand is carried along the curve by a share of the two ends.
+ */
+export function catmullRomResample(points, diameter) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (points.length <= 2) return points.map((point) => point.slice());
+  const step = Math.max(0.5, (Number(diameter) || 1) * 0.5);
+  const out = [points[0].slice()];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    // Catmull-Rom to the four cubic Bezier control points.
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    const steps = Math.max(2, Math.min(64, Math.ceil(segLen / step)));
+    for (let s = 1; s <= steps; s += 1) {
+      const t = s / steps;
+      const mt = 1 - t;
+      const b0 = mt * mt * mt;
+      const b1 = 3 * mt * mt * t;
+      const b2 = 3 * mt * t * t;
+      const b3 = t * t * t;
+      const x = b0 * p1[0] + b1 * c1x + b2 * c2x + b3 * p2[0];
+      const y = b0 * p1[1] + b1 * c1y + b2 * c2y + b3 * p2[1];
+      if (p1.length > 2 && p2.length > 2) {
+        out.push([x, y, p1[2] + (p2[2] - p1[2]) * t]);
+      } else {
+        out.push([x, y]);
+      }
+    }
+  }
+  return out;
+}
+
 export function strokeDabs(stroke, style, ellipsePoints = null) {
   const base = Math.max(0.5, number(stroke.width, 1) / 2);
   const segments = segmentsOf(stroke, ellipsePoints);
   const dabs = [];
 
+  // The taper of the ends, the way Umoupen's vector engine fades a
+  // stroke whose brush carries no pressure of its own: the first 18 %
+  // of the path rises and the last 10 % falls away, the middle at
+  // full strength. (The constants are from the decompile.)
+  let total = 0;
+  if (style.taperEnds) {
+    for (const [from, to] of segments) {
+      total += Math.hypot(to[0] - from[0], to[1] - from[1]);
+    }
+  }
+  const taperFactor = (along) => {
+    if (total <= 0) return 1;
+    const pathT = along / total;
+    if (pathT <= 0.18) return pathT / 0.18;
+    if (pathT >= 0.9) return Math.max(0, (1 - pathT) / 0.1);
+    return 1;
+  };
+
   if (segments.length === 0) {
     const point = stroke.points?.[0];
     if (!point) return dabs;
     const pressure = pressureOf(point);
+    const dotTaper = taperFactor(0);
     dabs.push({
       x: point[0],
       y: point[1],
-      r: Math.max(0.5, base * sizeShare(style, pressure)),
+      r: Math.max(0.5, base * sizeShare(style, pressure) * (0.5 + 0.5 * dotTaper)),
       flat: thicknessShare(style, pressure, 0),
       angle: angleOf(style, 0, pressure, 0),
-      flow: flowShare(style, pressure, 0),
+      flow: flowShare(style, pressure, 0) * dotTaper,
     });
     return dabs;
   }
 
   let index = 0;
+  let travelled = 0;
   for (const [from, to] of segments) {
     const x0 = from[0];
     const y0 = from[1];
@@ -358,6 +422,7 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
     const y1 = to[1];
     const p0 = pressureOf(from);
     const p1 = pressureOf(to);
+    const segLength = Math.hypot(x1 - x0, y1 - y0);
     const r0 = Math.max(0.5, base * sizeShare(style, p0));
     const r1 = Math.max(0.5, base * sizeShare(style, p1));
     const length = Math.hypot(x1 - x0, y1 - y0);
@@ -375,16 +440,19 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
     for (let part = start; part <= steps; part += 1) {
       const at = part / steps;
       const pressure = p0 + (p1 - p0) * at;
+      const along = travelled + length * at;
+      const taper = taperFactor(along);
       dabs.push({
         x: x0 + (x1 - x0) * at,
         y: y0 + (y1 - y0) * at,
-        r: r0 + (r1 - r0) * at,
+        r: Math.max(0.5, (r0 + (r1 - r0) * at) * (0.5 + 0.5 * taper)),
         flat: thicknessShare(style, pressure, index),
         angle: angleOf(style, direction, pressure, index),
-        flow: flowShare(style, pressure, index),
+        flow: flowShare(style, pressure, index) * taper,
       });
       index += 1;
     }
+    travelled += segLength;
   }
   return dabs;
 }
