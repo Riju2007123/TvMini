@@ -471,11 +471,18 @@ function snapshot() {
     loop: project.loop,
     camera: project.camera,
     audio: project.audio,
+    // The room the sheet grew to hold the ink travels with the history: a
+    // stroke that grew the sheet is undone with the room it asked for.
+    pasteboardPad: project.pasteboardPad ?? null,
   });
 }
 
 function restore(snapshotValue) {
   const clean = structuredClone(snapshotValue);
+  // The sheet the project had, so the view can follow a sheet that changed:
+  // a room that was grown is taken back with the stroke that asked for it.
+  const docBefore = state.project ? documentSize(state.project) : null;
+  const padBefore = docBefore ? stagePadding(docBefore.width, docBefore.height) : null;
   Object.assign(state.project, {
     layers: clean.layers,
     currentLayer: clean.currentLayer,
@@ -485,8 +492,19 @@ function restore(snapshotValue) {
     loop: clean.loop,
     camera: clean.camera ?? null,
     audio: clean.audio ?? null,
+    pasteboardPad: clean.pasteboardPad ?? null,
   });
   clampSelection();
+  const docAfter = documentSize(state.project);
+  const padAfter = stagePadding(docAfter.width, docAfter.height);
+  if (padBefore && (padAfter.x !== padBefore.x || padAfter.y !== padBefore.y)) {
+    const zoom = viewZoom || 1;
+    applyView();
+    canvasScroll.scrollLeft += (padAfter.x - padBefore.x) * zoom;
+    canvasScroll.scrollTop += (padAfter.y - padBefore.y) * zoom;
+    expectedScrollLeft = canvasScroll.scrollLeft;
+    expectedScrollTop = canvasScroll.scrollTop;
+  }
 }
 
 function clampSelection() {
@@ -1960,24 +1978,58 @@ function drawOnionSkins(project, layer, frame) {
 }
 
 /**
- * The size of the sheet: the canvas plus a fixed strip of pasteboard around
- * it, the way Flash keeps a fixed work area around the stage. The strip does
- * not grow with the strokes, so a drawing that reaches far off the stage does
- * not blow the canvas up; it is simply clipped at the edge of the sheet.
+ * The size of the sheet: the canvas plus a wide strip of pasteboard around
+ * it, the way Flash keeps a large work area around the stage. A stroke may
+ * be drawn anywhere on the sheet, and when a stroke reaches past the sheet
+ * the sheet grows around the canvas to hold it, so the room to draw in is
+ * for all intents without an end.
  *
- * A document that was imported keeps the size of its source instead: its
- * sheet is the canvas, so the stage shows exactly the resolution the file
- * was made in and a write-back of it matches what is on screen.
+ * The room is held back by a budget of pixels: the scratch canvases that
+ * put a layer together are the size of the sheet, so the sheet of a big
+ * canvas carries a smaller strip than the sheet of a small one. A document
+ * that was imported keeps the size of its source instead: its sheet is the
+ * canvas, so the stage shows exactly the resolution the file was made in
+ * and a write-back of it matches what is on screen.
  */
-const PASTEBOARD_FRACTION = 0.25;
+const PASTEBOARD_FRACTION = 1.0;
+
+/** How far drawing outward may grow the sheet, past the room it starts with. */
+const PASTEBOARD_GROWN_FRACTION = 2.0;
+
+/** The most pixels the sheet may take: three scratch canvases are built at
+    the size of the sheet, so this is what keeps their memory in hand. */
+const PASTEBOARD_PIXEL_BUDGET = 24_000_000;
+
+/**
+ * The share of the canvas a side of the sheet may carry: the share that is
+ * asked for, held inside the pixel budget and never smaller than a quarter,
+ * which is the room every document has always had.
+ */
+function sheetPadFractionFor(project, desiredFraction) {
+  const byBudget =
+    (Math.sqrt(PASTEBOARD_PIXEL_BUDGET / (project.width * project.height)) - 1) / 2;
+  return Math.max(0.25, Math.min(desiredFraction, byBudget));
+}
+
+/** How much pasteboard each side of the sheet carries: the share every
+    project starts with, and the room that was grown for the strokes that
+    were drawn past it. */
+function pasteboardPadOf(project) {
+  return {
+    x: Math.round(project.width * sheetPadFractionFor(project, PASTEBOARD_FRACTION)),
+    y: Math.round(project.height * sheetPadFractionFor(project, PASTEBOARD_FRACTION)),
+  };
+}
 
 function documentSize(project) {
   if (project.pasteboard === false) {
     return { width: project.width, height: project.height };
   }
+  const base = pasteboardPadOf(project);
+  const stored = project.pasteboardPad;
   return {
-    width: Math.round(project.width * (1 + PASTEBOARD_FRACTION * 2)),
-    height: Math.round(project.height * (1 + PASTEBOARD_FRACTION * 2)),
+    width: project.width + (base.x + Math.max(0, Math.round(stored?.x ?? 0))) * 2,
+    height: project.height + (base.y + Math.max(0, Math.round(stored?.y ?? 0))) * 2,
   };
 }
 
@@ -1992,6 +2044,83 @@ function stagePadding(docWidth, docHeight) {
     x: Math.max(0, (docWidth - project.width) / 2),
     y: Math.max(0, (docHeight - project.height) / 2),
   };
+}
+
+/**
+ * Grow the sheet around the canvas to hold a stroke that reached past it.
+ *
+ * The room to draw in is without an end in the way Flash's work area is: a
+ * stroke that runs past the edge of the sheet grows the sheet by a canvas
+ * and a half past the ink, so the next stroke can be started still further
+ * out. The sheet grows around the canvas, so the canvas stays where it is
+ * in the sheet, and the view is moved by the growth, so the drawing stays
+ * where it is on the screen.
+ *
+ * @returns {boolean} whether the sheet grew.
+ */
+function growSheetForStroke(stroke) {
+  const project = state.project;
+  if (!project || project.pasteboard === false) return false;
+  const base = pasteboardPadOf(project);
+  const stored = project.pasteboardPad ?? { x: 0, y: 0 };
+  const currentX = base.x + Math.max(0, Math.round(stored.x ?? 0));
+  const currentY = base.y + Math.max(0, Math.round(stored.y ?? 0));
+
+  // The reach of the stroke: its points, half the brush wide besides.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const point of stroke?.points ?? []) {
+    const x = point[0];
+    const y = point[1];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  if (!Number.isFinite(minX)) return false;
+  const reach = Math.max(4, (Number(widthInput.value) || 1) / 2);
+  minX -= reach;
+  minY -= reach;
+  maxX += reach;
+  maxY += reach;
+
+  // Room to keep drawing outward: half the starting strip past the ink.
+  const wantedX = Math.max(
+    currentX,
+    Math.round(-minX + base.x / 2),
+    Math.round(maxX - project.width + base.x / 2),
+  );
+  const wantedY = Math.max(
+    currentY,
+    Math.round(-minY + base.y / 2),
+    Math.round(maxY - project.height + base.y / 2),
+  );
+  const capX = Math.round(project.width * sheetPadFractionFor(project, PASTEBOARD_GROWN_FRACTION));
+  const capY = Math.round(project.height * sheetPadFractionFor(project, PASTEBOARD_GROWN_FRACTION));
+  const nextX = Math.min(capX, wantedX);
+  const nextY = Math.min(capY, wantedY);
+  if (nextX <= currentX && nextY <= currentY) return false;
+
+  project.pasteboardPad = {
+    x: Math.max(0, nextX - base.x),
+    y: Math.max(0, nextY - base.y),
+  };
+
+  // The canvas sits deeper in the grown sheet, so the view follows the
+  // growth and the ink stays where it was put.
+  const zoom = viewZoom || 1;
+  const grownX = nextX - currentX;
+  const grownY = nextY - currentY;
+  applyView();
+  if (grownX > 0 || grownY > 0) {
+    canvasScroll.scrollLeft += grownX * zoom;
+    canvasScroll.scrollTop += grownY * zoom;
+    expectedScrollLeft = canvasScroll.scrollLeft;
+    expectedScrollTop = canvasScroll.scrollTop;
+  }
+  return true;
 }
 
 function renderCanvas(frame = state.project.currentFrame) {
@@ -6860,6 +6989,10 @@ function endStroke(event) {
     } catch (error) {
       console.error("shapeForStroke at commit failed", error);
     }
+    // A stroke that ran past the sheet grows the sheet, so the room to draw
+    // in follows the hand the way Flash's work area does. It rides in the
+    // same change as the stroke, so undo takes them back together.
+    growSheetForStroke(committed);
   }
 
   const before = state.strokeBefore;

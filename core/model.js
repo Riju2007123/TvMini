@@ -1106,6 +1106,18 @@ export function normalizeProject(input) {
     // that was drawn here - and every Flash document, which lives on a
     // pasteboard of its own - keeps the work area it is used to.
     ...(input.pasteboard === false ? { pasteboard: false } : {}),
+    // The room a sheet grew to hold the strokes that were drawn off the
+    // canvas: how much pasteboard each side carries beyond the share every
+    // project starts with. It travels so the room is there again, with the
+    // ink that asked for it, when the document is opened.
+    ...(input.pasteboardPad && (Number(input.pasteboardPad.x) > 0 || Number(input.pasteboardPad.y) > 0)
+      ? {
+          pasteboardPad: {
+            x: Math.max(0, Math.round(Number(input.pasteboardPad.x) || 0)),
+            y: Math.max(0, Math.round(Number(input.pasteboardPad.y) || 0)),
+          },
+        }
+      : {}),
   };
 }
 
