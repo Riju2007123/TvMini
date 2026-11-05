@@ -3300,6 +3300,26 @@ function currentBrush() {
 }
 
 /**
+ * Is the brush one that came from Clip Studio Paint?
+ *
+ * A brush that was read out of a `.sut` carries the curves that follow the
+ * hand (`dyn`) and the bytes of its file (`source`); the brushes of this
+ * program carry neither.
+ */
+function brushFromSut(brush) {
+  return Boolean(brush?.source) || Boolean(brush?.dyn);
+}
+
+/** The Flash 8 smoothing of the hand is an option of this program's own
+    brushes: a brush from Clip Studio Paint draws the line the hand drew and
+    shapes it with its own curves, so the option steps aside while one is in
+    the hand. */
+function syncSmoothingField(brush) {
+  const field = document.getElementById("f8SmoothingField");
+  if (field) field.hidden = brushFromSut(brush);
+}
+
+/**
  * Put a brush on the drawing that is being drawn on.
  *
  * A brush that comes with a size brings it with it: the width of the brush
@@ -3323,6 +3343,7 @@ function useBrush(brush, name) {
     const entry = folderCells(state.project, state.project.currentLayer).get(targetFrame);
     if (!entry) {
       if (brush) applyBrushSettings(brush);
+      syncSmoothingField(brush ?? null);
       brushImageName.textContent = name;
       drawBrushShape();
       return true;
@@ -3344,6 +3365,7 @@ function useBrush(brush, name) {
   afterChange();
   brushImageName.textContent = name;
   if (brush) applyBrushSettings(brush);
+  syncSmoothingField(brush ?? null);
   // The shape of the brush in the panel is drawn again.
   drawBrushShape();
   return true;
@@ -7250,13 +7272,19 @@ canvas.addEventListener("pointermove", (event) => {
   }
 
   if (state.tool === "brush" || state.tool === "eraser") {
-    // Flash 8 brush smoothness (`Stroke\Brush Smoothness`, default 50): the
-    // whole run of samples is fitted again, so the line that is shown is
-    // the line that will be left behind, and it does not trail the pointer.
-    state.drawing.points = brushSmoothPath(
-      state.rawSamples,
-      flash8.settings.brushSmoothness,
-    );
+    // Flash 8 brush smoothness (`Stroke\Brush Smoothness`): the whole run of
+    // samples is fitted again, so the line that is shown is the line that
+    // will be left behind, and it does not trail the pointer. A brush from
+    // Clip Studio Paint draws the line the hand drew - its own curves shape
+    // the stroke - so the smoothing stands aside for one of those.
+    if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
+      state.drawing.points = state.rawSamples.slice();
+    } else {
+      state.drawing.points = brushSmoothPath(
+        state.rawSamples,
+        flash8.settings.brushSmoothness,
+      );
+    }
   }
 
   // The stroke is shown on the sheet on top of the stage; the document
@@ -7302,7 +7330,11 @@ function endStroke(event) {
         const lastSample = run[run.length - 1];
         if (!lastSample || Math.hypot(point[0] - lastSample[0], point[1] - lastSample[1]) > 0.05) {
           run.push(smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10));
-          state.drawing.points = brushSmoothPath(run, flash8.settings.brushSmoothness);
+          if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
+            state.drawing.points = run.slice();
+          } else {
+            state.drawing.points = brushSmoothPath(run, flash8.settings.brushSmoothness);
+          }
         }
       } catch {
         // A cancelled pointer has no last position; the line stays as it was.
