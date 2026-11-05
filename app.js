@@ -2015,6 +2015,7 @@ function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style,
   );
   ctx.globalCompositeOperation = "source-over";
   grainScratch.box = dirty;
+  return grownX > 0 || grownY > 0;
 }
 
 /** Paint the shape of a stroke, in the colour of the stroke and at full strength. */
@@ -5471,7 +5472,7 @@ function gotoNextKey() {
   selectFrame(key);
 }
 
-function afterChange({ timeline = true } = {}) {
+function afterChange({ timeline = true, skipRender = false } = {}) {
   clampSelection();
   refreshTitle();
   syncLayerControls();
@@ -5479,7 +5480,7 @@ function afterChange({ timeline = true } = {}) {
   if (timeline) renderTimeline();
   else updatePlayhead();
   updateFrameLabel();
-  renderCanvas();
+  if (!skipRender) renderCanvas();
   updateHistoryButtons();
 }
 
@@ -7301,6 +7302,21 @@ canvas.addEventListener("pointermove", (event) => {
   else drawOverlay();
 });
 
+/**
+ * Does a layer that can be seen stand over the one in the hand?
+ *
+ * The ink of the living layers is stamped over the whole stack while a
+ * stroke is drawn, so a stroke that belongs under a layer above can only
+ * be committed with a full render of the document, which knows the order.
+ */
+function layerAboveCovers() {
+  const project = state.project;
+  for (let index = project.layers.length - 1; index > project.currentLayer; index -= 1) {
+    if (layerIsVisible(project, index)) return true;
+  }
+  return false;
+}
+
 function endStroke(event) {
   if (state.selectionDrag) {
     commitSelectionDrag();
@@ -7311,9 +7327,11 @@ function endStroke(event) {
     return;
   }
   if (!state.drawing) return;
-  // The living layers are emptied before the finished stroke is drawn into
-  // the document, so the ink is never seen twice.
-  endLiveStroke();
+  // The living layers hold the ink until it is committed below: the
+  // stroke that was stamped is the stroke that was drawn, and it can go
+  // straight into the document instead of the document being built again.
+  const wasLive = liveStrokeState.active;
+  const liveSource = liveStrokeState.grained ? liveGrainCanvas : liveInkCanvas;
   // The Flash 8 pencil shapes its finished line by mode.
   if (state.tool === "pencil" && !state.drawing.kind && !state.drawing.eraser) {
     flash8.finishPencil(state.drawing);
@@ -7380,15 +7398,35 @@ function endStroke(event) {
       const index = layer.drawings.indexOf(cell);
       if (index >= 0) layer.drawings.splice(index, 1);
     }
+    endLiveStroke();
     afterChange({ timeline: wasNew });
     setStatus("Nothing was painted — the stroke was outside the selection", true);
     return;
   }
 
+  // The ink of the living layers goes into the document as it stands:
+  // the stroke that was stamped is the stroke that was drawn, so the
+  // whole document is not built again for it. It is only honest when
+  // nothing stands over the layer in the hand, when no selection cut the
+  // ink, and when the sheet did not grow - a grown sheet is drawn anew
+  // anyway, and a cut stroke is not the stroke that was stamped.
+  const fast =
+    wasLive && !grown && !layerAboveCovers() && !currentSelection();
+  if (fast) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = committed.opacity ?? 1;
+    ctx.globalCompositeOperation =
+      committed.blend && committed.blend !== "normal" ? committed.blend : "source-over";
+    ctx.drawImage(liveSource, 0, 0);
+    ctx.restore();
+  }
+  endLiveStroke();
   const layer = currentLayer();
   const drawing = drawingAt(layer, state.project.currentFrame);
   const count = drawing ? drawing.strokes.length : 0;
-  afterChange({ timeline: wasNew });
+  afterChange({ timeline: wasNew, skipRender: fast });
+  if (fast) drawOverlay();
   setStatus(`${count} stroke${count === 1 ? "" : "s"} on ${layer.name}, frame ${state.project.currentFrame}`);
 }
 
