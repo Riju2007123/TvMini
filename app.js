@@ -945,11 +945,13 @@ function stageBuffer() {
 
 /** Put a context into the pixels of the document. */
 function useDocumentSpace(docWidth, docHeight, target = ctx) {
-  const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  const zoom = viewZoom || 1;
-  // One document pixel equals ratio*zoom screen pixels, no matter how large
-  // the document is. The canvas buffer is sized to hold the whole document.
-  const scale = ratio * zoom;
+  // One document pixel equals so many pixels of the buffer the target draws
+  // into. The buffer is sized to hold the whole document; when a big zoom
+  // would ask for a buffer no screen can show, the buffer is held back at
+  // its cap and the scale follows the buffer, so the whole document still
+  // lands in it: the drawing is only a little softer there, never shifted,
+  // and the brush stays under the pointer.
+  const scale = target.canvas.width / docWidth;
   // The canvas is in the middle of the sheet, so the sheet starts half of
   // what it gained before the canvas does.
   const pad = stagePadding(docWidth, docHeight);
