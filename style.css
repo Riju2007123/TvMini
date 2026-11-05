@@ -1598,7 +1598,10 @@ body.hide-tools .right-column {
    toolbar — so the state of the panel is written by the icon alone. */
 .prop-row .prop-eye,
 .prop-row .prop-eye[aria-pressed="true"],
-.prop-row .prop-eye[aria-pressed="false"] {
+.prop-row .prop-eye[aria-pressed="false"],
+.paint-dock-head .prop-eye,
+.paint-dock-head .prop-eye[aria-pressed="true"],
+.paint-dock-head .prop-eye[aria-pressed="false"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1614,7 +1617,9 @@ body.hide-tools .right-column {
 }
 
 .prop-row .prop-eye:hover:not(:disabled),
-.prop-row .prop-eye:focus-visible {
+.prop-row .prop-eye:focus-visible,
+.paint-dock-head .prop-eye:hover:not(:disabled),
+.paint-dock-head .prop-eye:focus-visible {
   background: var(--surface-3);
   color: var(--text);
 }

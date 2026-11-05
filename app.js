@@ -7311,7 +7311,7 @@ setupPaintDocks();
  */
 const PROP_ROW_ORDER = [
   "width", "opacity", "flow", "hardness", "thickness", "spacing", "paper",
-  "stabilizer", "binarize", "blend",
+  "stabilizer", "binarize", "blend", "options",
 ];
 
 /** The rows a panel starts with, the way the brush panel of MoArt does:
@@ -7338,7 +7338,16 @@ const PROP_ROW_ELEMENTS = {
   stabilizer: document.getElementById("toolStabilizerRow"),
   binarize: document.getElementById("toolBinarizeRow"),
   blend: document.getElementById("toolBlendRow"),
+  // The Options dock is put away as a whole window, head and body together.
+  options: document.getElementById("dockOptions"),
 };
+
+/** Where the Options dock stands when it is shown in the panel. */
+const optionsDockHome = (() => {
+  const dock = PROP_ROW_ELEMENTS.options;
+  if (!dock) return null;
+  return { parent: dock.parentElement, next: dock.nextElementSibling };
+})();
 
 /** What a row is called when it is put away or brought back. */
 const PROP_ROW_NAMES = {
@@ -7352,6 +7361,7 @@ const PROP_ROW_NAMES = {
   stabilizer: "Stabilizer",
   binarize: "Binarize",
   blend: "Blend",
+  options: "Options",
 };
 
 /** The eye that puts a row away, and the same eye with a line through it. */
@@ -7373,7 +7383,13 @@ for (const [id, row] of Object.entries(PROP_ROW_ELEMENTS)) {
   eye.dataset.propEye = id;
   eye.innerHTML = EYE_SVG;
   eye.addEventListener("click", () => togglePropPin(id));
-  row.appendChild(eye);
+  // The eye of a dock lives in its head, in front of the fold button.
+  if (id === "options") {
+    const head = row.querySelector(".paint-dock-head");
+    head.insertBefore(eye, head.querySelector(".paint-win-collapse"));
+  } else {
+    row.appendChild(eye);
+  }
   propEyes.set(id, eye);
 }
 
@@ -7446,12 +7462,14 @@ function propRowsOfTool() {
  */
 function propHiddenRowsExist() {
   const rows = propRowsOfTool();
-  return PROP_ROW_ORDER.some((id) => rows.includes(id) && !propIsPinned(id));
+  // The Options dock is not tied to a tool: while it is put away, the door
+  // to the drawer is there whatever the tool in the hand is.
+  return PROP_ROW_ORDER.some((id) => (rows.includes(id) || id === "options") && !propIsPinned(id));
 }
 
 /** Where a row is shown: in the panel, in the drawer, or not at all. */
 function propRowVisibleIn(id) {
-  if (!propRowsOfTool().includes(id)) return "";
+  if (id !== "options" && !propRowsOfTool().includes(id)) return "";
   if (propIsPinned(id)) return "strip";
   return propDrawerIsOpen() ? "group" : "";
 }
@@ -7492,13 +7510,33 @@ function layoutToolProps() {
     const row = PROP_ROW_ELEMENTS[id];
     if (!row) continue;
     const where = propRowVisibleIn(id);
+    const eye = propEyes.get(id);
+    if (id === "options") {
+      // A whole dock is never parked among the rows of the strip: it is
+      // shown in its own place or put away in the drawer as a window.
+      row.hidden = where === "";
+      if (where === "group") {
+        toolPropGroup.insertBefore(row, toolPropGroup.children[groupAt] || null);
+        groupAt += 1;
+      } else if (where === "strip" && optionsDockHome && row.parentElement === toolPropGroup) {
+        optionsDockHome.parent.insertBefore(row, optionsDockHome.next);
+      }
+      if (eye) {
+        const pinned = propIsPinned(id);
+        eye.setAttribute("aria-pressed", String(pinned));
+        eye.title = pinned
+          ? `Put ${PROP_ROW_NAMES[id] ?? id} away in Hidden items`
+          : `Bring ${PROP_ROW_NAMES[id] ?? id} back into the panel`;
+        eye.setAttribute("aria-label", eye.title);
+      }
+      continue;
+    }
     row.hidden = where === "";
     const host = where === "group" ? toolPropGroup : toolPropStrip;
     const at = host.children[where === "group" ? groupAt : stripAt] || null;
     if (at !== row) host.insertBefore(row, at);
     if (where === "group") groupAt += 1;
     else stripAt += 1;
-    const eye = propEyes.get(id);
     if (eye) {
       const pinned = propIsPinned(id);
       eye.setAttribute("aria-pressed", String(pinned));
