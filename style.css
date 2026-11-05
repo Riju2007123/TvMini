@@ -180,22 +180,25 @@ body.hide-timeline {
     var(--topbar-h) var(--tabstrip-h) minmax(0, 1fr) 0 0 24px;
 }
 
-body.hide-stage .workspace {
-  grid-template-columns: var(--left-w) var(--right-w);
+/* Without the inspector the column keeps only the layers, and the room the
+   inspector left reads as an empty panel, not as a gutter. */
+body.hide-inspector .right-column {
+  background: var(--surface);
 }
 
+/* The columns of the panes are fixed above, so hiding a pane only takes
+   its own column away. The stage is the one pane that grows into the
+   place of the tools, the way the tools were the only thing beside it. */
 body.hide-tools .workspace {
   grid-template-columns: minmax(0, 1fr) var(--right-w);
 }
 
-body.hide-inspector .workspace {
-  grid-template-columns: var(--left-w) minmax(0, 1fr);
+body.hide-tools .stage-pane {
+  grid-column: 1;
 }
 
-body.hide-tools.hide-inspector .workspace,
-body.hide-tools.hide-stage .workspace,
-body.hide-inspector.hide-stage .workspace {
-  grid-template-columns: minmax(0, 1fr);
+body.hide-tools .right-column {
+  grid-column: 2;
 }
 
 /* top bar --------------------------------------------------------------- */
@@ -922,6 +925,21 @@ body.hide-inspector.hide-stage .workspace {
 
 .right-column > .pane {
   flex: 1 1 auto;
+}
+
+/* The panes keep the column they are given, so hiding one of them cannot
+   slide the others into the wrong track - the Layers pane stays exactly
+   where it is when the Inspector is hidden. */
+.tools-pane {
+  grid-column: 1;
+}
+
+.stage-pane {
+  grid-column: 2;
+}
+
+.right-column {
+  grid-column: 3;
 }
 
 .right-column > .layers-pane {
