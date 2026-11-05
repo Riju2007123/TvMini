@@ -1108,6 +1108,9 @@ const layerCtx = layerCanvas.getContext("2d");
 // opaque here first, then applied to the paint canvas in a single pass.
 const blendCanvas = document.createElement("canvas");
 const blendCtx = blendCanvas.getContext("2d");
+// The box of the buffer the mask was last worked on, so a stroke's pass is
+// the size of its ink and not of the whole buffer.
+const blendScratch = { stroke: null, box: { x: 0, y: 0, w: 0, h: 0 } };
 // Scratch canvas for a stroke that is drawn on paper: the stroke is painted
 // here first, then the grain of the paper is taken out of the whole stroke in
 // one place, so the overlaps of the dabs do not keep their ink.
@@ -1328,19 +1331,55 @@ function drawStrokesInto(ctx, strokes, brush = null) {
     const blend = stroke.blend ?? "normal";
     if (opacity < 1 || blend !== "normal") {
       // Draw the stroke opaque into a mask canvas, then apply it in one
-      // pass — a multi-part stroke must not darken its own overlaps.
+      // pass — a multi-part stroke must not darken its own overlaps. The
+      // pass is the size of the ink, not of the whole buffer, and the mask
+      // is moved by the pad of the sheet, so the pasteboard is covered too.
+      const pad = stagePadding(canvasWidth, canvasHeight);
       if (blendCanvas.width !== canvasWidth || blendCanvas.height !== canvasHeight) {
         blendCanvas.width = canvasWidth;
         blendCanvas.height = canvasHeight;
+        blendScratch.stroke = null;
+        blendScratch.box = { x: 0, y: 0, w: 0, h: 0 };
       }
-      blendCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+      blendCtx.setTransform(1, 0, 0, 1, 0, 0);
+      if (blendScratch.stroke !== stroke) {
+        // A different stroke was in the mask: its room is taken out first.
+        if (blendScratch.stroke) {
+          blendCtx.clearRect(blendScratch.box.x, blendScratch.box.y, blendScratch.box.w, blendScratch.box.h);
+        }
+        blendScratch.stroke = stroke;
+        blendScratch.box = { x: 0, y: 0, w: 0, h: 0 };
+      }
+      const extent = strokeExtent(stroke);
+      const cover = { x: -pad.x, y: -pad.y, w: canvasWidth, h: canvasHeight };
+      const box = extent ? intersectBoxes(extent, cover) : null;
+      if (!box) continue;
+      const dirty = unionBox(blendScratch.box, {
+        x: box.x + pad.x,
+        y: box.y + pad.y,
+        w: box.w,
+        h: box.h,
+      });
+      blendCtx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+      blendCtx.setTransform(1, 0, 0, 1, pad.x, pad.y);
       drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight, brushOfStroke(stroke, brush), true);
       ctx.globalAlpha = opacity;
       ctx.globalCompositeOperation =
         stroke.eraser === true ? "destination-out" : blend === "normal" ? "source-over" : blend;
-      ctx.drawImage(blendCanvas, 0, 0);
+      ctx.drawImage(
+        blendCanvas,
+        dirty.x,
+        dirty.y,
+        dirty.w,
+        dirty.h,
+        dirty.x - pad.x,
+        dirty.y - pad.y,
+        dirty.w,
+        dirty.h,
+      );
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
+      blendScratch.box = dirty;
       continue;
     }
 
@@ -1348,6 +1387,146 @@ function drawStrokesInto(ctx, strokes, brush = null) {
   }
 
   ctx.globalCompositeOperation = "source-over";
+}
+
+/* ------------------------------------------------- the ink in the hand */
+
+// The stroke in the hand is stamped into layers of its own as the pointer
+// moves: only the dabs that are new are put down, so a long stroke costs
+// the same as a short one, and the sheet on top of the stage is not built
+// from the beginning on every move. The layers are emptied when the stroke
+// is out of the hand, and the finished line is the document's to draw.
+const liveInkCanvas = document.getElementById("liveInk");
+const liveInkCtx = liveInkCanvas?.getContext("2d");
+const liveGrainCanvas = document.getElementById("liveGrain");
+const liveGrainCtx = liveGrainCanvas?.getContext("2d");
+
+const liveStrokeState = {
+  active: false,
+  brush: null,
+  style: null,
+  grained: false,
+  stamped: 0,       // how many raw samples the layers hold
+  box: null,        // the room the ink covers, in the canvas coordinates
+};
+
+/** Take the stroke in the hand onto the layers of the living ink. A brush
+    with a picture of its own is what stamps itself here; a plain line and
+    the shapes are drawn on the sheet as they always were. */
+function startLiveStroke(stroke, brush) {
+  liveStrokeState.active = false;
+  if (!liveInkCtx || !liveGrainCtx || !brush?.data || stroke.eraser || stroke.kind) return;
+  if (flash8.compositeFor(stroke) !== "source-over") return;
+  liveInkCanvas.width = ctx.canvas.width;
+  liveInkCanvas.height = ctx.canvas.height;
+  liveGrainCanvas.width = ctx.canvas.width;
+  liveGrainCanvas.height = ctx.canvas.height;
+  liveStrokeState.brush = brush;
+  liveStrokeState.style = strokeStyleOf(brush);
+  liveStrokeState.grained = Boolean(liveStrokeState.style.grain?.data);
+  liveStrokeState.stamped = 0;
+  liveStrokeState.box = null;
+  const opacity = String(stroke.opacity ?? 1);
+  const blend = stroke.blend ?? "normal";
+  liveInkCanvas.style.opacity = opacity;
+  liveInkCanvas.style.mixBlendMode = blend;
+  liveGrainCanvas.style.opacity = opacity;
+  liveGrainCanvas.style.mixBlendMode = blend;
+  // The grained layer carries the ink with the grain taken out, and stands
+  // over the plain one, so both are never seen at once.
+  liveInkCanvas.hidden = liveStrokeState.grained;
+  liveGrainCanvas.hidden = !liveStrokeState.grained;
+  liveStrokeState.active = true;
+}
+
+/** Put the dabs of the samples that came in onto the layers. */
+function stampLiveStroke() {
+  if (!liveStrokeState.active) return;
+  const stroke = state.drawing;
+  if (!stroke) {
+    endLiveStroke();
+    return;
+  }
+  const run = state.rawSamples;
+  if (!run || liveStrokeState.stamped >= run.length) return;
+  // A zoom or a grown sheet made the buffer again: everything is stamped
+  // from the beginning, the samples hold the whole stroke.
+  if (liveInkCanvas.width !== ctx.canvas.width || liveInkCanvas.height !== ctx.canvas.height) {
+    liveInkCanvas.width = ctx.canvas.width;
+    liveInkCanvas.height = ctx.canvas.height;
+    liveGrainCanvas.width = ctx.canvas.width;
+    liveGrainCanvas.height = ctx.canvas.height;
+    liveStrokeState.stamped = 0;
+    liveStrokeState.box = null;
+  }
+  const project = state.project;
+  const doc = documentSize(project);
+  const scale = useDocumentSpace(doc.width, doc.height, liveInkCtx);
+  const pad = stagePadding(doc.width, doc.height);
+  const shape = tintedTip(liveStrokeState.brush, stroke.color, liveStrokeState.style.binarize);
+  // The run of samples only ever grows, so the dabs that are in are the
+  // ones of the samples before the last stamp, and the segment from there
+  // to the end carries the ones that are new.
+  const from = Math.max(0, liveStrokeState.stamped - 1);
+  const continuing = liveStrokeState.stamped > 0;
+  const segment = { ...stroke, points: run.slice(from) };
+  const dabs = strokeDabs(segment, liveStrokeState.style, null);
+  const fresh = continuing && dabs.length > 1 ? dabs.slice(1) : dabs;
+  const aspect = shape ? shape.width / Math.max(1, shape.height) : 1;
+  let box = null;
+  for (const dab of fresh) {
+    stampDab(liveInkCtx, dab, liveStrokeState.style, shape, stroke.color, "circle");
+    const reach = Math.max(2, dab.r * 2 * Math.max(1, aspect));
+    box = unionBox(box, { x: dab.x - reach, y: dab.y - reach, w: reach * 2, h: reach * 2 });
+  }
+  liveStrokeState.stamped = run.length;
+  liveStrokeState.box = unionBox(liveStrokeState.box, box);
+  if (liveStrokeState.grained && box) {
+    // The grain is taken out of the room the new dabs cover: the plain ink
+    // is copied over and the grain is laid on it, so a place is never
+    // grained twice however often the stroke crosses itself.
+    const region = {
+      x: Math.max(0, Math.floor((box.x + pad.x) * scale)),
+      y: Math.max(0, Math.floor((box.y + pad.y) * scale)),
+    };
+    region.w = Math.min(liveGrainCanvas.width, Math.ceil((box.x + pad.x + box.w) * scale)) - region.x;
+    region.h = Math.min(liveGrainCanvas.height, Math.ceil((box.y + pad.y + box.h) * scale)) - region.y;
+    if (region.w > 0 && region.h > 0) {
+      liveGrainCtx.setTransform(1, 0, 0, 1, 0, 0);
+      liveGrainCtx.clearRect(region.x, region.y, region.w, region.h);
+      liveGrainCtx.drawImage(
+        liveInkCanvas,
+        region.x,
+        region.y,
+        region.w,
+        region.h,
+        region.x,
+        region.y,
+        region.w,
+        region.h,
+      );
+      applyGrainToCanvas(
+        liveGrainCtx,
+        region,
+        liveStrokeState.style.grain,
+        { x: pad.x * scale, y: pad.y * scale },
+        scale,
+      );
+    }
+  }
+}
+
+/** The stroke is out of the hand: the living layers are emptied and put
+    away, and the finished line is the document's to draw. */
+function endLiveStroke() {
+  if (!liveStrokeState.active) return;
+  liveStrokeState.active = false;
+  liveInkCanvas.hidden = true;
+  liveGrainCanvas.hidden = true;
+  liveInkCtx.setTransform(1, 0, 0, 1, 0, 0);
+  liveInkCtx.clearRect(0, 0, liveInkCanvas.width, liveInkCanvas.height);
+  liveGrainCtx.setTransform(1, 0, 0, 1, 0, 0);
+  liveGrainCtx.clearRect(0, 0, liveGrainCanvas.width, liveGrainCanvas.height);
 }
 
 /** The pictures of the brushes, in the colours they were used in. */
@@ -1383,6 +1562,37 @@ function tintedTip(brush, color, binarize = false) {
 
   if (tintedTips.size > 8) tintedTips.clear();
   tintedTips.set(key, surface);
+  // The key travels with the picture, so the dabs can keep a copy of it at
+  // the size they draw it at.
+  surface.__tipKey = key;
+  return surface;
+}
+
+/** The pictures of the brushes at the sizes the dabs draw them at. */
+const scaledTips = new Map();
+
+/**
+ * The tinted picture of a brush, made small once for the size of a dab.
+ *
+ * A dab draws the picture of the brush at its own size, and drawing a big
+ * picture small, turned, for every dab of a dense brush, is the lag of a
+ * CSP brush. The picture is made small once for each size and every dab of
+ * that size puts the small picture down instead.
+ */
+function scaledTip(picture, along, across) {
+  const width = Math.max(1, Math.round(along));
+  const height = Math.max(1, Math.round(across));
+  const key = `${picture.__tipKey ?? ""}|${width}x${height}`;
+  let surface = scaledTips.get(key);
+  if (!surface) {
+    surface = document.createElement("canvas");
+    surface.width = width;
+    surface.height = height;
+    const context = surface.getContext("2d");
+    context.drawImage(picture, 0, 0, width, height);
+    if (scaledTips.size > 400) scaledTips.clear();
+    scaledTips.set(key, surface);
+  }
   return surface;
 }
 
@@ -1433,7 +1643,10 @@ function stampDab(ctx, dab, style, picture, color, tipShape = "circle") {
     : Math.max(1, dab.r * 2);
   let tip;
   if (picture) {
-    tip = picture;
+    // The picture at the size of the dab: made small once and kept, so a
+    // dense brush puts down small pictures instead of scaling its big one
+    // for every dab.
+    tip = scaledTip(picture, along, across);
   } else if (tipShape && tipShape !== "circle") {
     tip = shapedDab(color, Math.max(2, Math.round(along)), tipShape, style.hardness, style.binarize, dab.flat);
   } else {
@@ -1555,7 +1768,7 @@ function grainHolesFor(grain) {
 }
 
 /** Take the grain of the paper out of a stroke that is in a scratch canvas. */
-function applyGrainToCanvas(context, width, height, grain) {
+function applyGrainToCanvas(context, box, grain, origin = { x: 0, y: 0 }, pixelScale = 1) {
   const entry = grainHolesFor(grain);
   if (!entry.ready || !entry.surface) return;
   const pattern = context.createPattern(entry.surface, "repeat");
@@ -1564,7 +1777,8 @@ function applyGrainToCanvas(context, width, height, grain) {
   if (pattern.setTransform && typeof DOMMatrix !== "undefined") {
     pattern.setTransform(
       new DOMMatrix()
-        .scale(scale)
+        .translate(origin.x, origin.y)
+        .scale(scale * pixelScale)
         .rotate(-(Number(grain.rotate) || 0)),
     );
   }
@@ -1573,7 +1787,7 @@ function applyGrainToCanvas(context, width, height, grain) {
   // The strength of the grain: a grain of 0 takes nothing away at all.
   context.globalAlpha = Math.max(0, Math.min(1, Number(grain.density ?? 100) / 100));
   context.fillStyle = pattern;
-  context.fillRect(0, 0, width, height);
+  context.fillRect(box.x, box.y, box.w, box.h);
   context.restore();
 }
 
@@ -1682,17 +1896,125 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null, 
   ctx.globalCompositeOperation = "source-over";
 }
 
-/** Paint a stroke into a scratch canvas, then take the paper's grain out. */
+/**
+ * The box a stroke covers: its points, with the reach of the brush and the
+ * slack of its tip around them. The box is not held inside anything - the
+ * caller does that, because the pasteboard around the canvas carries ink at
+ * coordinates below zero.
+ */
+function strokeExtent(stroke) {
+  if (!stroke) return null;
+  const runs = stroke.kind === "paths" ? (stroke.paths ?? []) : [stroke.points];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const run of runs) {
+    for (const point of run ?? []) {
+      const x = point[0];
+      const y = point[1];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (!Number.isFinite(minX)) return null;
+  const reach = (Number(stroke.width) || 1) * 2 + 16;
+  minX -= reach;
+  minY -= reach;
+  maxX += reach;
+  maxY += reach;
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+/** The box that covers both of two boxes. An empty box stands aside: it
+    would otherwise pin the union to the corner of the buffer. */
+function unionBox(a, b) {
+  if (!a || a.w === 0 || a.h === 0) return { ...b };
+  if (!b || b.w === 0 || b.h === 0) return { ...a };
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    w: Math.max(a.x + a.w, b.x + b.w) - x,
+    h: Math.max(a.y + a.h, b.y + b.h) - y,
+  };
+}
+
+/** Where two boxes overlap, or null when they do not. */
+function intersectBoxes(a, b) {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const w = Math.min(a.x + a.w, b.x + b.w) - x;
+  const h = Math.min(a.y + a.h, b.y + b.h) - y;
+  return w > 0 && h > 0 ? { x, y, w, h } : null;
+}
+
+/** Paint a stroke into a scratch canvas, then take the paper's grain out.
+ *
+ * The scratch is moved by the pad of the sheet, so its room covers the
+ * pasteboard around the canvas as well, and it is only ever worked on
+ * inside the box the stroke covers - the grain pass and the copy of a
+ * whole buffer were the better part of a second of every move of the
+ * pointer.
+ */
+const grainScratch = { canvas: null, stroke: null, box: { x: 0, y: 0, w: 0, h: 0 } };
+
 function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style, eraser) {
-  fitScratch(grainCanvas, grainCtx, canvasWidth, canvasHeight);
+  const pad = stagePadding(canvasWidth, canvasHeight);
+  if (grainCanvas.width !== canvasWidth || grainCanvas.height !== canvasHeight) {
+    grainCanvas.width = canvasWidth;
+    grainCanvas.height = canvasHeight;
+    grainScratch.stroke = null;
+    grainScratch.box = { x: 0, y: 0, w: 0, h: 0 };
+  }
+  // All the clearing of the scratch happens without a transform, in the
+  // coordinates of the scratch itself.
+  grainCtx.setTransform(1, 0, 0, 1, 0, 0);
+  if (grainScratch.stroke !== stroke) {
+    // A stroke that is not the one in the scratch was there before: its room
+    // is taken out, and the box starts from this stroke's own ink.
+    if (grainScratch.stroke) {
+      grainCtx.clearRect(grainScratch.box.x, grainScratch.box.y, grainScratch.box.w, grainScratch.box.h);
+    }
+    grainScratch.stroke = stroke;
+    grainScratch.box = { x: 0, y: 0, w: 0, h: 0 };
+  }
+  const extent = strokeExtent(stroke);
+  if (!extent) return;
+  // The room the scratch has, in the coordinates the strokes are drawn in.
+  const cover = { x: -pad.x, y: -pad.y, w: canvasWidth, h: canvasHeight };
+  const box = intersectBoxes(extent, cover);
+  if (!box) return;
+  const dirty = unionBox(grainScratch.box, {
+    x: box.x + pad.x,
+    y: box.y + pad.y,
+    w: box.w,
+    h: box.h,
+  });
+  grainCtx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
   // The stroke is painted with the brush it has, but without the grain: the
   // grain belongs to the paper under the whole stroke, not to one dab.
   const plain = { ...(brush ?? {}), grain: null };
+  grainCtx.setTransform(1, 0, 0, 1, pad.x, pad.y);
   drawStrokeDirect(grainCtx, { ...stroke, eraser: false }, canvasWidth, canvasHeight, plain, true);
-  applyGrainToCanvas(grainCtx, canvasWidth, canvasHeight, style.grain);
+  applyGrainToCanvas(grainCtx, box, style.grain);
   ctx.globalCompositeOperation = eraser ? "destination-out" : "source-over";
-  ctx.drawImage(grainCanvas, 0, 0);
+  ctx.drawImage(
+    grainCanvas,
+    dirty.x,
+    dirty.y,
+    dirty.w,
+    dirty.h,
+    dirty.x - pad.x,
+    dirty.y - pad.y,
+    dirty.w,
+    dirty.h,
+  );
   ctx.globalCompositeOperation = "source-over";
+  grainScratch.box = dirty;
 }
 
 /** Paint the shape of a stroke, in the colour of the stroke and at full strength. */
@@ -2086,16 +2408,17 @@ function growSheetForStroke(stroke) {
   maxX += reach;
   maxY += reach;
 
-  // Room to keep drawing outward: half the starting strip past the ink.
+  // Room to keep drawing outward: a whole strip of the starting sheet past
+  // the ink, so drawing outward does not grow the sheet on every stroke.
   const wantedX = Math.max(
     currentX,
-    Math.round(-minX + base.x / 2),
-    Math.round(maxX - project.width + base.x / 2),
+    Math.round(-minX + base.x),
+    Math.round(maxX - project.width + base.x),
   );
   const wantedY = Math.max(
     currentY,
-    Math.round(-minY + base.y / 2),
-    Math.round(maxY - project.height + base.y / 2),
+    Math.round(-minY + base.y),
+    Math.round(maxY - project.height + base.y),
   );
   const capX = Math.round(project.width * sheetPadFractionFor(project, PASTEBOARD_GROWN_FRACTION));
   const capY = Math.round(project.height * sheetPadFractionFor(project, PASTEBOARD_GROWN_FRACTION));
@@ -3539,7 +3862,12 @@ function drawOverlay() {
     // the pointer moves, so the stroke is shown here instead. An eraser is
     // not shown here: a sheet on top of the stage cannot take ink away, so
     // the eraser works on the document itself.
-    drawStrokesInto(overlayCtx, [state.drawing], brushOfStroke(state.drawing, currentBrush()));
+    //
+    // A brush with a picture stamps itself onto the layers of the living
+    // ink as it goes, so only its tip is drawn here.
+    if (!liveStrokeState.active) {
+      drawStrokesInto(overlayCtx, [state.drawing], brushOfStroke(state.drawing, currentBrush()));
+    }
   }
   drawSelectionSheet(overlayCtx);
   drawBrushTip();
@@ -3552,8 +3880,9 @@ canvas.addEventListener("pointermove", (event) => {
   // brush is as wide as the line that will be drawn.
   tipPoint = { x, y, pressure: pressureFor(event) };
   // Only the sheet on top of the stage is drawn again; the document stays as
-  // it is, which is what keeps the stage smooth.
-  drawOverlay();
+  // it is, which is what keeps the stage smooth. A stroke in the hand draws
+  // the sheet itself further down, so it is not drawn twice here.
+  if (!state.drawing) drawOverlay();
 });
 
 canvas.addEventListener("pointerleave", () => {
@@ -6853,6 +7182,9 @@ canvas.addEventListener("pointerdown", (event) => {
   // The cell the ink goes on. A cell may sit somewhere else than it was
   // drawn, so the brush has to know which one it is on.
   state.drawingCell = drawing;
+  // The brush with a picture stamps itself onto the layers of the living
+  // ink, so the stroke shows as it is drawn without being built again.
+  startLiveStroke(stroke, brushOfStroke(stroke, currentBrush()));
   markDirty();
   renderCanvas();
 });
@@ -6932,7 +7264,12 @@ canvas.addEventListener("pointermove", (event) => {
   // exception: it takes ink away from the document, and a sheet on top of
   // the stage cannot do that, so the document itself is drawn again for
   // every move of the pointer.
-  if (state.drawing?.eraser) renderCanvas();
+  if (liveStrokeState.active) {
+    // The dabs that are new go onto the layers of the living ink; the sheet
+    // on top only carries the tip and the edges of the stage.
+    stampLiveStroke();
+    drawOverlay();
+  } else if (state.drawing?.eraser) renderCanvas();
   else drawOverlay();
 });
 
@@ -6946,6 +7283,9 @@ function endStroke(event) {
     return;
   }
   if (!state.drawing) return;
+  // The living layers are emptied before the finished stroke is drawn into
+  // the document, so the ink is never seen twice.
+  endLiveStroke();
   // The Flash 8 pencil shapes its finished line by mode.
   if (state.tool === "pencil" && !state.drawing.kind && !state.drawing.eraser) {
     flash8.finishPencil(state.drawing);

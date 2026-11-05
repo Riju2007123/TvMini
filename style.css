@@ -2136,6 +2136,23 @@ canvas.picking {
   touch-action: none;
 }
 
+/* The ink of the stroke in the hand. The dabs are stamped into these layers
+   as the pointer moves, so a long stroke costs the same as a short one - the
+   sheet on top of the stage is not drawn from the beginning every time. The
+   grained layer carries the ink with the grain of the paper taken out, and
+   stands over the plain one, so both are never seen at once. */
+#liveInk,
+#liveGrain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+  touch-action: none;
+}
+
 /* timeline --------------------------------------------------------------- */
 
 .pane-grip {
