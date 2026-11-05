@@ -38,7 +38,7 @@ import {
   translateStroke,
 } from "./core/selection.js";
 import * as shapeModel from "./core/shape-model.js";
-import * as flash8 from "./flash8-ui.js";
+
 import { catmullRomResample, dynamicsOf, strokeDabs } from "./core/brush-dynamics.js";
 import { isPlain, pointToPicture, transformAt, transformMatrix, transformOf } from "./core/transform.js";
 import { readSutBrush } from "./core/sut.js";
@@ -157,7 +157,7 @@ const fillToolButton = document.getElementById("fillTool");
 const cameraToolButton = document.getElementById("cameraTool");
 const marqueeButton = document.getElementById("marqueeTool");
 const lassoButton = document.getElementById("lassoTool");
-const marqueeOptions = document.getElementById("marqueeOpts");
+
 const marqueeShapeSelect = document.getElementById("marqueeShape");
 const stabilizerInput = document.getElementById("stabilizer");
 const stabilizerValue = document.getElementById("stabilizerValue");
@@ -1313,6 +1313,10 @@ function carriedBrush(brush) {
  * picture paints that picture along the stroke, the way Clip Studio Paint
  * paints the shape of a brush, instead of a plain round line.
  */
+// The smoothing of the hand for this program's own brushes, at the
+// strength Flash 8 defaulted to. It has no control of its own any more.
+const BRUSH_SMOOTHING = 50;
+
 function drawStrokesInto(ctx, strokes, brush = null) {
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
@@ -1416,7 +1420,6 @@ const liveStrokeState = {
 function startLiveStroke(stroke, brush) {
   liveStrokeState.active = false;
   if (!liveInkCtx || !liveGrainCtx || !brush?.data || stroke.eraser || stroke.kind) return;
-  if (flash8.compositeFor(stroke) !== "source-over") return;
   liveInkCanvas.width = ctx.canvas.width;
   liveInkCanvas.height = ctx.canvas.height;
   liveGrainCanvas.width = ctx.canvas.width;
@@ -1896,7 +1899,7 @@ function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null, 
     drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style, eraser);
     return;
   }
-  ctx.globalCompositeOperation = eraser ? "destination-out" : flash8.compositeFor(stroke);
+  ctx.globalCompositeOperation = eraser ? "destination-out" : "source-over";
   paintStrokeShape(ctx, stroke, brush, style);
   ctx.globalCompositeOperation = "source-over";
 }
@@ -3316,14 +3319,7 @@ function brushFromSut(brush) {
   return Boolean(brush?.source) || Boolean(brush?.dyn);
 }
 
-/** The Flash 8 smoothing of the hand is an option of this program's own
-    brushes: a brush from Clip Studio Paint draws the line the hand drew and
-    shapes it with its own curves, so the option steps aside while one is in
-    the hand. */
-function syncSmoothingField(brush) {
-  const field = document.getElementById("f8SmoothingField");
-  if (field) field.hidden = brushFromSut(brush);
-}
+
 
 /**
  * Put a brush on the drawing that is being drawn on.
@@ -3349,7 +3345,6 @@ function useBrush(brush, name) {
     const entry = folderCells(state.project, state.project.currentLayer).get(targetFrame);
     if (!entry) {
       if (brush) applyBrushSettings(brush);
-      syncSmoothingField(brush ?? null);
       brushImageName.textContent = name;
       drawBrushShape();
       return true;
@@ -3371,7 +3366,6 @@ function useBrush(brush, name) {
   afterChange();
   brushImageName.textContent = name;
   if (brush) applyBrushSettings(brush);
-  syncSmoothingField(brush ?? null);
   // The shape of the brush in the panel is drawn again.
   drawBrushShape();
   return true;
@@ -7157,16 +7151,12 @@ canvas.addEventListener("pointerdown", (event) => {
   const drawing = existing || ensureDrawing(layer, state.project.currentFrame);
   const settings = toolSettings();
   const isShapeTool = state.tool === "line" || state.tool === "rect" || state.tool === "ellipse";
-  // Flash 8 snapping applies where a stroke starts, and to shapes.
-  const startPoint =
-    isShapeTool || state.tool === "pencil" || state.tool === "brush"
-      ? flash8.snapPoint(drawPointIn(event, drawing), drawing)
-      : drawPointIn(event, drawing);
+  const startPoint = drawPointIn(event, drawing);
   const stroke = {
     color: colorInput.value,
     width: settings.width,
     points: [startPoint],
-    ...flash8.strokeExtras(state.tool),
+
   };
   if (state.tool === "eraser") stroke.eraser = true;
   if (state.tool === "pencil") {
@@ -7182,8 +7172,6 @@ canvas.addEventListener("pointerdown", (event) => {
     stroke.points.push(startPoint);
   } else if (state.tool === "fill") {
     stroke.kind = "fill";
-    const gap = flash8.gapTolerance();
-    if (gap > 0) stroke.gap = gap;
   }
   if (state.tool === "brush" || state.tool === "pencil" || state.tool === "eraser") {
     // A stroke remembers the brush it was made with, the way Clip Studio
@@ -7244,10 +7232,7 @@ canvas.addEventListener("pointermove", (event) => {
 
     if (state.drawing.kind && state.drawing.kind !== "fill") {
       // Shapes: the second point tracks the pointer for a live preview.
-      state.drawing.points[1] = flash8.snapPoint(
-        flash8.constrainEnd(state.drawing.points[0], point, event.shiftKey),
-        state.drawingCell,
-      );
+      state.drawing.points[1] = point;
       continue;
     }
     if (state.drawing.kind === "fill") break; // a fill is a single click
@@ -7289,10 +7274,7 @@ canvas.addEventListener("pointermove", (event) => {
         Number(state.drawing.width) || Number(widthInput.value) || 1,
       );
     } else {
-      state.drawing.points = brushSmoothPath(
-        state.rawSamples,
-        flash8.settings.brushSmoothness,
-      );
+      state.drawing.points = brushSmoothPath(state.rawSamples, BRUSH_SMOOTHING);
     }
   }
 
@@ -7340,10 +7322,7 @@ function endStroke(event) {
   // straight into the document instead of the document being built again.
   const wasLive = liveStrokeState.active;
   const liveSource = liveStrokeState.grained ? liveGrainCanvas : liveInkCanvas;
-  // The Flash 8 pencil shapes its finished line by mode.
-  if (state.tool === "pencil" && !state.drawing.kind && !state.drawing.eraser) {
-    flash8.finishPencil(state.drawing);
-  }
+
   if (state.tool === "brush" || state.tool === "eraser") {
     // The pointer stopped where it left the paper: that last place goes in
     // as a sample, so the fitted line ends where the hand ended. The brush
@@ -7362,7 +7341,7 @@ function endStroke(event) {
               Number(state.drawing.width) || Number(widthInput.value) || 1,
             );
           } else {
-            state.drawing.points = brushSmoothPath(run, flash8.settings.brushSmoothness);
+            state.drawing.points = brushSmoothPath(run, BRUSH_SMOOTHING);
           }
         }
       } catch {
@@ -7869,7 +7848,7 @@ setupPaintDocks();
  */
 const PROP_ROW_ORDER = [
   "width", "opacity", "flow", "hardness", "thickness", "spacing", "paper",
-  "stabilizer", "binarize", "blend", "options",
+  "stabilizer", "binarize", "blend",
 ];
 
 /** The rows a panel starts with, the way the brush panel of MoArt does:
@@ -7896,16 +7875,7 @@ const PROP_ROW_ELEMENTS = {
   stabilizer: document.getElementById("toolStabilizerRow"),
   binarize: document.getElementById("toolBinarizeRow"),
   blend: document.getElementById("toolBlendRow"),
-  // The Options dock is put away as a whole window, head and body together.
-  options: document.getElementById("dockOptions"),
 };
-
-/** Where the Options dock stands when it is shown in the panel. */
-const optionsDockHome = (() => {
-  const dock = PROP_ROW_ELEMENTS.options;
-  if (!dock) return null;
-  return { parent: dock.parentElement, next: dock.nextElementSibling };
-})();
 
 /** What a row is called when it is put away or brought back. */
 const PROP_ROW_NAMES = {
@@ -7919,7 +7889,6 @@ const PROP_ROW_NAMES = {
   stabilizer: "Stabilizer",
   binarize: "Binarize",
   blend: "Blend",
-  options: "Options",
 };
 
 /** The eye that puts a row away, and the same eye with a line through it. */
@@ -8020,14 +7989,12 @@ function propRowsOfTool() {
  */
 function propHiddenRowsExist() {
   const rows = propRowsOfTool();
-  // The Options dock is not tied to a tool: while it is put away, the door
-  // to the drawer is there whatever the tool in the hand is.
-  return PROP_ROW_ORDER.some((id) => (rows.includes(id) || id === "options") && !propIsPinned(id));
+  return PROP_ROW_ORDER.some((id) => rows.includes(id) && !propIsPinned(id));
 }
 
 /** Where a row is shown: in the panel, in the drawer, or not at all. */
 function propRowVisibleIn(id) {
-  if (id !== "options" && !propRowsOfTool().includes(id)) return "";
+  if (!propRowsOfTool().includes(id)) return "";
   if (propIsPinned(id)) return "strip";
   return propDrawerIsOpen() ? "group" : "";
 }
@@ -8221,34 +8188,15 @@ function selectTool(tool) {
     tool === "eraser" || tool === "fill" || tool === "camera" || tool === "marquee" || tool === "lasso";
   canvas.classList.toggle("picking", picking);
   canvas.classList.toggle("camera-tool", tool === "camera");
-  // The marquee has a shape of its own, and it is the only tool that does.
-  if (marqueeOptions) marqueeOptions.hidden = tool !== "marquee";
+
   setStatus(TOOL_STATUS[tool] ?? "Tool ready");
   // The tool in the hand has a section of its own in the property panel, so
   // the panel is filled with the settings of that tool.
   showToolProps();
-  flash8.syncTool(tool);
-  // The shape of the brush under the pointer belongs to the tool, so it is
-  // drawn again when another tool is taken in the hand.
   drawOverlay();
 }
 
 brushButton.addEventListener("click", () => selectTool("brush"));
-flash8.init({
-  state,
-  snapshot,
-  recordHistory,
-  markDirty,
-  afterChange,
-  setStatus,
-  currentLayer,
-  currentDrawing: () => drawingAt(currentLayer(), state.project.currentFrame),
-  onBrushSize: (width) => {
-    if (state.tool !== "brush") return;
-    widthInput.value = String(width);
-    widthInput.dispatchEvent(new Event("input"));
-  },
-});
 pencilButton.addEventListener("click", () => selectTool("pencil"));
 eraserButton.addEventListener("click", () => selectTool("eraser"));
 pickButton.addEventListener("click", () => selectTool("pick"));
@@ -8860,7 +8808,7 @@ async function refreshRecent() {
 
 async function handleAction(action) {
   try {
-    if (flash8.handleAction(action)) return;
+  
     if (action === "new") return newProject();
     if (action === "open") return chooseAndOpen();
     if (action === "importClip") return chooseAndImportClip();
