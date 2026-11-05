@@ -463,7 +463,7 @@
           <div class="tool-section-title" id="toolPropsTitle">Brush</div>
           <div class="tool-props" id="toolPropsBody">
             <div class="brush-preview-wrap" id="brushPreviewWrap">
-              <canvas id="brushShapePreview" class="brush-shape-preview" width="220" height="44" aria-label="The shape of the brush that is in the hand"></canvas>
+              <canvas id="brushShapePreview" class="brush-shape-preview" width="220" height="34" aria-label="The shape of the brush that is in the hand"></canvas>
               <span class="brush-shape-size" id="brushShapeSize">6px</span>
             </div>
             <div class="brush-image-row" id="toolBrushRow">
@@ -477,47 +477,89 @@
 
             <div class="prop-strip" id="toolPropStrip">
               <div class="prop-row" id="toolWidthRow">
-                <label class="field" title="The size of the brush: how wide the line is (px)">
-                  <span>Size <output id="widthValue">6</output></span>
-                  <input id="width" type="range" min="0.5" max="800" step="0.1" value="6" />
-                </label>
+                <div class="field" title="The size of the brush: how wide the line is (px)">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Size" aria-valuemin="0.5" aria-valuemax="800">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Size</span>
+                    <output id="widthValue" class="pb-gauge-val">6</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Smaller">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="Bigger">›</button>
+                  </div>
+                  <input id="width" type="range" class="gauge-range" min="0.5" max="800" step="0.1" value="6" />
+                </div>
                 <div class="brush-size-grid" id="brushSizeGrid" role="listbox" aria-label="Brush size presets"></div>
               </div>
               <div class="prop-row" id="toolOpacityRow">
-                <label class="field" title="Transparency of the whole stroke (100 = solid)">
-                  <span>Opacity <output id="strokeOpacityValue">100%</output></span>
-                  <input id="strokeOpacity" type="range" min="1" max="100" step="1" value="100" />
-                </label>
+                <div class="field" title="Transparency of the whole stroke (100 = solid)">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Opacity" aria-valuemin="1" aria-valuemax="100">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Opacity</span>
+                    <output id="strokeOpacityValue" class="pb-gauge-val">100%</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Less opaque">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="More opaque">›</button>
+                  </div>
+                  <input id="strokeOpacity" type="range" class="gauge-range" min="1" max="100" step="1" value="100" />
+                </div>
               </div>
               <div class="prop-row" id="toolStabilizerRow">
-                <label class="field" title="Smooths shaky lines into calmer curves (0 = off)">
-                  <span>Stabilizer <output id="stabilizerValue">0</output></span>
-                  <input id="stabilizer" type="range" min="0" max="100" step="1" value="0" />
-                </label>
+                <div class="field" title="Smooths shaky lines into calmer curves (0 = off)">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Stabilizer" aria-valuemin="0" aria-valuemax="100">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Stabilizer</span>
+                    <output id="stabilizerValue" class="pb-gauge-val">0</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Less smoothing">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="More smoothing">›</button>
+                  </div>
+                  <input id="stabilizer" type="range" class="gauge-range" min="0" max="100" step="1" value="0" />
+                </div>
               </div>
               <div class="prop-row" id="toolFlowRow">
-                <label class="field" title="How much paint one dab leaves (100 = a dab is as strong as another)">
-                  <span>Flow <output id="flowValue">100%</output></span>
-                  <input id="flow" type="range" min="0" max="100" step="1" value="100" />
-                </label>
+                <div class="field" title="How much paint one dab leaves (100 = a dab is as strong as another)">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Flow" aria-valuemin="0" aria-valuemax="100">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Flow</span>
+                    <output id="flowValue" class="pb-gauge-val">100%</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Less paint">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="More paint">›</button>
+                  </div>
+                  <input id="flow" type="range" class="gauge-range" min="0" max="100" step="1" value="100" />
+                </div>
               </div>
               <div class="prop-row" id="toolHardnessRow">
-                <label class="field" title="How hard the edge of the tip is (100 = the paint stops at the edge)">
-                  <span>Hardness <output id="hardnessValue">100%</output></span>
-                  <input id="hardness" type="range" min="0" max="100" step="1" value="100" />
-                </label>
+                <div class="field" title="How hard the edge of the tip is (100 = the paint stops at the edge)">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Hardness" aria-valuemin="0" aria-valuemax="100">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Hardness</span>
+                    <output id="hardnessValue" class="pb-gauge-val">100%</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Softer edge">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="Harder edge">›</button>
+                  </div>
+                  <input id="hardness" type="range" class="gauge-range" min="0" max="100" step="1" value="100" />
+                </div>
               </div>
               <div class="prop-row" id="toolThicknessRow">
-                <label class="field" title="How flat the tip is: 100 is round, less is an ellipse across the stroke">
-                  <span>Thickness <output id="thicknessValue">100%</output></span>
-                  <input id="thickness" type="range" min="1" max="200" step="1" value="100" />
-                </label>
+                <div class="field" title="How flat the tip is: 100 is round, less is an ellipse across the stroke">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Thickness" aria-valuemin="1" aria-valuemax="200">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Thickness</span>
+                    <output id="thicknessValue" class="pb-gauge-val">100%</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Flatter tip">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="Rounder tip">›</button>
+                  </div>
+                  <input id="thickness" type="range" class="gauge-range" min="1" max="200" step="1" value="100" />
+                </div>
               </div>
               <div class="prop-row" id="toolSpacingRow">
-                <label class="field" title="How far apart the dabs of the brush sit, as a share of its width">
-                  <span>Spacing <output id="spacingValue">25%</output></span>
-                  <input id="spacing" type="range" min="1" max="200" step="1" value="25" />
-                </label>
+                <div class="field" title="How far apart the dabs of the brush sit, as a share of its width">
+                  <div class="pb-gauge" tabindex="0" role="slider" data-step="1" aria-label="Spacing" aria-valuemin="1" aria-valuemax="200">
+                    <span class="pb-gauge-fill"></span>
+                    <span class="pb-gauge-label">Spacing</span>
+                    <output id="spacingValue" class="pb-gauge-val">25%</output>
+                    <button type="button" class="num-step" data-dir="-1" tabindex="-1" aria-label="Denser dabs">‹</button>
+                    <button type="button" class="num-step" data-dir="1" tabindex="-1" aria-label="Spacier dabs">›</button>
+                  </div>
+                  <input id="spacing" type="range" class="gauge-range" min="1" max="200" step="1" value="25" />
+                </div>
               </div>
               <div class="prop-row" id="toolPaperRow">
                 <label class="field checkbox" title="Dry the stroke on the paper of the brush, so the grain of the paper shows through">

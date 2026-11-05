@@ -24,6 +24,9 @@
   --surface-2: #4e5257;
   --surface-3: #575b61;
   --surface-sunken: #383b3f;
+  /* The well the paint window's controls sit in, the way MoArt sinks its
+     gauges and previews into the panel. */
+  --well: #292c2f;
 
   /* seams and edges */
   --seam: rgba(0, 0, 0, 0.3);
@@ -1270,31 +1273,30 @@ body.hide-inspector.hide-stage .workspace {
   overflow-x: hidden;
 }
 
-/* The heading of a part of the tool property panel. It is a small caption
-   at the left of the panel, the way MoArt writes the head of each part. */
+/* The heading of a part of the tool property panel. MoArt writes it as a
+   small quiet caption with no band behind it, so the panel reads as one
+   window with named docks inside. */
 .tool-section-title {
   flex: none;
-  padding: 7px 8px 4px;
-  border-top: 1px solid var(--seam);
-  background: var(--surface-2);
+  padding: 4px 8px 1px;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   text-align: left;
 }
 
 .tool-section-title:first-child {
-  border-top: 0;
+  padding-top: 6px;
 }
 
-/* The properties of the tool, under their heading. */
+/* The properties of the tool, under their heading. MoArt packs its rows
+   tight - an 18 px gauge with a 4 px breath between rows. */
 .tool-props {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 4px 8px 10px;
+  gap: 4px;
+  padding: 4px 5px 8px;
 }
 
 /* The panel of a tool shows a few rows, the way MoArt does, and the rest is
@@ -1305,7 +1307,7 @@ body.hide-inspector.hide-stage .workspace {
 .prop-group {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1326,6 +1328,184 @@ body.hide-inspector.hide-stage .workspace {
 
 .prop-row > .field {
   grid-column: 1;
+}
+
+/* The gauge row: MoArt's control for a number. One 18 px bar holds the
+   whole thing - the fill shows the value, the name sits inside at the left
+   and the number at the right, the bar itself is dragged to set it, the
+   edges carry step buttons on hover and a double click types the exact
+   number. The native range input stays in the row but out of sight, so
+   every listener that was written for the slider keeps working. */
+.gauge-range {
+  display: none;
+}
+
+.pb-gauge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 14px;
+  border-radius: 5px;
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.pb-gauge:hover {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.pb-gauge:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.pb-gauge-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: var(--accent-soft);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+.pb-gauge-label {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pb-gauge-val {
+  position: relative;
+  flex: 0 0 auto;
+  width: 3.4em;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+}
+
+.num-step {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.num-step:first-of-type {
+  left: 0;
+}
+
+.num-step:last-of-type {
+  right: 0;
+}
+
+.pb-gauge:hover .num-step,
+.pb-gauge:focus-within .num-step {
+  opacity: 1;
+}
+
+.num-step:hover {
+  background: var(--accent-soft);
+}
+
+/* The number typed in by hand: the editor MoArt lays over the gauge. */
+.gauge-edit {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--well);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: right;
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* The switch: MoArt's pill for a yes-or-no row. The checkbox stays in the
+   row for its listeners; it is only drawn as the pill. */
+.prop-row input[type="checkbox"] {
+  appearance: none;
+  flex: 0 0 auto;
+  position: relative;
+  width: 26px;
+  height: 14px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #45454c;
+  transition: background 0.15s;
+  cursor: pointer;
+}
+
+.prop-row input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: left 0.15s;
+}
+
+.prop-row input[type="checkbox"]:checked {
+  background: var(--accent);
+}
+
+.prop-row input[type="checkbox"]:checked::after {
+  left: 14px;
+}
+
+/* The dropdown of the tool panel: MoArt's compact select sunk into the
+   well, with its own chevron drawn at the right. */
+.tool-props select {
+  height: 18px;
+  padding: 0 11px 0 3px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--well)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23aab0b6' stroke-width='1.4'/%3E%3C/svg%3E")
+    no-repeat right 2px center;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  appearance: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 /* The brush size grid: the presets of TVPaint's Brush Size panel. Every cell
@@ -1429,23 +1609,25 @@ body.hide-inspector.hide-stage .workspace {
   color: var(--muted);
 }
 
-/* The bar that opens the drawer of put-away rows. */
+/* The bar that opens the drawer of put-away rows, in the dress of MoArt's
+   advanced bar: a quiet full-width strip. */
 .prop-adv-bar button {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 4px 6px;
-  border: 1px solid var(--seam);
-  border-radius: 4px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: var(--fs-sm);
+  height: 18px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.043);
+  color: #9a9aa4;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 
 .prop-adv-bar button:hover {
-  background: var(--surface-3);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
 
@@ -1473,7 +1655,7 @@ body.hide-inspector.hide-stage .workspace {
   bottom: 5px;
   padding: 0 4px;
   border-radius: 3px;
-  background: rgba(20, 22, 24, 0.62);
+  background: rgba(0, 0, 0, 0.4);
   color: #f2f4f6;
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
@@ -1481,14 +1663,15 @@ body.hide-inspector.hide-stage .workspace {
   pointer-events: none;
 }
 
-/* The shape of the brush, shown in the property panel. */
+/* The shape of the brush, shown in the property panel. MoArt sinks its
+   brush preview into the panel the same way as its gauges. */
 .brush-shape-preview {
   display: block;
   width: 100%;
-  height: 44px;
-  border: 1px solid var(--seam);
-  border-radius: 4px;
-  background: #f4f4f6;
+  height: 34px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--well);
 }
 
 /* The note under the settings of the tool in the hand. */
@@ -1519,23 +1702,21 @@ body.hide-inspector.hide-stage .workspace {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
 }
 
 .tool-grid button:hover:not(:disabled) {
-  border-color: var(--seam-strong);
   background: var(--surface-3);
 }
 
 .tool-grid button.active,
 .tool-grid button[aria-pressed="true"] {
-  border-color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  color: #8fcbf6;
 }
 
 .tool-grid button:disabled {

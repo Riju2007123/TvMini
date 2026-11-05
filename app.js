@@ -532,6 +532,7 @@ quickWidth?.addEventListener("input", () => {
   toolSettings().width = Number(quickWidth.value);
   syncQuickBar();
   syncBrushSizeGrid();
+  syncGauges();
 });
 
 quickUndo?.addEventListener("click", () => undo());
@@ -1220,7 +1221,7 @@ function drawBrushShape() {
   const width = surface.width;
   const height = surface.height;
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#f4f4f6";
+  context.fillStyle = "#292c2f";
   context.fillRect(0, 0, width, height);
 
   // The picture is a stroke across the panel, drawn by the same code as the
@@ -2912,6 +2913,7 @@ function applyBrushSettings(brush) {
     settings.width = value;
     syncQuickBar();
     syncBrushSizeGrid();
+    syncGauges();
   }
   const opacity = Number(brush.opacity);
   if (Number.isFinite(opacity) && opacity > 0) {
@@ -2956,6 +2958,7 @@ function applyBrushSettings(brush) {
   }
   if (paperInput) paperInput.checked = settings.paper === true;
   binarizeInput.checked = settings.binarize === true;
+  syncGauges();
 }
 
 /**
@@ -3098,7 +3101,7 @@ function drawBrushPreview(surface, brush) {
   const width = surface.width;
   const height = surface.height;
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#f4f4f6";
+  context.fillStyle = "#292c2f";
   context.fillRect(0, 0, width, height);
 
   const size = Math.max(2, Math.min(30, Number(brush.size) || 6));
@@ -6960,6 +6963,132 @@ function syncBrushSizeGrid() {
 
 renderBrushSizeGrid();
 
+/* ------------------------------------------------------------- gauge rows */
+
+// The gauges of the tool panel: MoArt's bars where the fill is the value,
+// the name sits inside at the left and the number at the right. The bar is
+// dragged to set the value, its edges carry step buttons on hover and a
+// double click types the exact number. The hidden range input of the row
+// stays the one source of truth, so every listener written for the slider
+// keeps working.
+const gaugeRows = [];
+
+function setupGaugeRows() {
+  for (const gauge of document.querySelectorAll(".prop-row .pb-gauge")) {
+    const field = gauge.closest(".field");
+    const input = field?.querySelector('input[type="range"]');
+    if (!input) continue;
+    const fill = gauge.querySelector(".pb-gauge-fill");
+    const stepSize = Number(gauge.dataset.step) || 1;
+    const snap = Number(input.step) || 1;
+    const decimals = (String(input.step).split(".")[1] ?? "").length;
+    const row = { gauge, input, fill };
+    gaugeRows.push(row);
+
+    const clamp = (value) => Math.min(Number(input.max), Math.max(Number(input.min), value));
+    const snapped = (value) => Number((Math.round(value / snap) * snap).toFixed(decimals));
+    const paintGauge = () => {
+      const min = Number(input.min) || 0;
+      const max = Number(input.max) || 100;
+      const value = Number(input.value) || 0;
+      const t = Math.min(1, Math.max(0, (value - min) / (max - min || 1)));
+      fill.style.width = `${t * 100}%`;
+      gauge.setAttribute("aria-valuenow", String(clamp(value)));
+    };
+    row.paint = paintGauge;
+    input.addEventListener("input", paintGauge);
+    paintGauge();
+
+    const setFromPointer = (event) => {
+      const rect = gauge.getBoundingClientRect();
+      const t = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+      input.value = String(snapped(Number(input.min) + t * (Number(input.max) - Number(input.min))));
+      input.dispatchEvent(new Event("input"));
+    };
+
+    let dragging = false;
+    gauge.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest(".num-step")) return;
+      dragging = true;
+      // A pointer that is already gone (a synthesised event, a pen lifted
+      // too fast) cannot be captured; the drag still works without it.
+      try {
+        gauge.setPointerCapture(event.pointerId);
+      } catch {
+        // The press itself is answer enough.
+      }
+      setFromPointer(event);
+    });
+    gauge.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      setFromPointer(event);
+    });
+    gauge.addEventListener("pointerup", () => {
+      dragging = false;
+    });
+    gauge.addEventListener("pointercancel", () => {
+      dragging = false;
+    });
+
+    const nudge = (dir) => {
+      input.value = String(snapped(clamp(Number(input.value) + dir * stepSize)));
+      input.dispatchEvent(new Event("input"));
+    };
+    for (const button of gauge.querySelectorAll(".num-step")) {
+      button.addEventListener("click", () => nudge(Number(button.dataset.dir)));
+    }
+    gauge.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+        event.preventDefault();
+        nudge(-stepSize);
+      } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+        event.preventDefault();
+        nudge(stepSize);
+      }
+    });
+
+    // A double click lays a small editor over the bar, so the exact number
+    // can be typed, the way MoArt's scrub takes a typed value.
+    gauge.addEventListener("dblclick", () => {
+      if (gauge.querySelector(".gauge-edit")) return;
+      const editor = document.createElement("input");
+      editor.type = "text";
+      editor.className = "gauge-edit";
+      editor.value = String(Number(input.value));
+      gauge.append(editor);
+      editor.focus();
+      editor.select();
+      let done = false;
+      const commit = () => {
+        if (done) return;
+        done = true;
+        const typed = Number(editor.value);
+        if (Number.isFinite(typed)) {
+          input.value = String(clamp(typed));
+          input.dispatchEvent(new Event("input"));
+        }
+        editor.remove();
+      };
+      editor.addEventListener("blur", commit);
+      editor.addEventListener("keydown", (keyEvent) => {
+        if (keyEvent.key === "Enter") commit();
+        if (keyEvent.key === "Escape") {
+          keyEvent.stopPropagation();
+          done = true;
+          editor.remove();
+        }
+      });
+    });
+  }
+}
+
+/** Paint every gauge from its input, for the paths that set values directly. */
+function syncGauges() {
+  for (const row of gaugeRows) row.paint();
+}
+
+setupGaugeRows();
+
 strokeOpacityInput.addEventListener("input", () => {
   const value = Math.max(1, Math.min(100, Math.round(Number(strokeOpacityInput.value) || 100)));
   toolSettings().opacity = value;
@@ -7398,6 +7527,7 @@ function showToolProps() {
     spacingValue.textContent = `${settings.spacing ?? 25}%`;
   }
   if (paperInput) paperInput.checked = settings.paper === true;
+  syncGauges();
 
   // The brush itself (its picture and its library) is above the rows, and it
   // belongs to the brush alone; the rows are laid out by the eye.
@@ -7512,6 +7642,7 @@ function changeWidth(delta) {
   widthInput.value = String(next);
   widthValue.textContent = String(next);
   syncBrushSizeGrid();
+  syncGauges();
   setStatus(`Brush width ${next}`);
 }
 
