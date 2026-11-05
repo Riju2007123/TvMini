@@ -2264,14 +2264,140 @@ function cellBaseOrigin(drawing) {
 }
 
 /** Paint one drawing (raster base + strokes) into a scratch canvas. */
+
+/* The finished picture of a drawing. Building a layer from its strokes is
+   the dearest work of the stage: every dab of every brush is put down again
+   each time the sheet is drawn, so a document with many layers is built for
+   seconds on every stroke and every zoom. The picture of each drawing is
+   therefore kept in a canvas of its own, in the pixels of the document, and
+   the stage puts the finished pictures on the buffer. A drawing that did not
+   change keeps its picture; the stroke that was let go is put on the
+   picture of its own cell alone. */
+
+const cellPaintCache = new Map();
+const CELL_PAINT_BUDGET = 320 * 1024 * 1024;
+let cellPaintBytes = 0;
+
+/** What a drawing's picture is made of: the strokes that are on it (the one
+    in the hand is left out, the living ink shows it), the raster base and
+    the brush the strokes are drawn with. */
+function cellPaintKeyOf(drawing, base) {
+  const inHand = state.drawing;
+  let count = 0;
+  let first = null;
+  let last = null;
+  for (const stroke of drawing.strokes) {
+    if (stroke === inHand) continue;
+    if (!first) first = stroke;
+    last = stroke;
+    count += 1;
+  }
+  return { count, first, last, image: drawing.image || null, base: base || null, brush: drawing.brush || null };
+}
+
+function cellPaintKeySame(a, b) {
+  return (
+    a.count === b.count &&
+    a.first === b.first &&
+    a.last === b.last &&
+    a.image === b.image &&
+    a.base === b.base &&
+    a.brush === b.brush
+  );
+}
+
+function trimCellPaintCache() {
+  while (cellPaintBytes > CELL_PAINT_BUDGET && cellPaintCache.size > 1) {
+    const oldest = cellPaintCache.keys().next().value;
+    const entry = cellPaintCache.get(oldest);
+    cellPaintCache.delete(oldest);
+    if (entry) cellPaintBytes -= entry.bytes;
+  }
+}
+
+/**
+ * The finished picture of a drawing, in the pixels of the document.
+ *
+ * The picture is built again only when the strokes, the base or the brush
+ * of the drawing have changed; otherwise the canvas that was built before
+ * is handed back as it is. Returns null when the picture cannot be kept
+ * (a canvas of the document's size cannot be made).
+ */
+function cellPaintOf(drawing, project) {
+  if (!drawing || !project) return null;
+  let entry = cellPaintCache.get(drawing);
+  if (!entry) {
+    const canvas = document.createElement("canvas");
+    try {
+      canvas.width = project.width;
+      canvas.height = project.height;
+    } catch {
+      return null; // the room for the picture cannot be had
+    }
+    entry = {
+      canvas,
+      ctx: canvas.getContext("2d"),
+      key: null,
+      bytes: project.width * project.height * 4,
+    };
+    cellPaintCache.set(drawing, entry);
+    cellPaintBytes += entry.bytes;
+  } else {
+    // The newest picture stands last, so the eviction takes the oldest.
+    cellPaintCache.delete(drawing);
+    cellPaintCache.set(drawing, entry);
+  }
+  const base = drawingImageElement(drawing);
+  const key = cellPaintKeyOf(drawing, base);
+  if (entry.key && cellPaintKeySame(entry.key, key)) {
+    trimCellPaintCache();
+    return entry;
+  }
+  const { ctx, canvas } = entry;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (base) ctx.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
+  drawStrokesInto(
+    ctx,
+    state.drawing ? drawing.strokes.filter((stroke) => stroke !== state.drawing) : drawing.strokes,
+    drawing.brush,
+  );
+  entry.key = key;
+  trimCellPaintCache();
+  return entry;
+}
+
+/** The stroke is out of the hand: it goes onto the picture of its own cell
+    alone, so the cell is not built from the beginning for every stroke. */
+function appendStrokeToCellPaint(drawing, stroke) {
+  const entry = cellPaintCache.get(drawing);
+  if (!entry || !entry.key) return;
+  const base = drawingImageElement(drawing);
+  const key = cellPaintKeyOf(drawing, base);
+  if (cellPaintKeySame(entry.key, key)) return; // the picture is up to date
+  drawStrokesInto(entry.ctx, [stroke], drawing.brush);
+  entry.key = key;
+}
+
 function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targetCanvas = paintCanvas) {
   // The scratch may be larger than the canvas (the sheet holds the
   // pasteboard too), so all of it is cleared, not just the canvas part.
   target.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
   target.globalAlpha = alpha;
-  const base = drawingImageElement(drawing);
-  if (base) target.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
-  drawStrokesInto(target, drawing.strokes, drawing.brush);
+  const painted = cellPaintOf(drawing, project);
+  if (painted) {
+    target.drawImage(painted.canvas, 0, 0);
+    // The stroke in the hand is left out of the finished picture; while it
+    // erases, the hand must see the ink go away as it moves, so the stroke
+    // is put on the scratch as well.
+    if (state.drawing && drawing.strokes.includes(state.drawing)) {
+      drawStrokesInto(target, [state.drawing], drawing.brush);
+    }
+  } else {
+    const base = drawingImageElement(drawing);
+    if (base) target.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
+    drawStrokesInto(target, drawing.strokes, drawing.brush);
+  }
   target.globalAlpha = 1;
   return targetCanvas;
 }
@@ -2589,8 +2715,17 @@ function renderCanvas(frame = state.project.currentFrame) {
     // canvas.
     if (opacity === 1 && !strokes.some((stroke) => stroke.eraser)) {
       withCellTransform(ctx, [layerTransform, transform], docWidth, docHeight, () => {
-        if (base) ctx.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
-        drawStrokesInto(ctx, strokes, resolved.drawing.brush);
+        // The finished picture of the cell is put on the buffer as it is,
+        // while the zoom is small enough for the picture's own pixels to
+        // hold the line. Deep in the zoom the strokes are drawn in the
+        // pixels of the screen, so a magnified line stays sharp.
+        const painted = viewZoom <= 2 ? cellPaintOf(resolved.drawing, project) : null;
+        if (painted) {
+          ctx.drawImage(painted.canvas, 0, 0, project.width, project.height);
+        } else {
+          if (base) ctx.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
+          drawStrokesInto(ctx, strokes, resolved.drawing.brush);
+        }
       });
       continue;
     }
@@ -7360,16 +7495,18 @@ function endStroke(event) {
   const wasNew = state.strokeWasNew;
   state.drawing = null;
   forgetPressure();
-
-  // The half-edge shape of a freehand stroke is built now, once the stroke is
-  // out of the hand, so the contour that will be painted is the contour the
-  // model holds and every later frame only reads it back.
-  if (kept) {
+  // The stroke joins the picture of its own cell, and only that picture is
+  // touched: the cell is not built from the beginning for every stroke.
+  if (kept && committed) {
+    // The half-edge shape of a freehand stroke is built now, once the stroke
+    // is out of the hand, so the contour that will be painted is the contour
+    // the model holds and every later frame only reads it back.
     try {
       shapeForStroke(committed);
     } catch (error) {
       console.error("shapeForStroke at commit failed", error);
     }
+    appendStrokeToCellPaint(cell, committed);
     // A stroke that ran past the sheet grows the sheet, so the room to draw
     // in follows the hand the way Flash's work area does. It rides in the
     // same change as the stroke, so undo takes them back together.
