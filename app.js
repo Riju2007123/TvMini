@@ -7418,17 +7418,29 @@ canvas.addEventListener("pointermove", (event) => {
 
     // The raw place of the hand goes into the ring of the stabilizer, with
     // the time the pointer says it happened, so the calm of the line is the
-    // same however fast the pen reports. What the run becomes is decided
-    // after it, by the Flash 8 fit.
+    // same however fast the pen reports. Every sample gets its own calm
+    // point, so the run keeps the density of the hand and the fit after it
+    // has the whole path to work from.
     if (state.stab) {
       const time = Number(rawEvent.timeStamp) / 1000;
+      const now = Number.isFinite(time) ? time : 0;
       if (point.length > 2) state.stabPressure = true;
-      state.stab.push(
-        point[0],
-        point[1],
-        Number.isFinite(time) ? time : 0,
-        point.length > 2 ? point[2] : 1,
-      );
+      state.stab.push(point[0], point[1], now, point.length > 2 ? point[2] : 1);
+      const calm = state.stab.update(now);
+      if (calm) {
+        state.smoothedPoint = state.stabPressure
+          ? [calm.x, calm.y, calm.p]
+          : [calm.x, calm.y];
+        // The calm point goes in when it is far enough from the last one, so
+        // a resting hand does not grow the run without moving.
+        const run = state.rawSamples ?? [];
+        const last = run[run.length - 1];
+        if (!last || Math.hypot(calm.x - last[0], calm.y - last[1]) > 0.35) {
+          run.push(state.smoothedPoint.slice());
+          state.rawSamples = run;
+        }
+      }
+      continue;
     }
 
     if (state.tool === "pencil") {
@@ -7441,25 +7453,6 @@ canvas.addEventListener("pointermove", (event) => {
       if (Math.hypot(sample[0] - last[0], sample[1] - last[1]) < 1.5) continue;
       state.drawing.points.push(sample);
       continue;
-    }
-
-    // The brush and the eraser gather the whole run of the hand. The point
-    // the stabilizer hands out goes in when it is far enough from the last
-    // one, so a resting hand does not grow the run without moving.
-    if (state.stab) {
-      const now = Number(event.timeStamp) / 1000;
-      const calm = state.stab.update(Number.isFinite(now) ? now : 0);
-      if (calm) {
-        state.smoothedPoint = state.stabPressure
-          ? [calm.x, calm.y, calm.p]
-          : [calm.x, calm.y];
-        const run = state.rawSamples ?? [];
-        const last = run[run.length - 1];
-        if (!last || Math.hypot(calm.x - last[0], calm.y - last[1]) > 0.35) {
-          run.push(state.smoothedPoint.slice());
-          state.rawSamples = run;
-        }
-      }
     }
   }
 

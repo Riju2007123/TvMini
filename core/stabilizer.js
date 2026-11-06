@@ -107,6 +107,18 @@ export function meanOverWindow(samples, t0, t1) {
     sumP += ((a.p + b.p) / 2) * weight;
     sumT += weight;
   }
+  // The last sample holds for the part of the window past it, the way the
+  // first holds before it: the hand that has stopped still has a place.
+  const last = samples[samples.length - 1];
+  if (t1 > last.t) {
+    const hold = t1 - Math.max(t0, last.t);
+    if (hold > 0) {
+      sumX += last.x * hold;
+      sumY += last.y * hold;
+      sumP += last.p * hold;
+      sumT += hold;
+    }
+  }
   if (!(sumT > 0)) return null;
   return { x: sumX / sumT, y: sumY / sumT, p: sumP / sumT };
 }
@@ -242,9 +254,12 @@ export class StabilizerStream {
   /**
    * The points the window was still holding when the hand lifted.
    *
-   * The stroke is finished at the place of the lift: the calm run is traced
-   * on to the end of the path the hand drew, and the place of the lift
-   * itself goes in last, so the line ends where the hand ended.
+   * The calm point is the mean of a window of the path, and the mean of a
+   * window that ends at the lift sits half a window back along it. So the
+   * clock is let run on past the lift with the lift point held still, and
+   * the mean is taken again and again as the window drains: the tail swings
+   * smoothly round to the place of the lift, with no jump and no shortcut
+   * across the corner, and ends exactly where the hand ended.
    *
    * @returns {Array<number[]>} The points, each `[x, y, pressure]`.
    */
@@ -257,10 +272,14 @@ export class StabilizerStream {
       out.push([newest.x, newest.y, newest.p]);
       return out;
     }
-    const start = this.lastEmitTime >= 0 ? this.lastEmitTime : newest.t - this.window;
-    const step = 1 / 90;
+    const start = Math.max(
+      this.lastEmitTime >= 0 ? this.lastEmitTime : newest.t - this.window,
+      newest.t - this.window,
+    );
+    const end = newest.t + this.window;
+    const step = 1 / 120;
     let last = null;
-    for (let t = start + step; t < newest.t - 1e-6; t += step) {
+    for (let t = start + step; t <= end + 1e-9; t += step) {
       const mean = meanOverWindow(samples, t - this.window, t);
       if (!mean) continue;
       const point = [mean.x, mean.y, mean.p];
