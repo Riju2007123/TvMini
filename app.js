@@ -1424,16 +1424,51 @@ const liveStrokeState = {
   box: null,        // the room the ink covers, in the canvas coordinates
 };
 
+/** Put the mask of the paper on the layer of living ink, or take the mask
+    off when the brush carries no grain. The mask is made for the size of the
+    layer and the zoom of the moment, so a layer that is made again is given
+    a new mask as well. */
+function setLiveGrainMask() {
+  if (!liveStrokeState.grained || !liveStrokeState.style?.grain?.data) {
+    liveInkCanvas.style.maskImage = "";
+    liveInkCanvas.style.webkitMaskImage = "";
+    liveInkCanvas.style.maskSize = "";
+    liveInkCanvas.style.webkitMaskSize = "";
+    return;
+  }
+  const doc = documentSize(state.project);
+  const scale = liveInkCanvas.width / doc.width;
+  const pad = stagePadding(doc.width, doc.height);
+  const mask = grainMaskFor(
+    liveStrokeState.style.grain,
+    scale,
+    pad,
+    liveInkCanvas.width,
+    liveInkCanvas.height,
+  );
+  liveInkCanvas.style.maskImage = mask ?? "";
+  liveInkCanvas.style.webkitMaskImage = mask ?? "";
+  // The mask is made in the pixels of the layer, and the layer is shown at
+  // the size of the element, so the mask is stretched to the element: a
+  // screen that holds more dots than it shows pixels would otherwise lay
+  // the grain out at the wrong size.
+  liveInkCanvas.style.maskSize = "100% 100%";
+  liveInkCanvas.style.webkitMaskSize = "100% 100%";
+}
+
 /** Take the stroke in the hand onto the layers of the living ink. A brush
     with a picture of its own is what stamps itself here; a plain line and
     the shapes are drawn on the sheet as they always were. */
 function startLiveStroke(stroke, brush) {
   liveStrokeState.active = false;
   if (!liveInkCtx || !liveGrainCtx || !brush?.data || stroke.eraser || stroke.kind) return;
-  liveInkCanvas.width = ctx.canvas.width;
-  liveInkCanvas.height = ctx.canvas.height;
-  liveGrainCanvas.width = ctx.canvas.width;
-  liveGrainCanvas.height = ctx.canvas.height;
+  if (liveInkCanvas.width !== ctx.canvas.width || liveInkCanvas.height !== ctx.canvas.height) {
+    liveInkCanvas.width = ctx.canvas.width;
+    liveInkCanvas.height = ctx.canvas.height;
+  } else {
+    liveInkCtx.setTransform(1, 0, 0, 1, 0, 0);
+    liveInkCtx.clearRect(0, 0, liveInkCanvas.width, liveInkCanvas.height);
+  }
   liveStrokeState.brush = brush;
   liveStrokeState.style = strokeStyleOf(brush);
   liveStrokeState.grained = Boolean(liveStrokeState.style.grain?.data);
@@ -1443,12 +1478,18 @@ function startLiveStroke(stroke, brush) {
   const blend = stroke.blend ?? "normal";
   liveInkCanvas.style.opacity = opacity;
   liveInkCanvas.style.mixBlendMode = blend;
-  liveGrainCanvas.style.opacity = opacity;
-  liveGrainCanvas.style.mixBlendMode = blend;
-  // The grained layer carries the ink with the grain taken out, and stands
-  // over the plain one, so both are never seen at once.
-  liveInkCanvas.hidden = liveStrokeState.grained;
-  liveGrainCanvas.hidden = !liveStrokeState.grained;
+  liveInkCanvas.hidden = false;
+  // The grain of the paper goes on the layer as a mask: the browser takes the
+  // holes out when it puts the layer on the screen, on the graphics card, and
+  // nothing has to be done again while the hand moves. The mask is the pattern
+  // the finished stroke is grained with, anchored at the origin of the
+  // document, so the ink a stroke shows in the hand is the ink it keeps.
+  // Until the picture of the grain has come in, the ink shows without it, the
+  // way it did when the grain was stamped by hand.
+  setLiveGrainMask();
+  // The second layer of the older way is out of work: the mask does what the
+  // copy and the fill of a whole layer did, on the card and for nothing.
+  liveGrainCanvas.hidden = true;
   liveStrokeState.active = true;
 }
 
@@ -1463,19 +1504,18 @@ function stampLiveStroke() {
   const run = state.rawSamples;
   if (!run || liveStrokeState.stamped >= run.length) return;
   // A zoom or a grown sheet made the buffer again: everything is stamped
-  // from the beginning, the samples hold the whole stroke.
+  // from the beginning, the samples hold the whole stroke. The mask of the
+  // grain is made for the size of the layer, so it is made again as well.
   if (liveInkCanvas.width !== ctx.canvas.width || liveInkCanvas.height !== ctx.canvas.height) {
     liveInkCanvas.width = ctx.canvas.width;
     liveInkCanvas.height = ctx.canvas.height;
-    liveGrainCanvas.width = ctx.canvas.width;
-    liveGrainCanvas.height = ctx.canvas.height;
     liveStrokeState.stamped = 0;
     liveStrokeState.box = null;
+    setLiveGrainMask();
   }
   const project = state.project;
   const doc = documentSize(project);
-  const scale = useDocumentSpace(doc.width, doc.height, liveInkCtx);
-  const pad = stagePadding(doc.width, doc.height);
+  useDocumentSpace(doc.width, doc.height, liveInkCtx);
   const shape = tintedTip(liveStrokeState.brush, stroke.color, liveStrokeState.style.binarize);
   // The run of samples only ever grows, so the dabs that are in are the
   // ones of the samples before the last stamp, and the segment from there
@@ -1494,39 +1534,6 @@ function stampLiveStroke() {
   }
   liveStrokeState.stamped = run.length;
   liveStrokeState.box = unionBox(liveStrokeState.box, box);
-  if (liveStrokeState.grained && box) {
-    // The grain is taken out of the room the new dabs cover: the plain ink
-    // is copied over and the grain is laid on it, so a place is never
-    // grained twice however often the stroke crosses itself.
-    const region = {
-      x: Math.max(0, Math.floor((box.x + pad.x) * scale)),
-      y: Math.max(0, Math.floor((box.y + pad.y) * scale)),
-    };
-    region.w = Math.min(liveGrainCanvas.width, Math.ceil((box.x + pad.x + box.w) * scale)) - region.x;
-    region.h = Math.min(liveGrainCanvas.height, Math.ceil((box.y + pad.y + box.h) * scale)) - region.y;
-    if (region.w > 0 && region.h > 0) {
-      liveGrainCtx.setTransform(1, 0, 0, 1, 0, 0);
-      liveGrainCtx.clearRect(region.x, region.y, region.w, region.h);
-      liveGrainCtx.drawImage(
-        liveInkCanvas,
-        region.x,
-        region.y,
-        region.w,
-        region.h,
-        region.x,
-        region.y,
-        region.w,
-        region.h,
-      );
-      applyGrainToCanvas(
-        liveGrainCtx,
-        region,
-        liveStrokeState.style.grain,
-        { x: pad.x * scale, y: pad.y * scale },
-        scale,
-      );
-    }
-  }
 }
 
 /** The stroke is out of the hand: the living layers are emptied and put
@@ -1536,6 +1543,10 @@ function endLiveStroke() {
   liveStrokeState.active = false;
   liveInkCanvas.hidden = true;
   liveGrainCanvas.hidden = true;
+  liveInkCanvas.style.maskImage = "";
+  liveInkCanvas.style.webkitMaskImage = "";
+  liveInkCanvas.style.maskSize = "";
+  liveInkCanvas.style.webkitMaskSize = "";
   liveInkCtx.setTransform(1, 0, 0, 1, 0, 0);
   liveInkCtx.clearRect(0, 0, liveInkCanvas.width, liveInkCanvas.height);
   liveGrainCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1804,6 +1815,79 @@ function applyGrainToCanvas(context, box, grain, origin = { x: 0, y: 0 }, pixelS
   context.restore();
 }
 
+/** The masks of the paper, made once for every grain and zoom. */
+const grainMasks = new Map();
+
+/**
+ * The grain of the paper as a mask for the live layer of ink.
+ *
+ * While a stroke is in the hand, its ink is shown on a layer of its own, and
+ * the grain is put on that layer as a mask: the browser punches the holes of
+ * the paper out when it puts the layer on the screen, on the graphics card,
+ * and nothing has to be done again while the hand moves. The pattern is the
+ * one the finished stroke is grained with - the same tile, the same strength,
+ * the same turn, anchored at the origin of the document - so the ink a stroke
+ * shows in the hand is the ink it keeps.
+ *
+ * @param {object} grain The grain of the brush.
+ * @param {number} scale How many buffer pixels one document pixel is.
+ * @param {{x:number,y:number}} pad The pasteboard around the canvas, in document pixels.
+ * @param {number} width The width of the live layer, in buffer pixels.
+ * @param {number} height The height of the live layer, in buffer pixels.
+ * @returns {string|null} A CSS mask image, or null when the grain is not ready.
+ */
+function grainMaskFor(grain, scale, pad, width, height) {
+  const entry = grainHolesFor(grain);
+  if (!entry.ready || !entry.surface) return null;
+  const strength = Math.max(0.05, Math.min(10, (Number(grain.scale) || 100) / 100));
+  const density = Math.max(0, Math.min(1, Number(grain.density ?? 100) / 100));
+  const turn = -(Number(grain.rotate) || 0);
+  const tile = entry.surface;
+  const key = [
+    grain.data,
+    density,
+    turn,
+    strength,
+    Math.round(scale * 100) / 100,
+    Math.round(pad.x),
+    Math.round(pad.y),
+    width,
+    height,
+  ].join("|");
+  let url = grainMasks.get(key);
+  if (url) return url;
+  // The mask holds the ink the paper keeps, not the ink it takes: the
+  // finished stroke has the holes punched out of it, so the mask is the
+  // paper turned the other way round - a full alpha where the paper keeps
+  // the ink, and the holes at their strength where it takes it. A grain of
+  // 0 keeps everything, the way the fill of the pattern took nothing away.
+  const surface = document.createElement("canvas");
+  surface.width = tile.width;
+  surface.height = tile.height;
+  const surfaceCtx = surface.getContext("2d", { willReadFrequently: true });
+  surfaceCtx.drawImage(tile, 0, 0);
+  const pixels = surfaceCtx.getImageData(0, 0, surface.width, surface.height);
+  const data = pixels.data;
+  for (let at = 0; at < data.length; at += 4) {
+    data[at] = 255;
+    data[at + 1] = 255;
+    data[at + 2] = 255;
+    data[at + 3] = Math.round(255 - density * data[at + 3]);
+  }
+  surfaceCtx.putImageData(pixels, 0, 0);
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}">` +
+    `<defs><pattern id="g" width="${tile.width}" height="${tile.height}" patternUnits="userSpaceOnUse" ` +
+    `patternTransform="translate(${pad.x * scale} ${pad.y * scale}) scale(${strength * scale}) rotate(${turn})">` +
+    `<image width="${tile.width}" height="${tile.height}" href="${surface.toDataURL("image/png")}" xlink:href="${surface.toDataURL("image/png")}"/>` +
+    `</pattern></defs>` +
+    `<rect width="100%" height="100%" fill="url(#g)"/></svg>`;
+  url = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+  if (grainMasks.size > 16) grainMasks.clear();
+  grainMasks.set(key, url);
+  return url;
+}
+
 /**
  * Take the soft edge of a dab away.
  *
@@ -2033,7 +2117,6 @@ function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style,
   );
   ctx.globalCompositeOperation = "source-over";
   grainScratch.box = dirty;
-  return grownX > 0 || grownY > 0;
 }
 
 /** Paint the shape of a stroke, in the colour of the stroke and at full strength. */
@@ -7515,7 +7598,7 @@ function endStroke(event) {
   // stroke that was stamped is the stroke that was drawn, and it can go
   // straight into the document instead of the document being built again.
   const wasLive = liveStrokeState.active;
-  const liveSource = liveStrokeState.grained ? liveGrainCanvas : liveInkCanvas;
+  const liveSource = liveInkCanvas;
   let grown = false;
 
   if (state.tool === "brush" || state.tool === "eraser") {
@@ -7617,11 +7700,14 @@ function endStroke(event) {
   // whole document is not built again for it. It is only honest when
   // nothing stands over the layer in the hand, when no selection cut the
   // ink, and when the sheet did not grow - a grown sheet is drawn anew
-  // anyway, and a cut stroke is not the stroke that was stamped.
+  // anyway, and a cut stroke is not the stroke that was stamped. A grained
+  // stroke goes the long way: its grain lives in the mask of the living
+  // layer, not in its pixels, so the grained stroke is drawn into the
+  // document by its painter, the way the strokes before it were.
   const liveStyleTapers = liveStrokeState.style?.taperEnds === true;
   const fast =
     wasLive && !grown && !layerAboveCovers() && !currentSelection()
-    && !liveStyleTapers;
+    && !liveStyleTapers && !liveStrokeState.grained;
   if (fast) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
