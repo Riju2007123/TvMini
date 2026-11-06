@@ -2784,6 +2784,67 @@ body.pane-dragging .pane-header {
   letter-spacing: 0.04em;
 }
 
+/* The sub tools of the fill, the way Clip Studio Paint lists them: one of
+   them is down, and the list stands in the panel only for the bucket. */
+.fill-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.fill-modes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fill-modes-list button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fill-modes-list button:hover {
+  background: color-mix(in srgb, var(--faint) 12%, transparent);
+  color: var(--text);
+}
+
+.fill-modes-list button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text);
+}
+
+.fill-mode-icon {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.fill-reference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.fill-reference select {
+  flex: 1;
+}
+
 .tl-kind.folder {
   color: var(--text-dim);
 }

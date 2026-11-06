@@ -10,12 +10,15 @@ import { decodeSound, soundPeaks } from "./audio.js";
 import {
   clipMaskFromSpans,
   floodFillRgba,
+  floodRegionSpans,
+  intersectSpans,
   parseHexColor,
   sampleEllipse,
   smoothPoint,
   drawBrushTipShape,
   strokeOutline,
   strokePathGroups,
+  spansFromMask,
   strokeRadii as sharedStrokeRadii,
 } from "./core/paint.js";
 import { brushImageFromBytes } from "./core/brush.js";
@@ -383,7 +386,14 @@ const state = {
     line: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
     rect: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
     ellipse: { width: 3, stabilizer: 0, opacity: 100, blend: "normal" },
-    fill: { width: 6, stabilizer: 0, opacity: 100, blend: "normal" },
+    fill: {
+      width: 6,
+      stabilizer: 0,
+      opacity: 100,
+      blend: "normal",
+      subTool: "fill",
+      reference: "editing",
+    },
   },
   homeDir: ".",
   playing: false,
@@ -1349,7 +1359,8 @@ function drawStrokesInto(ctx, strokes, brush = null) {
 
   for (const stroke of strokes) {
     if (stroke.kind === "fill") {
-      floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke);
+      if (stroke.spans?.length) paintFillSpans(ctx, stroke);
+      else floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke);
       continue;
     }
 
@@ -1927,6 +1938,126 @@ function colorWithAlpha(color, alpha) {
 }
 
 /** Bucket fill: flood the paint canvas from the seed with the stroke colour. */
+/** The runs a fill carries painted as they were taken: the region is the
+    region, wherever the stroke goes afterwards. */
+function paintFillSpans(ctx, stroke) {
+  if (!stroke.spans?.length) return;
+  if (!parseHexColor(stroke.color)) return;
+  ctx.fillStyle = stroke.color;
+  for (const [y, from, to] of stroke.spans) ctx.fillRect(from, y, to - from, 1);
+}
+
+/* The pictures a region fill reads. */
+
+// The picture of the layers a fill refers to, in the pixels of the document.
+const fillSourceCanvas = document.createElement("canvas");
+const fillSourceCtx = fillSourceCanvas.getContext("2d", { willReadFrequently: true });
+// The lasso the hand drew, read back as a mask.
+const fillLassoCanvas = document.createElement("canvas");
+const fillLassoCtx = fillLassoCanvas.getContext("2d", { willReadFrequently: true });
+
+/**
+ * The picture the fill reads: every layer that can be seen but the one the
+ * paint goes on, drawn the way the document shows them. The fill that reads
+ * other layers floods this picture, so the lines of the layer above and the
+ * colours of the one below are borders all the same.
+ */
+function fillReferenceCtx() {
+  const project = state.project;
+  const doc = documentSize(project);
+  fitScratch(fillSourceCanvas, fillSourceCtx, doc.width, doc.height);
+  for (let index = project.layers.length - 1; index >= 0; index -= 1) {
+    const layer = project.layers[index];
+    if (isGroup(layer)) continue;
+    if (!layerIsVisible(project, index)) continue;
+    if (index === project.currentLayer) continue;
+    if (effectiveOpacity(project, index) <= 0) continue;
+    const resolved = resolveDrawing(layer, project.currentFrame);
+    if (!resolved) continue;
+    const painted = cellPaintOf(resolved.drawing, project);
+    if (!painted) continue;
+    withCellTransform(
+      fillSourceCtx,
+      [transformOf(layer), transformAt(resolved.drawing, resolved.sourceFrame)],
+      doc.width,
+      doc.height,
+      () => fillSourceCtx.drawImage(painted.canvas, 0, 0),
+    );
+  }
+  return fillSourceCtx;
+}
+
+/** The runs the click floods on the picture the fill reads. */
+function fillRegionFromSource(sourceCtx, seed, gap, clipSpans) {
+  const width = sourceCtx.canvas.width;
+  const height = sourceCtx.canvas.height;
+  const image = sourceCtx.getImageData(0, 0, width, height);
+  const clip = clipMaskFromSpans(clipSpans, width, height, 1);
+  return floodRegionSpans(image.data, width, height, seed[0], seed[1], 32, gap, clip);
+}
+
+/**
+ * The runs of every pixel of the cell that holds no paint: what Paint
+ * unfilled area takes in one go, wherever the click landed.
+ */
+function fillRegionUnfilled(clipSpans) {
+  const project = state.project;
+  const cell = drawingAt(currentLayer(), project.currentFrame);
+  const painted = cellPaintOf(cell, project);
+  if (!painted) return [];
+  const width = painted.canvas.width;
+  const height = painted.canvas.height;
+  const data = painted.ctx.getImageData(0, 0, width, height).data;
+  const mask = new Uint8Array(width * height);
+  for (let i = 0; i < mask.length; i += 1) {
+    if (data[i * 4 + 3] < 128) mask[i] = 1;
+  }
+  const spans = spansFromMask(mask, width, height);
+  return clipSpans ? intersectSpans(spans, clipSpans) : spans;
+}
+
+/**
+ * The runs the lasso the hand drew encloses: what is inside the line the
+ * hand made and is not ink on the picture the fill reads. Every pocket the
+ * lines make inside the lasso fills at once, the way Enclose and fill of
+ * Clip Studio Paint fills them.
+ */
+function fillRegionFromLasso(stroke, reference) {
+  const project = state.project;
+  const doc = documentSize(project);
+  const width = doc.width;
+  const height = doc.height;
+  fitScratch(fillLassoCanvas, fillLassoCtx, width, height);
+  fillLassoCtx.fillStyle = "#ffffff";
+  fillLassoCtx.beginPath();
+  const points = stroke.points;
+  fillLassoCtx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i += 1) fillLassoCtx.lineTo(points[i][0], points[i][1]);
+  fillLassoCtx.closePath();
+  fillLassoCtx.fill();
+  const lasso = fillLassoCtx.getImageData(0, 0, width, height).data;
+
+  // The lines the fill stops at: the layer in the hand, or the layers it
+  // refers to.
+  let source = null;
+  if (reference === "other") {
+    source = fillReferenceCtx();
+  } else {
+    const cell = drawingAt(currentLayer(), project.currentFrame);
+    source = cellPaintOf(cell, project)?.ctx ?? null;
+  }
+  if (!source) return [];
+  const ink = source.getImageData(0, 0, width, height).data;
+
+  const mask = new Uint8Array(width * height);
+  for (let i = 0; i < mask.length; i += 1) {
+    // Inside the lasso, and not on a line: the antialiasing of a line is
+    // half ink, and the fill stops at the half of it.
+    if (lasso[i * 4 + 3] > 0 && ink[i * 4 + 3] < 128) mask[i] = 1;
+  }
+  return spansFromMask(mask, width, height);
+}
+
 function floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke) {
   const rgb = parseHexColor(stroke.color);
   if (!rgb) return;
@@ -1995,6 +2126,14 @@ function strokeStyleOf(brush) {
  * afterwards, with the strength of the stroke.
  */
 function drawStrokeDirect(ctx, stroke, canvasWidth, canvasHeight, brush = null, asMask = false) {
+  // A fill paints a region, not a line: the flood runs on the pixels the
+  // context holds, or the runs the fill carried go down as they were.
+  if (stroke.kind === "fill") {
+    ctx.globalCompositeOperation = "source-over";
+    if (stroke.spans?.length) paintFillSpans(ctx, stroke);
+    else floodFillCanvas(ctx, canvasWidth, canvasHeight, stroke);
+    return;
+  }
   const style = strokeStyleOf(brush);
   const eraser = !asMask && stroke.eraser === true;
   // A stroke that is drawn on paper goes through a scratch of its own, so the
@@ -4358,6 +4497,20 @@ function drawOverlay() {
     if (!liveStrokeState.active) {
       drawStrokesInto(overlayCtx, [state.drawing], brushOfStroke(state.drawing, currentBrush()));
     }
+  }
+  if (state.drawing?.kind === "fill" && fillSubTool() === "enclose" && state.drawing.points.length > 1) {
+    // The lasso the hand is drawing round the area to fill: a line the eye
+    // can follow while the area it takes is still being chosen.
+    overlayCtx.save();
+    overlayCtx.setLineDash([6 / scale, 4 / scale]);
+    overlayCtx.lineWidth = 1.2 / scale;
+    overlayCtx.strokeStyle = "#ffffff";
+    overlayCtx.beginPath();
+    const lasso = state.drawing.points;
+    overlayCtx.moveTo(lasso[0][0], lasso[0][1]);
+    for (let i = 1; i < lasso.length; i += 1) overlayCtx.lineTo(lasso[i][0], lasso[i][1]);
+    overlayCtx.stroke();
+    overlayCtx.restore();
   }
   // The line of the stabilizer: while the calm point trails the hand, a
   // hairline joins the place being painted to the place the hand is, so the
@@ -7555,10 +7708,9 @@ function fitStrokeToSelection(drawing) {
   if (!selection || !stroke || !drawing) return true;
 
   if (stroke.kind === "fill") {
-    // A fill is not a line and cannot be cut at the edge: the click has to be
-    // inside the selection for it to happen at all. The fill then holds on to
-    // the runs of the selection it was made in, so the paint is kept to the
-    // part of the canvas that was allowed.
+    // A region fill took its region already: it paints as it was taken, and
+    // a fill that took nothing at all paints nothing and does not stay.
+    if (stroke.spans) return stroke.spans.length > 0;
     if (!selectionContains(selection, stroke.points[0][0], stroke.points[0][1])) {
       return false;
     }
@@ -7736,6 +7888,18 @@ canvas.addEventListener("pointerdown", (event) => {
     stroke.points.push(startPoint);
   } else if (state.tool === "fill") {
     stroke.kind = "fill";
+    // A region fill takes its region at the click: the fill that reads
+    // other layers reads them now, and the one that takes every unfilled
+    // pixel of the layer takes them now. The one that encloses waits for
+    // the lasso the hand will draw.
+    const mode = fillSubTool();
+    const selection = currentSelection();
+    const clipSpans = selection ? selectionSpans(selection) : null;
+    if (mode === "referOther") {
+      stroke.spans = fillRegionFromSource(fillReferenceCtx(true), startPoint, 0, clipSpans);
+    } else if (mode === "unfilled") {
+      stroke.spans = fillRegionUnfilled(clipSpans);
+    }
   }
   if (state.tool === "brush" || state.tool === "pencil" || state.tool === "eraser") {
     // A stroke remembers the brush it was made with, the way Clip Studio
@@ -7810,7 +7974,18 @@ canvas.addEventListener("pointermove", (event) => {
       state.drawing.points[1] = point;
       continue;
     }
-    if (state.drawing.kind === "fill") break; // a fill is a single click
+    if (state.drawing.kind === "fill") {
+      // Enclose and fill drags a lasso round the area to take; every other
+      // fill is a single click and follows the pointer for nothing.
+      if (fillSubTool() === "enclose") {
+        const last = state.drawing.points[state.drawing.points.length - 1];
+        if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= 1.5) {
+          state.drawing.points.push(point);
+          drawOverlay();
+        }
+      }
+      break;
+    }
 
     // The raw place of the hand goes into the ring of the stabilizer, with
     // the time the pointer says it happened, so the calm of the line is the
@@ -7967,6 +8142,20 @@ function endStroke(event) {
     state.rawSamples = null;
     state.smoothedPoint = null;
   }
+  // The fill that encloses takes its region when the lasso closes: what the
+  // lasso holds and the lines do not, cut by the selection if one is up.
+  if (state.drawing?.kind === "fill" && !state.drawing.spans?.length && fillSubTool() === "enclose") {
+    const lasso = state.drawing;
+    if (lasso.points.length > 2) {
+      lasso.spans = fillRegionFromLasso(lasso, fillReference());
+      const selection = currentSelection();
+      if (selection && lasso.spans.length) {
+        lasso.spans = intersectSpans(lasso.spans, selectionSpans(selection));
+      }
+    }
+  }
+  // A region fill that took no region paints nothing, and does not stay:
+  // fitStrokeToSelection refuses it below.
   const committed = state.drawing;
   // The stroke is cut at the edge of the selection before it is recorded, so
   // the picture that is saved holds the ink that was actually put down.
@@ -8423,6 +8612,8 @@ const TOOL_PROPS = {
 };
 
 const toolPropsTitle = document.getElementById("toolPropsTitle");
+const toolFillRow = document.getElementById("toolFillRow");
+const fillReferenceSelect = document.getElementById("fillReference");
 const toolNote = document.getElementById("toolNote");
 const penDock = document.getElementById("dockPen");
 const toolPropStrip = document.getElementById("toolPropStrip");
@@ -8736,6 +8927,22 @@ function toolSettings() {
   return state.toolSettings[state.tool] ?? state.toolSettings.brush;
 }
 
+/** Which fill the bucket pours: the plain flood, the fill that reads other
+    layers, the one that fills what the hand encloses, and the one that
+    takes every unfilled pixel of the layer. */
+function fillSubTool() {
+  const subTool = toolSettings().subTool;
+  return subTool === "referOther" || subTool === "enclose" || subTool === "unfilled"
+    ? subTool
+    : "fill";
+}
+
+/** What the enclose-and-fill reads for its lines: the layer in the hand, or
+    the other layers that can be seen. */
+function fillReference() {
+  return toolSettings().reference === "other" ? "other" : "editing";
+}
+
 /**
  * Put the settings of the tool in the hand into the panel.
  *
@@ -8792,11 +8999,54 @@ function showToolProps() {
   layoutToolProps();
   toolNote.hidden = !props.note;
   toolNote.textContent = props.note;
+  // The fill carries its sub tools: the list stands in the panel only while
+  // the bucket is in the hand.
+  if (toolFillRow) {
+    toolFillRow.hidden = state.tool !== "fill";
+    if (state.tool === "fill") syncFillSubTools();
+  }
   // The stylus is only of use to the tools that draw a line, and then the
   // whole pen dock steps aside with them.
   const draws = state.tool !== "pick" && state.tool !== "camera" && state.tool !== "fill";
   if (penDock) penDock.hidden = !draws;
   syncQuickBar();
+}
+
+for (const button of document.querySelectorAll("[data-fill-sub]")) {
+  button.addEventListener("click", () => {
+    toolSettings().subTool = button.dataset.fillSub;
+    syncFillSubTools();
+    const names = {
+      fill: "Fill",
+      referOther: "Fill — refer other layers",
+      enclose: "Enclose and fill — drag round the area",
+      unfilled: "Paint unfilled area — every transparent pixel of the layer",
+    };
+    setStatus(names[button.dataset.fillSub] ?? "Fill");
+  });
+}
+if (fillReferenceSelect) {
+  fillReferenceSelect.addEventListener("change", () => {
+    toolSettings().reference = fillReferenceSelect.value;
+    setStatus(
+      fillReferenceSelect.value === "other"
+        ? "The fill reads its lines from the other layers"
+        : "The fill reads its lines from the layer in the hand",
+    );
+  });
+}
+
+/** The fill sub tools: which one is down, and what the reference says. */
+function syncFillSubTools() {
+  if (!toolFillRow) return;
+  const mode = fillSubTool();
+  for (const button of toolFillRow.querySelectorAll("[data-fill-sub]")) {
+    const on = button.dataset.fillSub === mode;
+    button.setAttribute("aria-pressed", String(on));
+  }
+  const referenceRow = document.getElementById("toolFillReferenceRow");
+  if (referenceRow) referenceRow.hidden = mode !== "fill" && mode !== "enclose";
+  if (fillReferenceSelect) fillReferenceSelect.value = fillReference();
 }
 
 /** Take the settings from the panel into the tool in the hand. */

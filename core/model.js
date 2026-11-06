@@ -36,6 +36,8 @@ export const STROKE_KINDS = ["line", "rect", "ellipse", "fill", "paths", "path"]
 export const BLEND_MODES = ["normal", "multiply", "screen"];
 /** Largest number of runs a fill may carry (the part of the canvas it may paint). */
 export const MAX_FILL_SPANS = 4096;
+/** Largest number of runs a region fill carries (rows of a whole canvas at most). */
+const MAX_FILL_REGION = 16384;
 
 export class ValidationError extends Error {
   constructor(message) {
@@ -215,6 +217,36 @@ function normalizeStrokes(value, label) {
         cleanClip.push([runY, runX0, runX1]);
       }
       clean.clip = cleanClip;
+    }
+
+    // A fill may carry the runs it paints instead of a seed to flood from:
+    // a fill that reads other layers, one that fills what the hand enclosed
+    // and one that takes every unfilled pixel of a layer hold the region
+    // they took at the moment they took it, so the same pixels paint
+    // wherever the stroke goes afterwards.
+    if (stroke.spans !== undefined) {
+      if (stroke.kind !== "fill") {
+        throw new ValidationError(`${label}[${index}].spans is only allowed on a fill`);
+      }
+      if (!Array.isArray(stroke.spans) || stroke.spans.length > MAX_FILL_REGION) {
+        throw new ValidationError(
+          `${label}[${index}].spans must be a list of runs of at most ${MAX_FILL_REGION} entries`,
+        );
+      }
+      const cleanSpans = [];
+      for (const span of stroke.spans) {
+        if (!Array.isArray(span) || span.length < 3) {
+          throw new ValidationError(`${label}[${index}].spans must be a run of three numbers`);
+        }
+        const runY = integerInRange(span[0], `${label}[${index}].spans`, 0, 10_000_000);
+        const runX0 = integerInRange(span[1], `${label}[${index}].spans`, 0, 10_000_000);
+        const runX1 = integerInRange(span[2], `${label}[${index}].spans`, 0, 10_000_000);
+        if (runX1 <= runX0) {
+          throw new ValidationError(`${label}[${index}].spans runs must be wider than the point that starts them`);
+        }
+        cleanSpans.push([runY, runX0, runX1]);
+      }
+      clean.spans = cleanSpans;
     }
 
     if (stroke.opacity !== undefined) {

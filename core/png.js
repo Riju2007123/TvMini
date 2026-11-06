@@ -966,6 +966,25 @@ function paintDrawingInner(width, height, drawing, scale = 1) {
     const rgb = parseHex(stroke.color);
 
     if (stroke.kind === "fill") {
+      // A fill may carry the runs it took when it was made: they paint as
+      // they were, scaled with the export, and no flood runs.
+      if (stroke.spans?.length) {
+        for (const [y, from, to] of stroke.spans) {
+          const row = Math.round(y * scale);
+          if (row < 0 || row >= height) continue;
+          const x0 = Math.max(0, Math.round(from * scale));
+          const x1 = Math.min(width, Math.round(to * scale));
+          const base = (row * width + x0) * 4;
+          for (let x = x0; x < x1; x += 1) {
+            const index = base + (x - x0) * 4;
+            paint[index] = rgb[0];
+            paint[index + 1] = rgb[1];
+            paint[index + 2] = rgb[2];
+            paint[index + 3] = 255;
+          }
+        }
+        continue;
+      }
       const mask = clipMaskFromSpans(stroke.clip, width, height, scale);
       const seedX = stroke.points[0][0] * scale;
       const seedY = stroke.points[0][1] * scale;

@@ -390,6 +390,29 @@
             </div>
             <div class="paint-dock-body" id="dockPropsBody">
           <div class="tool-props" id="toolPropsBody">
+            <div class="fill-modes" id="toolFillRow" hidden>
+              <div class="fill-modes-list" role="radiogroup" aria-label="Fill sub tools">
+                <button type="button" data-fill-sub="fill" aria-pressed="true" title="Fill — flood the region under the click, read from the layer you paint on">
+                  <span class="fill-mode-icon" aria-hidden="true">▟</span>Fill
+                </button>
+                <button type="button" data-fill-sub="referOther" aria-pressed="false" title="Refer other layers — read the region from the layers you can see, paint on this one">
+                  <span class="fill-mode-icon" aria-hidden="true">▛</span>Refer other layers
+                </button>
+                <button type="button" data-fill-sub="enclose" aria-pressed="false" title="Enclose and fill — drag round an area; everything inside but the lines fills">
+                  <span class="fill-mode-icon" aria-hidden="true">◍</span>Enclose and fill
+                </button>
+                <button type="button" data-fill-sub="unfilled" aria-pressed="false" title="Paint unfilled area — fill every transparent pixel of the layer at once">
+                  <span class="fill-mode-icon" aria-hidden="true">▤</span>Paint unfilled area
+                </button>
+              </div>
+              <label class="fill-reference" id="toolFillReferenceRow" hidden>
+                <span>Reference</span>
+                <select id="fillReference" title="What the lines that stop the fill are read from">
+                  <option value="editing">Editing layer</option>
+                  <option value="other">Other layers</option>
+                </select>
+              </label>
+            </div>
             <div class="brush-preview-wrap" id="brushPreviewWrap">
               <canvas id="brushShapePreview" class="brush-shape-preview" width="220" height="34" aria-label="The shape of the brush that is in the hand"></canvas>
               <span class="brush-shape-size" id="brushShapeSize">6px</span>

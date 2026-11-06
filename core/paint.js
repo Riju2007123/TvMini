@@ -146,6 +146,149 @@ export function floodFillRgba(
 }
 
 /**
+ * The runs a flood covers, read off the pixels without painting them.
+ *
+ * A fill that reads other layers, one that fills what the hand enclosed and
+ * one that takes every unfilled pixel of a layer all hold the region they
+ * took at the moment they took it, so the same pixels paint wherever the
+ * stroke goes afterwards. The walk is the flood's own walk — the same
+ * tolerance, the same closing of gaps — it only writes down where it went.
+ *
+ * @returns {Array<Array<number>>} Runs of [row, from, to), `to` left out.
+ */
+export function floodRegionSpans(
+  data,
+  width,
+  height,
+  seedX,
+  seedY,
+  tolerance = 32,
+  gapTolerance = 0,
+  clip = null,
+) {
+  const startX = Math.round(seedX);
+  const startY = Math.round(seedY);
+  if (startX < 0 || startY < 0 || startX >= width || startY >= height) return [];
+  if (clip && clip[startY * width + startX] !== 1) return [];
+
+  const totalPixels = width * height;
+  const seedIndex = (startY * width + startX) * 4;
+  const target = [data[seedIndex], data[seedIndex + 1], data[seedIndex + 2], data[seedIndex + 3]];
+
+  // The same closing of gaps the flood does: the pixels near an edge of
+  // another colour are walls the run does not cross.
+  let edgeMask = null;
+  if (gapTolerance > 0) {
+    edgeMask = new Uint8Array(totalPixels);
+    const radius = gapTolerance;
+    const isEdge = (px, py) => {
+      if (px < 0 || py < 0 || px >= width || py >= height) return true;
+      const idx = (py * width + px) * 4;
+      for (let c = 0; c < 4; c += 1) {
+        if (Math.abs(data[idx + c] - target[c]) > tolerance) return true;
+      }
+      return false;
+    };
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (isEdge(x, y)) {
+          for (let dy = -radius; dy <= radius; dy += 1) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= height) continue;
+            for (let dx = -radius; dx <= radius; dx += 1) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= width) continue;
+              if (dx * dx + dy * dy <= radius * radius) {
+                edgeMask[ny * width + nx] = 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const within = (index, px, py) => {
+    if (clip && clip[py * width + px] !== 1) return false;
+    if (edgeMask && edgeMask[py * width + px]) return false;
+    for (let channel = 0; channel < 4; channel += 1) {
+      if (Math.abs(data[index + channel] - target[channel]) > tolerance) return false;
+    }
+    return true;
+  };
+
+  const spans = [];
+  const done = new Uint8Array(totalPixels);
+  const stack = [[startX, startY]];
+  while (stack.length > 0) {
+    const [x, y] = stack.pop();
+    const row = y * width;
+    let left = x;
+    let right = x;
+    while (left > 0 && !done[row + left - 1] && within((row + left - 1) * 4, left - 1, y)) left -= 1;
+    while (right < width - 1 && !done[row + right + 1] && within((row + right + 1) * 4, right + 1, y)) right += 1;
+
+    for (let i = left; i <= right; i += 1) {
+      const pixel = row + i;
+      if (done[pixel]) continue;
+      done[pixel] = 1;
+      if (y > 0 && !done[pixel - width] && within((pixel - width) * 4, i, y - 1)) stack.push([i, y - 1]);
+      if (y < height - 1 && !done[pixel + width] && within((pixel + width) * 4, i, y + 1)) stack.push([i, y + 1]);
+    }
+    spans.push([y, left, right + 1]);
+  }
+  spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return spans;
+}
+
+/** The runs of set pixels in a mask, one pass over the rows. */
+export function spansFromMask(mask, width, height) {
+  const spans = [];
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    let x = 0;
+    while (x < width) {
+      if (!mask[row + x]) {
+        x += 1;
+        continue;
+      }
+      const from = x;
+      while (x < width && mask[row + x]) x += 1;
+      spans.push([y, from, x]);
+    }
+  }
+  return spans;
+}
+
+/**
+ * The runs both lists cover.
+ *
+ * Both lists go row by row, so two pointers walk them together: the run
+ * that ends first steps aside, and what the two share goes out.
+ */
+export function intersectSpans(a, b) {
+  if (!a || !a.length || !b || !b.length) return [];
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const runA = a[i];
+    const runB = b[j];
+    if (runA[0] !== runB[0]) {
+      if (runA[0] < runB[0]) i += 1;
+      else j += 1;
+      continue;
+    }
+    const from = Math.max(runA[1], runB[1]);
+    const to = Math.min(runA[2], runB[2]);
+    if (to > from) out.push([runA[0], from, to]);
+    if (runA[2] <= runB[2]) i += 1;
+    else j += 1;
+  }
+  return out;
+}
+
+/**
  * Composite a stroke-shaped mask (opaque where the stroke is) over a drawing
  * buffer, following the same per-channel rule the canvas uses for blend
  * modes: blend the colours, then composite by source alpha.
