@@ -583,6 +583,44 @@ export function brushSmoothPath(
   smoothness = FLASH8_STROKE.DEFAULT_SMOOTHNESS,
   window = brushSmoothWindow(smoothness),
 ) {
+  const settled = settledBrushPath(points, smoothness, window);
+
+  // Only the redundant knots go; the shape of the line stays as settled,
+  // and so does the width of the line along it.
+  return dietKnots(settled, BRUSH_SMOOTH_KNOT_DIET, BRUSH_PRESSURE_KNOT_DIET);
+}
+
+/**
+ * The settled fit of a run of hand samples, without the diet of the knots.
+ *
+ * This is the fit the brush in the hand shows: the walk that spaces the
+ * samples evenly and the centred average over the window of smoothness are
+ * both worked from the start of the run, so a knot whose window is fully
+ * inside the run has its final place at once and keeps it for good. As the
+ * hand goes on, new knots are added at the pen and old ones never move —
+ * the line that is behind the pen is the line that stays, and nothing in
+ * it shifts while the stroke is drawn or when the pen is lifted.
+ *
+ * `brushSmoothPath` fits the same line but then diets the knots, and the
+ * diet measures every knot against a chord that ends at the hand, so its
+ * knots would be chosen differently on every move and the drawn line would
+ * creep. The stroke in the hand and the stroke that is committed both come
+ * from here, so the two are one line.
+ */
+export function brushSmoothLivePath(
+  points,
+  smoothness = FLASH8_STROKE.DEFAULT_SMOOTHNESS,
+  window = brushSmoothWindow(smoothness),
+) {
+  return settledBrushPath(points, smoothness, window);
+}
+
+/** The even walk and the centred average, with the ends held to the hand. */
+function settledBrushPath(
+  points,
+  smoothness = FLASH8_STROKE.DEFAULT_SMOOTHNESS,
+  window = brushSmoothWindow(smoothness),
+) {
   if (!points || points.length === 0) return [];
   if (points.length <= 2) return points.map((point) => point.slice());
 
@@ -599,10 +637,7 @@ export function brushSmoothPath(
   // The ends keep the places the hand put them down and lifted.
   settled[0] = even[0].slice();
   settled[settled.length - 1] = even[even.length - 1].slice();
-
-  // Only the redundant knots go; the shape of the line stays as settled,
-  // and so does the width of the line along it.
-  return dietKnots(settled, BRUSH_SMOOTH_KNOT_DIET, BRUSH_PRESSURE_KNOT_DIET);
+  return settled;
 }
 
 /**

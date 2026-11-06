@@ -19,7 +19,7 @@ import {
   strokeRadii as sharedStrokeRadii,
 } from "./core/paint.js";
 import { brushImageFromBytes } from "./core/brush.js";
-import { brushSmoothPath, floodFillWithGaps } from "./core/flash8-drawing.js";
+import { brushSmoothLivePath, floodFillWithGaps } from "./core/flash8-drawing.js";
 import {
   clipStroke,
   combineSelections,
@@ -7551,7 +7551,9 @@ canvas.addEventListener("pointermove", (event) => {
         Number(state.drawing.width) || Number(widthInput.value) || 1,
       );
     } else {
-      state.drawing.points = brushSmoothPath(state.rawSamples, BRUSH_SMOOTHING);
+      // The fit that never moves a knot behind the pen: while the stroke is
+      // drawn, the line that is shown is already the line that will be left.
+      state.drawing.points = brushSmoothLivePath(state.rawSamples, BRUSH_SMOOTHING);
     }
   }
 
@@ -7643,7 +7645,9 @@ function endStroke(event) {
           Number(state.drawing.width) || Number(widthInput.value) || 1,
         );
       } else {
-        state.drawing.points = brushSmoothPath(state.rawSamples, BRUSH_SMOOTHING);
+        // The same live fit commits, so lifting the pen moves nothing: the
+        // line in the hand is the line that is kept, knot for knot.
+        state.drawing.points = brushSmoothLivePath(state.rawSamples, BRUSH_SMOOTHING);
       }
     }
     state.stab = null;
