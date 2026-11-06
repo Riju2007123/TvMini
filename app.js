@@ -237,9 +237,12 @@ const startFrameInput = document.getElementById("startFrame");
 const frameCountInput = document.getElementById("frameCount");
 const frameLabel = document.getElementById("frameLabel");
 const addLayerButton = document.getElementById("addLayerButton");
+const addRasterLayerButton = document.getElementById("addRasterLayerButton");
 const addGroupButton = document.getElementById("addGroupButton");
 const removeGroupButton = document.getElementById("removeGroupButton");
 const deleteLayerButton = document.getElementById("deleteLayerButton");
+const panelAddRasterLayer = document.getElementById("panelAddRasterLayer");
+const panelRasterizeLayer = document.getElementById("panelRasterizeLayer");
 const firstFrameButton = document.getElementById("firstFrameButton");
 const previousKeyButton = document.getElementById("previousKeyButton");
 const nextKeyButton = document.getElementById("nextKeyButton");
@@ -409,8 +412,8 @@ let history = new History({ limit: 100 });
 
 /* ------------------------------------------------------------------ model */
 
-function createLayer(name) {
-  return {
+function createLayer(name, ink = "vector") {
+  const layer = {
     name,
     type: "anim",
     visible: true,
@@ -423,6 +426,15 @@ function createLayer(name) {
     parent: -1,
     drawings: [],
   };
+  // A raster layer keeps its ink in the pixels of its cells; a layer that
+  // says nothing about its ink is a vector one, the way layers always were.
+  if (ink === "raster") layer.ink = "raster";
+  return layer;
+}
+
+/** A drawing layer whose ink is baked into the pixels of its cells. */
+function isRasterLayer(layer) {
+  return layer?.type === "anim" && layer?.ink === "raster";
 }
 
 /** A folder holds other layers. */
@@ -2470,6 +2482,164 @@ function appendStrokeToCellPaint(drawing, stroke) {
   if (cellPaintKeySame(entry.key, key)) return; // the picture is up to date
   drawStrokesInto(entry.ctx, [stroke], drawing.brush);
   entry.key = key;
+}
+
+/* The pot of pixels a raster cell's ink is baked in.
+ *
+ * A raster layer keeps its ink in the picture of each cell, and no stroke:
+ * a stroke that is let go is painted over the ink the cell holds and only
+ * the pixels stay. The picture is stored as a PNG in the cell, but a PNG is
+ * decoded in its own time, and the next stroke needs the pixels it lands on
+ * at once. So the pixels of the last bake are held here in a canvas beside
+ * the cell, and a bake that lands before the picture under it is decoded
+ * waits for the decode. */
+const rasterInk = new Map();
+const RASTER_INK_BUDGET = 384 * 1024 * 1024;
+let rasterInkBytes = 0;
+
+function trimRasterInk() {
+  for (const [drawing, entry] of rasterInk) {
+    if (rasterInkBytes <= RASTER_INK_BUDGET) break;
+    if (entry.loading) continue; // a decode is on its way to this pot
+    rasterInk.delete(drawing);
+    rasterInkBytes -= entry.bytes;
+  }
+}
+
+/** The pot of pixels that holds the cell's ink, decoded up to date. */
+function rasterInkOf(drawing) {
+  const wanted = drawing.image?.data ?? null;
+  let entry = rasterInk.get(drawing);
+  if (!entry) {
+    entry = { canvas: null, bytes: 0, key: null, loading: false, ready: Promise.resolve() };
+    rasterInk.set(drawing, entry);
+  } else {
+    // The newest pot stands last, so the trim takes the oldest.
+    rasterInk.delete(drawing);
+    rasterInk.set(drawing, entry);
+  }
+  if (entry.key !== wanted) {
+    // The cell's picture changed under the pot: a document that was opened,
+    // an undo, a picture that was imported. The picture is decoded into the
+    // pot before anything lands on it.
+    entry.key = wanted;
+    entry.loading = true;
+    entry.ready = (async () => {
+      try {
+        let source = null;
+        if (wanted) {
+          if (typeof createImageBitmap === "function") {
+            const response = await fetch(`data:image/png;base64,${wanted}`);
+            source = await createImageBitmap(await response.blob());
+          } else {
+            source = await new Promise((resolve, reject) => {
+              const element = new Image();
+              element.onload = () => resolve(element);
+              element.onerror = () => reject(new Error("the picture did not decode"));
+              element.src = `data:image/png;base64,${wanted}`;
+            });
+          }
+        }
+        rasterInkBytes -= entry.bytes;
+        if (source) {
+          const canvas = document.createElement("canvas");
+          canvas.width = source.width;
+          canvas.height = source.height;
+          canvas.getContext("2d").drawImage(source, 0, 0);
+          entry.canvas = canvas;
+          entry.bytes = source.width * source.height * 4;
+          rasterInkBytes += entry.bytes;
+          trimRasterInk();
+        } else {
+          entry.canvas = null;
+          entry.bytes = 0;
+        }
+      } catch {
+        // A picture that will not decode: the ink lands on an empty sheet.
+        rasterInkBytes -= entry.bytes;
+        entry.canvas = null;
+        entry.bytes = 0;
+      } finally {
+        entry.loading = false;
+      }
+    })();
+  }
+  return entry;
+}
+
+/**
+ * Bake strokes into the pixels of a raster cell.
+ *
+ * The strokes are painted over the ink the cell already holds, with every
+ * painter the stroke would have on paper - the eraser takes ink away, a
+ * brush with a picture stamps itself, the grain of the paper goes over the
+ * whole stroke in one pass - and what stays is trimmed to the box it covers
+ * and kept as the picture of the cell. No stroke is kept: the pixels are
+ * the ink. Ink past the edge of the canvas has no pixels to land on, the
+ * way it is on any raster layer.
+ *
+ * The bake lands at once while the pot of pixels is up to date, so the ink
+ * is in the picture the moment the stroke is let go. A pot that is still
+ * being decoded - the first stroke on a cell that was opened or undone -
+ * holds the bake until the decode is done.
+ */
+function bakeInkIntoCell(drawing, strokes) {
+  if (!drawing || !strokes.length) return;
+  const entry = rasterInkOf(drawing);
+  if (entry.loading) {
+    entry.ready.then(() => bakeInkIntoCell(drawing, strokes));
+    return;
+  }
+  bakeInkNow(drawing, strokes, entry);
+}
+
+/** The bake itself: read the pot, paint the strokes, keep the pixels. */
+function bakeInkNow(drawing, strokes, entry) {
+  const project = state.project;
+
+  // The room the ink needs: the box the strokes cover, over the box the
+  // picture already covers, cut at the edge of the canvas.
+  let box = null;
+  for (const stroke of strokes) box = unionBox(box, strokeExtent(stroke));
+  box = intersectBoxes(box, { x: 0, y: 0, w: project.width, h: project.height });
+  const current = drawing.image;
+  if (current) {
+    box = unionBox(box, { x: current.x, y: current.y, w: current.width, h: current.height });
+  }
+  if (!box) return;
+  const x0 = Math.max(0, Math.floor(box.x));
+  const y0 = Math.max(0, Math.floor(box.y));
+  const width = Math.min(project.width, Math.ceil(box.x + box.w)) - x0;
+  const height = Math.min(project.height, Math.ceil(box.y + box.h)) - y0;
+  if (width <= 0 || height <= 0) return;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const bake = canvas.getContext("2d");
+  if (entry.canvas) {
+    // The ink that is already there, at the place it holds in the document.
+    bake.drawImage(entry.canvas, (current?.x ?? 0) - x0, (current?.y ?? 0) - y0);
+  }
+  bake.save();
+  bake.translate(-x0, -y0);
+  for (const stroke of strokes) {
+    drawStrokeDirect(bake, stroke, width, height, drawing.brush ?? stroke.brush ?? null);
+  }
+  bake.restore();
+
+  const data = canvas.toDataURL("image/png").split(",")[1];
+  drawing.image = { data, width, height, x: x0, y: y0 };
+  // The pot now holds exactly what the picture of the cell says.
+  rasterInkBytes -= entry.bytes;
+  entry.canvas = canvas;
+  entry.bytes = width * height * 4;
+  rasterInkBytes += entry.bytes;
+  trimRasterInk();
+  // The picture of the cell is built from its strokes and its picture; the
+  // picture changed, so the built one is out of date.
+  cellPaintCache.delete(drawing);
+  queueCanvasRepaint();
 }
 
 function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targetCanvas = paintCanvas) {
@@ -4617,7 +4787,7 @@ function appendPlayhead(cells, project, columns, start) {
  * new one above it, the way the button on every row of the Clip Studio
  * Paint layer palette works.
  */
-function addLayerBeside(index) {
+function addLayerBeside(index, ink = "vector") {
   const project = state.project;
   if (project.layers.length >= MAX_LAYERS) {
     setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
@@ -4630,14 +4800,14 @@ function addLayerBeside(index) {
   const inside = isGroup(layer);
   const parent = inside ? index : (layer.parent ?? -1);
   const at = inside ? index + 1 : index;
-  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  const created = createLayer(`Layer ${project.layers.length + 1}`, ink);
   insertLayer(project, at, created, parent);
   syncTrackCel(project, at);
   project.currentLayer = at;
   recordHistory(before);
   markDirty();
   afterChange();
-  setStatus(`Added ${currentLayer().name}`);
+  setStatus(`Added ${currentLayer().name}${ink === "raster" ? " (raster)" : ""}`);
 }
 
 /**
@@ -4670,7 +4840,11 @@ function celForDrawing(trackIndex, frame) {
   }
 
   stopPlayback();
-  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  // A cel of a raster track holds its ink in pixels, the way its track does.
+  const created = createLayer(
+    `Layer ${project.layers.length + 1}`,
+    isRasterLayer(track) ? "raster" : "vector",
+  );
   created.drawings = [
     { at: frame, hold: 1, strokes: [], name: cellName(created, frame) },
   ];
@@ -5055,7 +5229,15 @@ function renderTimeline() {
       toggleLock(index);
     });
 
-    head.append(visibility, kind, name, lock);
+    head.append(visibility, kind, name);
+    // A raster layer keeps its ink in the pixels of its cells; the badge
+    // says so where the name is read.
+    if (isRasterLayer(layer)) {
+      const rasterBadge = element("span", "tl-raster", "raster");
+      rasterBadge.title = "A raster layer: strokes are baked into the pixels of the cells";
+      head.append(rasterBadge);
+    }
+    head.append(lock);
 
     if (layer.clip) {
       const clip = element("span", "tl-clip", "✂");
@@ -5420,6 +5602,13 @@ function syncLayerPanelControls() {
   panelDuplicateLayerButton.title = folder
     ? `Duplicate ${layer.name} and the layers inside it`
     : `Duplicate ${layer.name}`;
+  // A layer with no stroke anywhere has nothing to bake into pixels, and a
+  // folder holds no ink of its own.
+  panelRasterizeLayer.disabled =
+    folder || !layer?.drawings?.some((drawing) => drawing.strokes.length > 0);
+  panelRasterizeLayer.title = folder
+    ? "A folder holds no ink to rasterize"
+    : `Rasterize ${layer.name} — its strokes are baked into the pixels of its cells, once and for all`;
 }
 
 /** The sound row: the name, a remove button and the waveform. */
@@ -5784,7 +5973,7 @@ function renameLayer(index) {
  * The new layer goes above the current one, or inside it when the current
  * layer is a folder.
  */
-function addLayer() {
+function addLayer(ink = "vector") {
   const project = state.project;
   if (project.layers.length >= MAX_LAYERS) {
     setStatus(`At most ${MAX_LAYERS} layers are allowed`, true);
@@ -5798,14 +5987,19 @@ function addLayer() {
   const inside = isGroup(layer);
   const parent = inside ? current : (layer.parent ?? -1);
   const index = inside ? current + 1 : current;
-  const created = createLayer(`Layer ${project.layers.length + 1}`);
+  const created = createLayer(`Layer ${project.layers.length + 1}`, ink);
   insertLayer(project, index, created, parent);
   syncTrackCel(project, index);
   project.currentLayer = index;
   recordHistory(before);
   markDirty();
   afterChange();
-  setStatus(`Added ${currentLayer().name}`);
+  setStatus(`Added ${currentLayer().name}${ink === "raster" ? " (raster)" : ""}`);
+}
+
+/** A raster layer: its ink is baked into the pixels of its cells. */
+function addRasterLayer() {
+  addLayer("raster");
 }
 
 /**
@@ -5839,6 +6033,55 @@ function addGroup() {
   markDirty();
   afterChange();
   setStatus(`Added ${currentLayer().name}`);
+}
+
+/**
+ * Bake every stroke of the layer into the pixels of its cells, once and for
+ * all: the layer keeps its pictures and loses its strokes, and from then on
+ * the ink is edited in pixels, the eraser with it. The history holds the
+ * layer as it was, so the bake can be undone whole.
+ */
+async function rasterizeLayer() {
+  const layer = currentLayer();
+  if (!layer || isGroup(layer)) return;
+  if (state.drawing) return; // a stroke in the hand owns the cell
+  if (isRasterLayer(layer) && !layer.drawings.some((drawing) => drawing.strokes.length)) {
+    setStatus(`${layer.name} already keeps its ink in pixels`);
+    return;
+  }
+
+  stopPlayback();
+  // The pots of pixels are decoded first, so every bake lands at once and
+  // no stroke leaves its cell before the pixels hold it.
+  const pots = layer.drawings
+    .filter((drawing) => drawing.strokes.length)
+    .map((drawing) => rasterInkOf(drawing));
+  await Promise.all(pots.map((pot) => pot.ready));
+  if (state.drawing) return; // a stroke began while the pictures decoded
+
+  const before = snapshot();
+  layer.ink = "raster";
+  let cells = 0;
+  let strokes = 0;
+  for (const drawing of layer.drawings) {
+    if (!drawing.strokes.length) continue;
+    const pieces = drawing.strokes.slice();
+    // The bake paints the strokes over the ink the cell holds; the strokes
+    // leave the cell only once the pixels hold them.
+    bakeInkIntoCell(drawing, pieces);
+    drawing.strokes = [];
+    cellPaintCache.delete(drawing);
+    cells += 1;
+    strokes += pieces.length;
+  }
+  recordHistory(before);
+  markDirty();
+  afterChange();
+  setStatus(
+    strokes
+      ? `Rasterized ${strokes} stroke${strokes === 1 ? "" : "s"} on ${cells} cell${cells === 1 ? "" : "s"} of ${layer.name}`
+      : `${layer.name} keeps its ink in pixels from now on`,
+  );
 }
 
 /**
@@ -7658,26 +7901,40 @@ function endStroke(event) {
   // The stroke is cut at the edge of the selection before it is recorded, so
   // the picture that is saved holds the ink that was actually put down.
   const cell = drawingAt(currentLayer(), state.project.currentFrame);
-  const kept = fitStrokeToSelection(cell);
+  const raster = isRasterLayer(currentLayer());
+  let kept = fitStrokeToSelection(cell);
   const wasNew = state.strokeWasNew;
   state.drawing = null;
   forgetPressure();
   // The stroke joins the picture of its own cell, and only that picture is
   // touched: the cell is not built from the beginning for every stroke.
   if (kept && committed) {
-    // The half-edge shape of a freehand stroke is built now, once the stroke
-    // is out of the hand, so the contour that will be painted is the contour
-    // the model holds and every later frame only reads it back.
-    try {
-      shapeForStroke(committed);
-    } catch (error) {
-      console.error("shapeForStroke at commit failed", error);
+    if (raster) {
+      // The ink of a raster layer goes into the pixels of its cell, and no
+      // stroke is kept. The fit has already cut the stroke against the
+      // selection in the cell, so what the cell holds is what gets baked.
+      const pieces = cell.strokes.slice();
+      cell.strokes = [];
+      if (pieces.length) {
+        bakeInkIntoCell(cell, pieces);
+      } else {
+        kept = false;
+      }
+    } else {
+      // The half-edge shape of a freehand stroke is built now, once the stroke
+      // is out of the hand, so the contour that will be painted is the contour
+      // the model holds and every later frame only reads it back.
+      try {
+        shapeForStroke(committed);
+      } catch (error) {
+        console.error("shapeForStroke at commit failed", error);
+      }
+      appendStrokeToCellPaint(cell, committed);
+      // A stroke that ran past the sheet grows the sheet, so the room to draw
+      // in follows the hand the way Flash's work area does. It rides in the
+      // same change as the stroke, so undo takes them back together.
+      grown = growSheetForStroke(committed);
     }
-    appendStrokeToCellPaint(cell, committed);
-    // A stroke that ran past the sheet grows the sheet, so the room to draw
-    // in follows the hand the way Flash's work area does. It rides in the
-    // same change as the stroke, so undo takes them back together.
-    grown = growSheetForStroke(committed);
   }
 
   const before = state.strokeBefore;
@@ -7688,7 +7945,7 @@ function endStroke(event) {
   if (!kept) {
     // A click outside the selection leaves no ink. A cell that was made for
     // that ink goes away again with it.
-    if (wasNew && cell && cell.strokes.length === 0) {
+    if (wasNew && cell && cell.strokes.length === 0 && !cell.image) {
       const layer = currentLayer();
       const index = layer.drawings.indexOf(cell);
       if (index >= 0) layer.drawings.splice(index, 1);
@@ -7727,7 +7984,11 @@ function endStroke(event) {
   const count = drawing ? drawing.strokes.length : 0;
   afterChange({ timeline: wasNew, skipRender: fast });
   if (fast) drawOverlay();
-  setStatus(`${count} stroke${count === 1 ? "" : "s"} on ${layer.name}, frame ${state.project.currentFrame}`);
+  setStatus(
+    isRasterLayer(layer)
+      ? `Ink baked into ${layer.name}, frame ${state.project.currentFrame}`
+      : `${count} stroke${count === 1 ? "" : "s"} on ${layer.name}, frame ${state.project.currentFrame}`,
+  );
 }
 
 canvas.addEventListener("pointerup", (event) => endStroke(event));
@@ -8862,6 +9123,7 @@ fpsInput.addEventListener("change", changeFps);
 startFrameInput.addEventListener("change", changeStartFrame);
 frameCountInput.addEventListener("change", changeFrameCount);
 addLayerButton.addEventListener("click", addLayer);
+addRasterLayerButton.addEventListener("click", addRasterLayer);
 addGroupButton.addEventListener("click", addGroup);
 removeGroupButton.addEventListener("click", removeGroup);
 deleteLayerButton.addEventListener("click", deleteLayer);
@@ -8870,9 +9132,11 @@ layerDownButton.addEventListener("click", () => moveLayer(1));
 
 /* The layers panel does the same things as the toolbar of the timeline. */
 panelAddLayerButton.addEventListener("click", addLayer);
+panelAddRasterLayer.addEventListener("click", addRasterLayer);
 panelAddFolderButton.addEventListener("click", addGroup);
 panelAddAnimationFolderButton.addEventListener("click", addAnimationFolder);
 panelDuplicateLayerButton.addEventListener("click", duplicateLayer);
+panelRasterizeLayer.addEventListener("click", rasterizeLayer);
 panelDeleteLayerButton.addEventListener("click", deleteLayer);
 panelLayerUpButton.addEventListener("click", () => moveLayer(-1));
 panelLayerDownButton.addEventListener("click", () => moveLayer(1));

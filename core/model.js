@@ -697,6 +697,15 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
     throw new ValidationError(`${label}.type must be one of ${LAYER_TYPES.join(", ")}`);
   }
 
+  // The ink of a layer: vector strokes that stay editable, or pixels that a
+  // stroke is baked into when it is let go, the way Clip Studio Paint splits
+  // a raster layer from a vector one. A layer that says nothing about its
+  // ink is a vector one, the way every layer here always was.
+  const ink = value.ink === undefined ? "vector" : value.ink;
+  if (ink !== "vector" && ink !== "raster") {
+    throw new ValidationError(`${label}.ink must be "vector" or "raster"`);
+  }
+
   const visible = value.visible === undefined ? true : boolean(value.visible, `${label}.visible`);
   const locked = value.locked === undefined ? false : boolean(value.locked, `${label}.locked`);
   const opacity =
@@ -842,6 +851,7 @@ function normalizeLayer(value, index, startFrame, projectWidth, projectHeight) {
   return {
     name,
     type,
+    ...(ink === "raster" ? { ink } : {}),
     ...(color ? { color } : {}),
     ...(outlineMode ? { outlineMode: true } : {}),
     ...(camera ? { camera: true } : {}),

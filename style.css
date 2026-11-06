@@ -2772,6 +2772,18 @@ body.pane-dragging .pane-header {
   text-align: center;
 }
 
+/* The badge of a raster layer: its ink is baked into the cells' pixels. */
+.tl-raster {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--faint) 18%, transparent);
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+}
+
 .tl-kind.folder {
   color: var(--text-dim);
 }

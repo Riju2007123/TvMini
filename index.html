@@ -32,6 +32,15 @@
           <rect x="3" y="6.5" width="10" height="8" rx="1.4" />
           <path d="M6.4 6.5 V5 a1.5 1.5 0 0 1 1.5-1.5 H16 a1.5 1.5 0 0 1 1.5 1.5 v7 a1.5 1.5 0 0 1-1.5 1.5 h-1.5" />
         </symbol>
+        <symbol id="i-layer-raster" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <rect x="4" y="5.5" width="12" height="9" rx="1.5" />
+          <path d="M7.2 8.6h.01M10 8.6h.01M12.8 8.6h.01M7.2 11.4h.01M10 11.4h.01M12.8 11.4h.01" stroke-linecap="round" stroke-width="1.9" />
+        </symbol>
+        <symbol id="i-rasterize" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <path d="M6.6 6.5 V5 a1.5 1.5 0 0 1 1.5-1.5 H16 a1.5 1.5 0 0 1 1.5 1.5 v7 a1.5 1.5 0 0 1-1.5 1.5 h-1.5" />
+          <rect x="2.5" y="6.5" width="10.5" height="8" rx="1.4" />
+          <path d="M5.2 9.1h.01M7.75 9.1h.01M10.3 9.1h.01M5.2 11.9h.01M7.75 11.9h.01M10.3 11.9h.01" stroke-linecap="round" stroke-width="1.9" />
+        </symbol>
         <symbol id="i-folder-anim" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
           <circle cx="10" cy="10" r="6.4" />
           <path d="M8.6 7.4 L13 10 L8.6 12.6 Z" />
@@ -640,6 +649,9 @@
             <button id="panelAddLayer" class="shape-btn" type="button" title="Add a drawing layer" aria-label="Add a drawing layer">
               <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer" /></svg>
             </button>
+            <button id="panelAddRasterLayer" class="shape-btn" type="button" title="Add a raster layer — its ink is baked into the pixels of the cells" aria-label="Add a raster layer">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer-raster" /></svg>
+            </button>
             <button id="panelAddFolder" class="shape-btn" type="button" title="Add a folder around this layer" aria-label="Add a folder">
               <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder" /></svg>
             </button>
@@ -648,6 +660,9 @@
             </button>
             <button id="panelDuplicateLayer" class="shape-btn" type="button" title="Duplicate this layer" aria-label="Duplicate this layer">
               <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer-copy" /></svg>
+            </button>
+            <button id="panelRasterizeLayer" class="shape-btn" type="button" title="Rasterize this layer — its strokes are baked into the pixels of its cells, once and for all" aria-label="Rasterize this layer">
+              <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-rasterize" /></svg>
             </button>
             <span class="layer-actions-gap"></span>
             <button id="panelUnfold" class="shape-btn" type="button" title="Take this layer out of its folder" aria-label="Take the layer out of its folder">
@@ -873,6 +888,9 @@
         <div class="toolbar-group">
           <button id="addLayerButton" class="shape-btn" title="Add an animation layer" aria-label="Add an animation layer">
             <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer" /></svg>
+          </button>
+          <button id="addRasterLayerButton" class="shape-btn" title="Add a raster layer — its ink is baked into the pixels of the cells" aria-label="Add a raster layer">
+            <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-layer-raster" /></svg>
           </button>
           <button id="addGroupButton" class="shape-btn" title="Add a folder and put the current layer inside it" aria-label="Add a folder">
             <svg class="tli" viewBox="0 0 20 20" aria-hidden="true"><use href="#i-folder" /></svg>
