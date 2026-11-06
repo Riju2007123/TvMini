@@ -40,6 +40,7 @@ import {
 import * as shapeModel from "./core/shape-model.js";
 
 import { catmullRomResample, dynamicsOf, strokeDabs } from "./core/brush-dynamics.js";
+import { StabilizerStream } from "./core/stabilizer.js";
 import { isPlain, pointToPicture, transformAt, transformMatrix, transformOf } from "./core/transform.js";
 import { readSutBrush } from "./core/sut.js";
 import {
@@ -113,6 +114,8 @@ const CAMERA_BACKDROP = "#12161c";
 const PASTEBOARD = "#c8c8c8";
 /** The hairline that marks where the stage (the canvas) ends. */
 const STAGE_EDGE = "#6f6f6f";
+/** The line that shows where the stabilizer is putting the ink. */
+const STABILIZER_GUIDE = "#9aa4b2";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -323,6 +326,13 @@ const state = {
   audioElement: null,
   // Line smoothing while drawing (0 = off, up to 10 = very smooth).
   smoothedPoint: null,
+  // The trailing stabilizer of the stroke in the hand: it holds the raw
+  // places of the hand and hands out the calm mean of the last moments.
+  // It is null while no brush or eraser stroke is in the hand.
+  stab: null,
+  // Whether the hand carries how hard it presses, so the calm points keep
+  // the shape of the raw ones.
+  stabPressure: false,
   // The run of a freehand stroke as the hand put it down (after the
   // stabiliser). The Flash 8 brush fit reads this whole run, so the line
   // that is shown while drawing is the line that is left behind.
@@ -4026,6 +4036,29 @@ function drawOverlay() {
       drawStrokesInto(overlayCtx, [state.drawing], brushOfStroke(state.drawing, currentBrush()));
     }
   }
+  // The line of the stabilizer: while the calm point trails the hand, a
+  // hairline joins the place being painted to the place the hand is, so the
+  // lag is something the eye can follow instead of a surprise. A cell that
+  // tweens sits somewhere else than it was drawn, so the line stands out
+  // only where the two spaces are the same.
+  if (
+    state.drawing &&
+    state.stab &&
+    tipPoint &&
+    state.smoothedPoint &&
+    isPlain(transformAt(state.drawingCell, state.project.currentFrame))
+  ) {
+    const gapX = tipPoint.x - state.smoothedPoint[0];
+    const gapY = tipPoint.y - state.smoothedPoint[1];
+    if (gapX * gapX + gapY * gapY > 4) {
+      overlayCtx.strokeStyle = STABILIZER_GUIDE;
+      overlayCtx.lineWidth = 1 / scale;
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(state.smoothedPoint[0], state.smoothedPoint[1]);
+      overlayCtx.lineTo(tipPoint.x, tipPoint.y);
+      overlayCtx.stroke();
+    }
+  }
   drawSelectionSheet(overlayCtx);
   drawBrushTip();
   if (view) overlayCtx.restore();
@@ -7321,10 +7354,21 @@ canvas.addEventListener("pointerdown", (event) => {
     if (settings.blend !== "normal") stroke.blend = settings.blend;
   }
   state.smoothedPoint = stroke.points[stroke.points.length - 1];
-  state.rawSamples =
-    state.tool === "brush" || state.tool === "eraser"
-      ? [startPoint]
-      : null;
+  if (state.tool === "brush" || state.tool === "eraser") {
+    // The trailing stabilizer holds the raw places of the hand and hands out
+    // the calm mean of the last moments; the strength of the tool sets how
+    // long that stretch of time is.
+    state.stab = new StabilizerStream({ level: Number(settings.stabilizer) || 0 });
+    const startTime = Number(event?.timeStamp) / 1000;
+    state.stab.push(startPoint[0], startPoint[1], Number.isFinite(startTime) ? startTime : 0, startPoint.length > 2 ? startPoint[2] : 1);
+    // A hand with a stylus carries how hard it presses; a mouse does not.
+    // The calm points keep the shape of the raw ones.
+    state.stabPressure = startPoint.length > 2;
+    state.rawSamples = [startPoint];
+  } else {
+    state.stab = null;
+    state.rawSamples = null;
+  }
 
   drawing.strokes.push(stroke);
   state.strokeBefore = before;
@@ -7372,28 +7416,50 @@ canvas.addEventListener("pointermove", (event) => {
     }
     if (state.drawing.kind === "fill") break; // a fill is a single click
 
-    // The stabiliser is TVMini's own: it eases each raw sample toward the
-    // running point, so shaky input lands on a calmer run. What the run
-    // becomes is decided after it, by the Flash 8 fit.
-    const sample = smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10);
-    state.smoothedPoint = sample;
+    // The raw place of the hand goes into the ring of the stabilizer, with
+    // the time the pointer says it happened, so the calm of the line is the
+    // same however fast the pen reports. What the run becomes is decided
+    // after it, by the Flash 8 fit.
+    if (state.stab) {
+      const time = Number(rawEvent.timeStamp) / 1000;
+      if (point.length > 2) state.stabPressure = true;
+      state.stab.push(
+        point[0],
+        point[1],
+        Number.isFinite(time) ? time : 0,
+        point.length > 2 ? point[2] : 1,
+      );
+    }
 
     if (state.tool === "pencil") {
       // The pencil records the eased line and shapes it by mode on release.
+      // Its ease is its own: a per-sample ease toward the running point, the
+      // way it has always been here.
+      const sample = smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10);
+      state.smoothedPoint = sample;
       const last = state.drawing.points[state.drawing.points.length - 1];
       if (Math.hypot(sample[0] - last[0], sample[1] - last[1]) < 1.5) continue;
       state.drawing.points.push(sample);
       continue;
     }
 
-    // The brush and the eraser gather the whole run of the hand. The sample
-    // goes in when it is far enough from the last one, so a resting hand
-    // does not grow the run without moving.
-    const run = state.rawSamples ?? [];
-    const last = run[run.length - 1];
-    if (!last || Math.hypot(sample[0] - last[0], sample[1] - last[1]) > 0.35) {
-      run.push(sample);
-      state.rawSamples = run;
+    // The brush and the eraser gather the whole run of the hand. The point
+    // the stabilizer hands out goes in when it is far enough from the last
+    // one, so a resting hand does not grow the run without moving.
+    if (state.stab) {
+      const now = Number(event.timeStamp) / 1000;
+      const calm = state.stab.update(Number.isFinite(now) ? now : 0);
+      if (calm) {
+        state.smoothedPoint = state.stabPressure
+          ? [calm.x, calm.y, calm.p]
+          : [calm.x, calm.y];
+        const run = state.rawSamples ?? [];
+        const last = run[run.length - 1];
+        if (!last || Math.hypot(calm.x - last[0], calm.y - last[1]) > 0.35) {
+          run.push(state.smoothedPoint.slice());
+          state.rawSamples = run;
+        }
+      }
     }
   }
 
@@ -7460,30 +7526,51 @@ function endStroke(event) {
   let grown = false;
 
   if (state.tool === "brush" || state.tool === "eraser") {
-    // The pointer stopped where it left the paper: that last place goes in
-    // as a sample, so the fitted line ends where the hand ended. The brush
-    // shows the fitted line as it goes, so nothing changes here except the
-    // last few pixels.
-    if (state.rawSamples && event?.pointerId != null && state.drawing.kind !== "fill") {
+    // The pointer stopped where it left the paper: that last place goes into
+    // the ring, and the points the window was still holding are traced out,
+    // so the fitted line ends where the hand ended and not where the lag
+    // left it. The brush shows the fitted line as it goes, so nothing
+    // changes here except the last few pixels.
+    let tail = [];
+    if (state.stab && event?.pointerId != null && state.drawing.kind !== "fill") {
       try {
         const point = drawPointIn(event, state.drawingCell);
-        const run = state.rawSamples;
-        const lastSample = run[run.length - 1];
-        if (!lastSample || Math.hypot(point[0] - lastSample[0], point[1] - lastSample[1]) > 0.05) {
-          run.push(smoothPoint(state.smoothedPoint, point, toolSettings().stabilizer / 10));
-          if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
-            state.drawing.points = catmullRomResample(
-              run,
-              Number(state.drawing.width) || Number(widthInput.value) || 1,
-            );
-          } else {
-            state.drawing.points = brushSmoothPath(run, BRUSH_SMOOTHING);
-          }
-        }
+        const endTime = Number(event.timeStamp) / 1000;
+        if (point.length > 2) state.stabPressure = true;
+        state.stab.push(
+          point[0],
+          point[1],
+          Number.isFinite(endTime) ? endTime : 0,
+          point.length > 2 ? point[2] : 1,
+        );
+        tail = state.stab.flush();
       } catch {
         // A cancelled pointer has no last position; the line stays as it was.
       }
     }
+    if (tail.length) {
+      const run = state.rawSamples ?? [];
+      let lastSample = run[run.length - 1];
+      for (const point of tail) {
+        const calm = state.stabPressure ? point : [point[0], point[1]];
+        if (!lastSample || Math.hypot(calm[0] - lastSample[0], calm[1] - lastSample[1]) > 0.05) {
+          run.push(calm);
+          lastSample = calm;
+        }
+      }
+      state.smoothedPoint = run[run.length - 1] ?? state.smoothedPoint;
+    }
+    if (state.rawSamples) {
+      if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
+        state.drawing.points = catmullRomResample(
+          state.rawSamples,
+          Number(state.drawing.width) || Number(widthInput.value) || 1,
+        );
+      } else {
+        state.drawing.points = brushSmoothPath(state.rawSamples, BRUSH_SMOOTHING);
+      }
+    }
+    state.stab = null;
     state.rawSamples = null;
     state.smoothedPoint = null;
   }
