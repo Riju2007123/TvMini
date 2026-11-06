@@ -927,11 +927,15 @@ function paintDrawingInner(width, height, drawing, scale = 1) {
       ? drawing.image.data
       : drawing.image.data;
     const image = decodePicture(source);
+    // A picture may span more pixels than its box on the canvas (a raster
+    // cell baked under a magnifier): its box, not its pixel count, is what
+    // it fills.
+    const density = drawing.image.density ?? 1;
     if (drawing.image.x !== undefined || drawing.image.y !== undefined) {
       // A trimmed picture carries the box of the canvas it was cut from: it
       // is put back there, at its own size, scaled with the drawing.
-      const drawWidth = Math.max(1, Math.round(image.width * scale));
-      const drawHeight = Math.max(1, Math.round(image.height * scale));
+      const drawWidth = Math.max(1, Math.round((image.width / density) * scale));
+      const drawHeight = Math.max(1, Math.round((image.height / density) * scale));
       const placed = drawWidth === image.width && drawHeight === image.height
         ? image.data
         : scaleRgba(image.data, image.width, image.height, drawWidth, drawHeight);

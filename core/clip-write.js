@@ -2368,8 +2368,16 @@ function shiftDrawingForSheet(drawing, pasteX, pasteY, scale, width, height, pro
     // scaled with the stage and pasted there, not stretched over the whole
     // of it.
     const trimmed = drawing.image.x !== undefined || drawing.image.y !== undefined;
-    const drawWidth = trimmed ? Math.max(1, Math.round(picture.width * scale)) : stageW;
-    const drawHeight = trimmed ? Math.max(1, Math.round(picture.height * scale)) : stageH;
+    // A picture may span more pixels than its box on the canvas (a raster
+    // cell baked under a magnifier): its box, not its pixel count, is what
+    // it fills.
+    const density = drawing.image.density ?? 1;
+    const drawWidth = trimmed
+      ? Math.max(1, Math.round((picture.width / density) * scale))
+      : stageW;
+    const drawHeight = trimmed
+      ? Math.max(1, Math.round((picture.height / density) * scale))
+      : stageH;
     const stage = drawWidth === picture.width && drawHeight === picture.height
       ? picture.data
       : scaleRgba(picture.data, picture.width, picture.height, drawWidth, drawHeight);

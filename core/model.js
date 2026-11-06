@@ -414,12 +414,25 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
   const imageWidth = integerInRange(value.width, `${label}.width`, hasPlace ? 1 : MIN_SIZE, MAX_SIZE);
   const imageHeight = integerInRange(value.height, `${label}.height`, hasPlace ? 1 : MIN_SIZE, MAX_SIZE);
 
+  // A picture may hold more pixels than the canvas it paints, so that a
+  // magnified view reads the ink off real pixels instead of stretching the
+  // ones it has: the density says how many picture pixels one canvas pixel
+  // spans. A picture that says nothing about it is at one, the way every
+  // picture here always was, and only a picture with a place may carry one.
+  const density = value.density === undefined ? 1 : value.density;
+  if (density !== 1 && density !== 2 && density !== 3 && density !== 4) {
+    throw new ValidationError(`${label}.density must be 1, 2, 3 or 4`);
+  }
+  if (density !== 1 && !hasPlace) {
+    throw new ValidationError(`${label}.density needs a place on the canvas`);
+  }
+
   let imageX = 0;
   let imageY = 0;
   if (hasPlace) {
     imageX = integerInRange(value.x ?? 0, `${label}.x`, 0, Math.max(0, width - 1));
     imageY = integerInRange(value.y ?? 0, `${label}.y`, 0, Math.max(0, height - 1));
-    if (imageX + imageWidth > width || imageY + imageHeight > height) {
+    if (imageX + imageWidth / density > width || imageY + imageHeight / density > height) {
       throw new ValidationError(`${label} does not fit in the canvas`);
     }
   } else if (imageWidth !== width || imageHeight !== height) {
@@ -442,7 +455,14 @@ function normalizeImage(value, width, height, maxBase64 = 8_000_000, label = "im
   }
 
   return hasPlace
-    ? { data: value.data, width: imageWidth, height: imageHeight, x: imageX, y: imageY }
+    ? {
+        data: value.data,
+        width: imageWidth,
+        height: imageHeight,
+        x: imageX,
+        y: imageY,
+        ...(density !== 1 ? { density } : {}),
+      }
     : { data: value.data, width: imageWidth, height: imageHeight };
 }
 

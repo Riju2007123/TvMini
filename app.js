@@ -2,7 +2,7 @@ import { History } from "./history.js";
 import { onionTargets } from "./onion.js";
 import { detectBackend, bytesToBase64 } from "./core/platform.js";
 import { planDrop } from "./core/drop-import.js";
-import { normalizeProject } from "./core/model.js";
+import { normalizeProject, MAX_SIZE } from "./core/model.js";
 import { EXPORT_KINDS, cleanOptions as cleanExportOptions } from "./core/export-kinds.js";
 import { buildTimeSheetLayout, todayStamp } from "./core/time-sheet-image.js";
 import { renderTimeSheetPage, timeSheetPngBytes } from "./time-sheet-render.js";
@@ -2356,7 +2356,13 @@ function drawStrokesToPaint(strokes) {
  * picture up past the size it has in Flash.
  */
 function cellBaseSize(project, drawing) {
-  return [drawing.image?.width || project.width, drawing.image?.height || project.height];
+  const image = drawing.image;
+  if (!image) return [project.width, project.height];
+  // A picture that carries more pixels than its box (a raster cell baked at
+  // a magnified view) fills the same box on the canvas; the extra pixels are
+  // there for the zoom to read.
+  const density = image.density ?? 1;
+  return [image.width / density, image.height / density];
 }
 
 /**
@@ -2496,6 +2502,10 @@ function appendStrokeToCellPaint(drawing, stroke) {
 const rasterInk = new Map();
 const RASTER_INK_BUDGET = 384 * 1024 * 1024;
 let rasterInkBytes = 0;
+// How many pixels a bake spans for one canvas pixel, so a magnified view
+// reads the line off real pixels. Two keeps the pot at a quarter of the
+// bytes a canvas of the document's size would take at four.
+const RASTER_BAKE_DENSITY = 2;
 
 function trimRasterInk() {
   for (const [drawing, entry] of rasterInk) {
@@ -2511,7 +2521,15 @@ function rasterInkOf(drawing) {
   const wanted = drawing.image?.data ?? null;
   let entry = rasterInk.get(drawing);
   if (!entry) {
-    entry = { canvas: null, bytes: 0, key: null, loading: false, ready: Promise.resolve() };
+    entry = {
+      canvas: null,
+      bytes: 0,
+      key: null,
+      box: null,
+      density: 1,
+      loading: false,
+      ready: Promise.resolve(),
+    };
     rasterInk.set(drawing, entry);
   } else {
     // The newest pot stands last, so the trim takes the oldest.
@@ -2548,17 +2566,30 @@ function rasterInkOf(drawing) {
           canvas.getContext("2d").drawImage(source, 0, 0);
           entry.canvas = canvas;
           entry.bytes = source.width * source.height * 4;
+          // Where the pot's pixels sit on the canvas, and how many of them
+          // span one canvas pixel.
+          entry.box = {
+            x: drawing.image?.x ?? 0,
+            y: drawing.image?.y ?? 0,
+            w: (drawing.image?.width ?? source.width) / (drawing.image?.density ?? 1),
+            h: (drawing.image?.height ?? source.height) / (drawing.image?.density ?? 1),
+          };
+          entry.density = drawing.image?.density ?? 1;
           rasterInkBytes += entry.bytes;
           trimRasterInk();
         } else {
           entry.canvas = null;
           entry.bytes = 0;
+          entry.box = null;
+          entry.density = 1;
         }
       } catch {
         // A picture that will not decode: the ink lands on an empty sheet.
         rasterInkBytes -= entry.bytes;
         entry.canvas = null;
         entry.bytes = 0;
+        entry.box = null;
+        entry.density = 1;
       } finally {
         entry.loading = false;
       }
@@ -2604,7 +2635,12 @@ function bakeInkNow(drawing, strokes, entry) {
   box = intersectBoxes(box, { x: 0, y: 0, w: project.width, h: project.height });
   const current = drawing.image;
   if (current) {
-    box = unionBox(box, { x: current.x, y: current.y, w: current.width, h: current.height });
+    box = unionBox(box, {
+      x: current.x,
+      y: current.y,
+      w: current.width / (current.density ?? 1),
+      h: current.height / (current.density ?? 1),
+    });
   }
   if (!box) return;
   const x0 = Math.max(0, Math.floor(box.x));
@@ -2613,13 +2649,28 @@ function bakeInkNow(drawing, strokes, entry) {
   const height = Math.min(project.height, Math.ceil(box.y + box.h)) - y0;
   if (width <= 0 || height <= 0) return;
 
+  // The pixels of the bake span more than one canvas pixel each, so a
+  // magnified view reads the line off real pixels instead of stretching the
+  // ones it has - the way a raster layer of Clip Studio Paint stays clean
+  // under the magnifier. A box that would not fit the picture size at twice
+  // the pixels bakes at one.
+  const density = Math.max(width, height) * RASTER_BAKE_DENSITY > MAX_SIZE ? 1 : RASTER_BAKE_DENSITY;
+
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = Math.round(width * density);
+  canvas.height = Math.round(height * density);
   const bake = canvas.getContext("2d");
-  if (entry.canvas) {
-    // The ink that is already there, at the place it holds in the document.
-    bake.drawImage(entry.canvas, (current?.x ?? 0) - x0, (current?.y ?? 0) - y0);
+  bake.scale(density, density);
+  if (entry.canvas && entry.box) {
+    // The ink that is already there, at the place it holds in the document,
+    // however many pixels its own bake spanned.
+    bake.drawImage(
+      entry.canvas,
+      entry.box.x - x0,
+      entry.box.y - y0,
+      entry.box.w,
+      entry.box.h,
+    );
   }
   bake.save();
   bake.translate(-x0, -y0);
@@ -2629,13 +2680,32 @@ function bakeInkNow(drawing, strokes, entry) {
   bake.restore();
 
   const data = canvas.toDataURL("image/png").split(",")[1];
-  drawing.image = { data, width, height, x: x0, y: y0 };
+  drawing.image = {
+    data,
+    width: canvas.width,
+    height: canvas.height,
+    x: x0,
+    y: y0,
+    ...(density !== 1 ? { density } : {}),
+  };
   // The pot now holds exactly what the picture of the cell says.
   rasterInkBytes -= entry.bytes;
   entry.canvas = canvas;
-  entry.bytes = width * height * 4;
+  entry.bytes = canvas.width * canvas.height * 4;
+  entry.box = { x: x0, y: y0, w: width, h: height };
+  entry.density = density;
   rasterInkBytes += entry.bytes;
   trimRasterInk();
+  // The pixels just painted are the decoded form of what was saved: they go
+  // into the picture cache as they are, so the cell is on the paper the
+  // moment the stroke is let go, and the PNG of the bake decodes in its own
+  // time without the paper waiting for it.
+  const known = drawingImages.get(data);
+  if (!known?.source) {
+    drawingImages.set(data, { source: canvas, bytes: entry.bytes });
+    drawingBitmapBytes += entry.bytes;
+    trimDrawingBitmaps();
+  }
   // The picture of the cell is built from its strokes and its picture; the
   // picture changed, so the built one is out of date.
   cellPaintCache.delete(drawing);
