@@ -387,15 +387,65 @@ export function smoothPoint(previous, raw, level) {
  */
 export const MIN_PRESSURE_SCALE = 0.2;
 
+/**
+ * The length of a polyline, in the space its points are in.
+ *
+ * @param {Array<Array<number>>} points The points of the line, in order.
+ * @returns {number} The distance the line walks from end to end.
+ */
+export function pathLength(points) {
+  let total = 0;
+  for (let index = 1; index < (points?.length ?? 0); index += 1) {
+    total += Math.hypot(
+      points[index][0] - points[index - 1][0],
+      points[index][1] - points[index - 1][1],
+    );
+  }
+  return total;
+}
+
+/**
+ * The share of the width a stroke keeps at one place along its path, when
+ * its ends taper.
+ *
+ * The first and the last `taper` pixels of the path rise from a point to
+ * the full width and fall back to one, softly: the width leaves the tip the
+ * way the paint of a pen leaves the paper as the hand lifts it. The two
+ * reaches never take more than the half of the path each, so a short stroke
+ * tapers but is never eaten whole. A stroke that asks for no taper keeps
+ * its width everywhere.
+ *
+ * @param {number} along How far along the path the place is, in pixels.
+ * @param {number} total The length of the whole path, in pixels.
+ * @param {number} taper How many pixels of each end taper, in pixels.
+ * @returns {number} The share of the width, from 0 to 1.
+ */
+export function taperShare(along, total, taper) {
+  if (!(Number(taper) > 0) || !(total > 0)) return 1;
+  const reach = Math.min(Number(taper), total / 2);
+  if (!(reach > 0)) return 1;
+  const edge = Math.min(along, total - along);
+  const f = Math.max(0, Math.min(1, edge / reach));
+  return f * f * (3 - 2 * f);
+}
+
 export function strokeRadii(stroke) {
   const base = stroke.width / 2;
   const points = stroke.points;
-  return points.map((point) => {
-    const pressure = point.length === 3 ? point[2] : 1;
-    return Math.max(
-      0.5,
-      base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * pressure),
-    );
+  const taper = Number(stroke.taper) || 0;
+  const total = taper > 0 ? pathLength(points) : 0;
+  let along = 0;
+  return points.map((point, index) => {
+    if (index > 0) {
+      along += Math.hypot(
+        point[0] - points[index - 1][0],
+        point[1] - points[index - 1][1],
+      );
+    }
+    const pressure = point.length > 2 ? point[2] : 1;
+    const radius = base * (MIN_PRESSURE_SCALE + (1 - MIN_PRESSURE_SCALE) * pressure);
+    const share = taper > 0 ? taperShare(along, total, taper) : 1;
+    return Math.max(0.5, radius * share);
   });
 }
 

@@ -42,7 +42,7 @@ import {
 } from "./core/selection.js";
 import * as shapeModel from "./core/shape-model.js";
 
-import { catmullRomResample, dynamicsOf, strokeDabs } from "./core/brush-dynamics.js";
+import { catmullRomResample, dynamicsOf, shareAt, strokeDabs } from "./core/brush-dynamics.js";
 import { StabilizerStream } from "./core/stabilizer.js";
 import { isPlain, pointToPicture, transformAt, transformMatrix, transformOf } from "./core/transform.js";
 import { readSutBrush } from "./core/sut.js";
@@ -149,6 +149,12 @@ const widthInput = document.getElementById("width");
 const widthValue = document.getElementById("widthValue");
 const pressureInput = document.getElementById("pressure");
 const pressureValue = document.getElementById("pressureValue");
+const pressureCurveCanvas = document.getElementById("pressureCurve");
+const pressureCurveReset = document.getElementById("pressureCurveReset");
+const speedThinningInput = document.getElementById("speedThinning");
+const speedThinningValue = document.getElementById("speedThinningValue");
+const taperInput = document.getElementById("taper");
+const taperValue = document.getElementById("taperValue");
 const clearButton = document.getElementById("clearButton");
 const undoButton = document.getElementById("undoButton");
 const redoButton = document.getElementById("redoButton");
@@ -298,6 +304,18 @@ const guideDialog = document.getElementById("guideDialog");
 const keysDialog = document.getElementById("keysDialog");
 const keysBody = document.getElementById("keysBody");
 
+/**
+ * The curve of the pen, before anything is remembered: the straight line.
+ * Each point sits at its own place across the pen's press (the places are
+ * even), and the hand can pull each one up or down, the way the graph of
+ * Clip Studio Paint lets the response of a pen be drawn.
+ */
+const PRESSURE_CURVE_DEFAULT = [[0, 0], [0.25, 0.25], [0.5, 0.5], [0.75, 0.75], [1, 1]];
+
+/** The speed of the hand, in pixels of the canvas a millisecond takes, at
+    which the thinning of a fast hand is all the way down. */
+const SPEED_THIN_REFERENCE = 3;
+
 const state = {
   project: blankProject(960, 600),
   currentPath: null,
@@ -321,6 +339,16 @@ const state = {
   strokeBefore: null,
   strokeWasNew: false,
   pressureEnabled: true,
+  // The curve the hand's press goes through before it becomes a width: a
+  // list of points from (0, 0) to (1, 1), the way Clip Studio Paint lets the
+  // pen response be drawn. The default is the straight line.
+  pressureCurve: PRESSURE_CURVE_DEFAULT.map((point) => point.slice()),
+  // How much a fast hand thins the line, from 0 (never) to 1 (a flick of the
+  // pen draws a hairline).
+  speedThinning: 0,
+  // How many pixels of each end of a stroke taper to a point, 0 for ends
+  // that stay at the width of the brush.
+  taper: 0,
   tool: "brush",
   // Show the camera's shot in the stage (off = whole canvas with a frame on it).
   cameraView: true,
@@ -7718,6 +7746,25 @@ const pressureReadings = [];
 /** How many readings are averaged. */
 const PRESSURE_WINDOW = 4;
 
+/** The readings of how fast the hand moves, averaged like the pressure. */
+const speedReadings = [];
+
+/** Where the hand was at the reading before, so a speed can be measured. */
+let lastSpeedSample = null;
+
+/** The press the pen reported last, raw and mapped, for the graph. */
+let lastPressureReading = null;
+
+/** Whether the brush in the hand takes its dynamics from Clip Studio Paint:
+    a brush that came out of a .sut carries curves of its own, so the pen's
+    own curve and the thinning of speed are left out of its way. */
+function penTakesOwnDynamics() {
+  const brush = state.drawing
+    ? brushOfStroke(state.drawing, currentBrush())
+    : currentBrush();
+  return !brushFromSut(brush);
+}
+
 function pressureFor(event) {
   if (!state.pressureEnabled) return null;
   if (event.pointerType !== "pen") return null;
@@ -7727,28 +7774,80 @@ function pressureFor(event) {
   // A pen touching the tablet can briefly report 0; keep a visible hairline.
   // The remembered gain scales the recorded pressure; 100% is neutral.
   const scaled = Math.min(1, Math.max(0.05, value * state.pressureGain));
+  // The curve of the pen turns the press into the width the hand asked for:
+  // a light touch can be made thinner or fuller, and the ends of the curve
+  // hold the least and the most the pen will leave. A brush of Clip Studio
+  // Paint curves the press itself, so it is handed the raw press.
+  const mapped = penTakesOwnDynamics()
+    ? shareAt(state.pressureCurve, scaled)
+    : scaled;
+  // The raw press and the answer it was given, for the dot the graph shows
+  // while the pen is on the stage.
+  lastPressureReading = { raw: scaled, mapped };
 
-  pressureReadings.push(scaled);
+  pressureReadings.push(mapped);
   if (pressureReadings.length > PRESSURE_WINDOW) pressureReadings.shift();
   let sum = 0;
   for (const reading of pressureReadings) sum += reading;
   return sum / pressureReadings.length;
 }
 
+/** How fast the hand moves, in pixels of the canvas a millisecond takes,
+    smoothed over the last few samples, or null when the speed is not
+    followed. The places are the ones the pointer reported, so a fast hand
+    that reports many samples in one move is measured sample by sample. */
+function speedFor(x, y, event) {
+  if (!(Number(state.speedThinning) > 0)) return null;
+  const time = Number(event.timeStamp);
+  if (Number.isFinite(time) && lastSpeedSample) {
+    const passed = time - lastSpeedSample.t;
+    if (passed > 0) {
+      const speed =
+        Math.hypot(x - lastSpeedSample.x, y - lastSpeedSample.y) / passed;
+      speedReadings.push(speed);
+      if (speedReadings.length > PRESSURE_WINDOW) speedReadings.shift();
+    }
+  }
+  if (Number.isFinite(time)) lastSpeedSample = { x, y, t: time };
+  if (!speedReadings.length) return null;
+  let sum = 0;
+  for (const reading of speedReadings) sum += reading;
+  return sum / speedReadings.length;
+}
+
 /** The readings of the pen are forgotten when a stroke ends. */
 function forgetPressure() {
   pressureReadings.length = 0;
+  speedReadings.length = 0;
+  lastSpeedSample = null;
 }
 
 function drawPoint(event) {
   const [x, y] = canvasPoint(event);
   const pressure = pressureFor(event);
-  if (pressure === null) {
-    // Without a stylus the line keeps the width of the brush.
+  // A fast hand thins the line, the way a brush leaves less paint when it
+  // is pulled quickly over the paper. The speed of the hand and the press
+  // of the pen meet here, and the stroke keeps the width that comes out.
+  const speed = speedFor(x, y, event);
+  if (pressure === null && speed === null) {
+    // Without a stylus, and with no thinning of speed, the line keeps the
+    // width of the brush.
     return [x, y];
   }
-  pressureValue.textContent = pressure.toFixed(2);
-  return [x, y, pressure];
+  let width = pressure ?? 1;
+  if (speed !== null) {
+    const strength = Math.min(1, Math.max(0, Number(state.speedThinning) || 0));
+    const fast = Math.min(1, speed / SPEED_THIN_REFERENCE);
+    width *= 1 - strength * fast;
+  }
+  width = Math.max(0.05, Math.min(1, width));
+  if (pressure !== null) {
+    pressureValue.textContent = pressure.toFixed(2);
+    // The graph of the pen is redrawn only when it is on the screen: the
+    // dock may be folded away while the hand draws.
+    if (pressureCurveCanvas.offsetParent !== null) drawPressureCurve();
+  }
+  return [x, y, width];
 }
 
 /**
@@ -8217,6 +8316,13 @@ canvas.addEventListener("pointerdown", (event) => {
 
   };
   if (state.tool === "eraser") stroke.eraser = true;
+  if (state.tool === "brush" || state.tool === "pencil" || state.tool === "eraser") {
+    // The ends of the stroke taper to a point over as many pixels as the
+    // hand asked for, the way the pen of Umoupen lifts off the paper. The
+    // stroke keeps the taper it was made with, like its width and its brush.
+    const taper = Number(state.taper) || 0;
+    if (taper > 0) stroke.taper = taper;
+  }
   if (state.tool === "pencil") {
     // The pencil of Flash draws a thin line with a hard edge: the ends are
     // cut square and the corners are sharp, and there is no round brush
@@ -8855,6 +8961,147 @@ pressureInput.addEventListener("change", () => {
       ? "Pen pressure on — width follows the stylus"
       : "Pen pressure off — constant width",
   );
+});
+
+/* --- The curve of the pen, drawn and dragged the way Clip Studio Paint
+       draws the graph of the pen's press. --- */
+
+const CURVE_HANDLE_RADIUS = 5;
+
+/** Draw the curve of the pen into the panel: a light grid, the curve
+    itself, a dot where the pen is pressing right now (when the pen is on
+    the stage) and a handle for every point the hand can pull. */
+function drawPressureCurve() {
+  if (!pressureCurveCanvas) return;
+  const surface = pressureCurveCanvas.getContext("2d");
+  const width = pressureCurveCanvas.width;
+  const height = pressureCurveCanvas.height;
+  surface.clearRect(0, 0, width, height);
+  // The grid: quarters across and down, the way the graph of Clip Studio
+  // Paint is ruled.
+  surface.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  surface.lineWidth = 1;
+  surface.beginPath();
+  for (let part = 1; part < 4; part += 1) {
+    const at = Math.round((width * part) / 4) + 0.5;
+    surface.moveTo(at, 0);
+    surface.lineTo(at, height);
+    const row = Math.round((height * part) / 4) + 0.5;
+    surface.moveTo(0, row);
+    surface.lineTo(width, row);
+  }
+  surface.stroke();
+  // The frame of the graph, so the edges of the curve can be told from the
+  // edge of the panel.
+  surface.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  surface.strokeRect(0.5, 0.5, width - 1, height - 1);
+  // The curve itself, walked in small steps through the readings.
+  const curve = state.pressureCurve;
+  surface.strokeStyle = "#6cb2ff";
+  surface.lineWidth = 2;
+  surface.beginPath();
+  const steps = 48;
+  for (let step = 0; step <= steps; step += 1) {
+    const x = step / steps;
+    const y = shareAt(curve, x);
+    const px = x * width;
+    const py = height - y * height;
+    if (step === 0) surface.moveTo(px, py);
+    else surface.lineTo(px, py);
+  }
+  surface.stroke();
+  // Where the pen is pressing at this moment: a small hollow dot on the
+  // curve, so the hand can see which part of the curve its touch lands on.
+  if (lastPressureReading) {
+    const raw = lastPressureReading.raw;
+    const y = lastPressureReading.mapped;
+    surface.beginPath();
+    surface.arc(raw * width, height - y * height, 3.5, 0, Math.PI * 2);
+    surface.strokeStyle = "#ffd166";
+    surface.lineWidth = 1.5;
+    surface.stroke();
+  }
+  // The handles: one for every point of the curve, the one in the hand
+  // filled.
+  for (let index = 0; index < curve.length; index += 1) {
+    const [x, y] = curve[index];
+    surface.beginPath();
+    surface.arc(x * width, height - y * height, CURVE_HANDLE_RADIUS, 0, Math.PI * 2);
+    surface.fillStyle = index === curveHandle ? "#ffd166" : "#e8edf2";
+    surface.fill();
+    surface.strokeStyle = "#101418";
+    surface.lineWidth = 1;
+    surface.stroke();
+  }
+}
+
+/** Which handle of the curve is under the pointer, or null. */
+function curveHandleAt(clientX, clientY) {
+  const rect = pressureCurveCanvas.getBoundingClientRect();
+  const x = ((clientX - rect.left) * pressureCurveCanvas.width) / rect.width;
+  const y = ((clientY - rect.top) * pressureCurveCanvas.height) / rect.height;
+  let best = null;
+  let bestDistance = CURVE_HANDLE_RADIUS + 6;
+  for (let index = 0; index < state.pressureCurve.length; index += 1) {
+    const [px, py] = state.pressureCurve[index];
+    const distance = Math.hypot(px * pressureCurveCanvas.width - x, pressureCurveCanvas.height - py * pressureCurveCanvas.height - y);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+let curveHandle = null;
+
+pressureCurveCanvas?.addEventListener("pointerdown", (event) => {
+  const handle = curveHandleAt(event.clientX, event.clientY);
+  if (handle === null) return;
+  curveHandle = handle;
+  try {
+    pressureCurveCanvas.setPointerCapture(event.pointerId);
+  } catch {
+    // The pointer may already be gone; the drag still works without the
+    // capture, as long as the hand stays on the graph.
+  }
+  event.preventDefault();
+});
+
+pressureCurveCanvas?.addEventListener("pointermove", (event) => {
+  if (curveHandle === null) return;
+  const rect = pressureCurveCanvas.getBoundingClientRect();
+  const across = (event.clientX - rect.left) / rect.width;
+  const down = 1 - (event.clientY - rect.top) / rect.height;
+  const point = state.pressureCurve[curveHandle];
+  // The place across the press is the point's own: the points sit evenly,
+  // so the hand only pulls them up and down, and the curve cannot fold.
+  point[1] = Math.min(1, Math.max(0, down));
+  state.pressureCurve[curveHandle] = point;
+  drawPressureCurve();
+  event.preventDefault();
+});
+
+const releaseCurveHandle = (event) => {
+  if (curveHandle === null) return;
+  curveHandle = null;
+  try {
+    pressureCurveCanvas?.releasePointerCapture?.(event.pointerId);
+  } catch {
+    // The same: a pointer that is gone needs no release.
+  }
+  saveSettings();
+  setStatus("Pen curve changed — new strokes take it");
+};
+
+pressureCurveCanvas?.addEventListener("pointerup", releaseCurveHandle);
+pressureCurveCanvas?.addEventListener("pointercancel", releaseCurveHandle);
+
+pressureCurveReset?.addEventListener("click", () => {
+  state.pressureCurve = PRESSURE_CURVE_DEFAULT.map((point) => point.slice());
+  drawPressureCurve();
+  saveSettings();
+  setStatus("Pen curve reset to the straight line");
 });
 
 const TOOL_BUTTONS = {
@@ -9545,6 +9792,28 @@ function loadSettings() {
     if (Number.isFinite(data.pressureGain)) {
       state.pressureGain = Math.min(3, Math.max(0.25, data.pressureGain));
     }
+    if (Number.isFinite(data.speedThinning)) {
+      state.speedThinning = Math.min(1, Math.max(0, data.speedThinning));
+    }
+    if (Number.isFinite(data.taper)) {
+      state.taper = Math.min(100, Math.max(0, Math.round(data.taper)));
+    }
+    if (Array.isArray(data.pressureCurve)) {
+      // The curve comes back with its points at their own places across the
+      // press, each between the floor and the top.
+      const curve = [];
+      for (const point of data.pressureCurve) {
+        if (!Array.isArray(point) || point.length < 2) continue;
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        curve.push([Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))]);
+      }
+      if (curve.length >= 2) {
+        curve.sort((a, b) => a[0] - b[0]);
+        state.pressureCurve = curve;
+      }
+    }
     state.touchDraw = data.touchDraw !== false;
     state.showStart = data.showStart !== false;
     if ([0.25, 0.5, 1, 2].includes(data.playSpeed)) state.playSpeed = data.playSpeed;
@@ -9594,6 +9863,9 @@ function saveSettings() {
       SETTINGS_KEY,
       JSON.stringify({
         pressureGain: state.pressureGain,
+        speedThinning: state.speedThinning,
+        taper: state.taper,
+        pressureCurve: state.pressureCurve,
         touchDraw: state.touchDraw,
         showStart: state.showStart,
         playSpeed: state.playSpeed,
@@ -9613,6 +9885,10 @@ function syncSettingsUI() {
   const percent = Math.round(state.pressureGain * 100);
   pressureGainInput.value = String(percent);
   pressureGainValue.textContent = `${percent}%`;
+  speedThinningInput.value = String(Math.round(state.speedThinning * 100));
+  speedThinningValue.textContent = `${Math.round(state.speedThinning * 100)}%`;
+  taperInput.value = String(Math.round(state.taper));
+  taperValue.textContent = `${Math.round(state.taper)}px`;
   touchDrawInput.checked = state.touchDraw;
   showStartInput.checked = state.showStart;
   speedInput.value = String(state.playSpeed);
@@ -9622,6 +9898,7 @@ function syncSettingsUI() {
   onionInput.checked = state.onion.enabled;
   onionBeforeInput.value = String(state.onion.before);
   onionAfterInput.value = String(state.onion.after);
+  drawPressureCurve();
 }
 
 function setOnion(patch) {
@@ -9637,6 +9914,28 @@ pressureGainInput.addEventListener("input", () => {
   setStatus(`Pressure gain ${pressureGainInput.value}%`);
 });
 pressureGainInput.addEventListener("change", saveSettings);
+
+speedThinningInput.addEventListener("input", () => {
+  state.speedThinning = Math.max(0, Math.min(1, Number(speedThinningInput.value) / 100));
+  speedThinningValue.textContent = `${speedThinningInput.value}%`;
+  setStatus(
+    Number(state.speedThinning) === 0
+      ? "Speed thinning off — the width follows the press alone"
+      : `Speed thinning ${speedThinningInput.value}% — a fast hand draws thinner`,
+  );
+});
+speedThinningInput.addEventListener("change", saveSettings);
+
+taperInput.addEventListener("input", () => {
+  state.taper = Math.max(0, Math.min(100, Math.round(Number(taperInput.value))));
+  taperValue.textContent = `${taperInput.value}px`;
+  setStatus(
+    state.taper === 0
+      ? "Taper off — the ends of a stroke keep the width of the brush"
+      : `Taper ${taperInput.value}px — the ends of new strokes narrow to a point`,
+  );
+});
+taperInput.addEventListener("change", saveSettings);
 
 touchDrawInput.addEventListener("change", () => {
   state.touchDraw = touchDrawInput.checked;

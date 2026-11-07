@@ -16,7 +16,7 @@
  */
 
 import { toFixed16, fromFixed16 } from "./flash8-drawing.js";
-import { strokeOutline } from "./paint.js";
+import { strokeOutline, strokeRadii } from "./paint.js";
 
 let nextId = 1;
 
@@ -493,12 +493,9 @@ export function shapeForStroke(stroke) {
   if (!stroke || stroke.kind || stroke.eraser) return null;
   const points = stroke.points ?? [];
   if (points.length < 2) return null;
-  const radii = points.map((point) => {
-    const base = (Number(stroke.width) || 1) / 2;
-    const pressure = point.length === 3 ? point[2] : 1;
-    const scale = 0.2 + (1 - 0.2) * pressure;
-    return Math.max(0.5, base * scale);
-  });
+  // The half width at every point: the pressure of the hand and the taper of
+  // the ends, the same reading the other painters use.
+  const radii = strokeRadii(stroke);
   const outline = strokeOutline(points, radii);
   if (!outline?.left?.length || !outline?.right?.length) return null;
   return shapeFromRibbon(outline.left, outline.right);

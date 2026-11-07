@@ -1,4 +1,4 @@
-import { MIN_PRESSURE_SCALE } from "./paint.js";
+import { MIN_PRESSURE_SCALE, taperShare } from "./paint.js";
 import {
   curveValue,
   effectorRandomSpan,
@@ -382,9 +382,12 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
   // The taper of the ends, the way Umoupen's vector engine fades a
   // stroke whose brush carries no pressure of its own: the first 18 %
   // of the path rises and the last 10 % falls away, the middle at
-  // full strength. (The constants are from the decompile.)
+  // full strength. (The constants are from the decompile.) A stroke may
+  // also carry a taper of the hand's own, in pixels of each end, and the
+  // two fades sit together, each taking the width down as far as it goes.
   let total = 0;
-  if (style.taperEnds) {
+  const handTaper = Number(stroke.taper) > 0 ? Number(stroke.taper) : 0;
+  if (style.taperEnds || handTaper > 0) {
     for (const [from, to] of segments) {
       total += Math.hypot(to[0] - from[0], to[1] - from[1]);
     }
@@ -396,6 +399,7 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
     if (pathT >= 0.9) return Math.max(0, (1 - pathT) / 0.1);
     return 1;
   };
+  const handFactor = (along) => (handTaper > 0 ? taperShare(along, total, handTaper) : 1);
 
   if (segments.length === 0) {
     const point = stroke.points?.[0];
@@ -405,7 +409,7 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
     dabs.push({
       x: point[0],
       y: point[1],
-      r: Math.max(0.5, base * sizeShare(style, pressure) * (0.5 + 0.5 * dotTaper)),
+      r: Math.max(0.5, base * sizeShare(style, pressure) * (0.5 + 0.5 * dotTaper) * handFactor(0)),
       flat: thicknessShare(style, pressure, 0),
       angle: angleOf(style, 0, pressure, 0),
       flow: flowShare(style, pressure, 0) * dotTaper,
@@ -445,7 +449,7 @@ export function strokeDabs(stroke, style, ellipsePoints = null) {
       dabs.push({
         x: x0 + (x1 - x0) * at,
         y: y0 + (y1 - y0) * at,
-        r: Math.max(0.5, (r0 + (r1 - r0) * at) * (0.5 + 0.5 * taper)),
+        r: Math.max(0.5, (r0 + (r1 - r0) * at) * (0.5 + 0.5 * taper) * handFactor(along)),
         flat: thicknessShare(style, pressure, index),
         angle: angleOf(style, direction, pressure, index),
         flow: flowShare(style, pressure, index) * taper,

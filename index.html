@@ -562,15 +562,30 @@
               <input id="pressure" type="checkbox" checked />
               <span>Pen pressure</span>
             </label>
+            <div class="field">
+              <span class="pressure-curve-head">
+                Pressure curve
+                <button id="pressureCurveReset" class="ghost-btn" type="button" title="Back to the straight line">Reset</button>
+              </span>
+              <canvas id="pressureCurve" class="pressure-curve" width="220" height="110" aria-label="The curve the press of the pen follows"></canvas>
+            </div>
             <label class="field">
               <span>Pressure gain <output id="pressureGainValue">100%</output></span>
               <input id="pressureGain" type="range" min="25" max="300" step="5" value="100" />
+            </label>
+            <label class="field">
+              <span>Speed thinning <output id="speedThinningValue">0%</output></span>
+              <input id="speedThinning" type="range" min="0" max="100" step="5" value="0" title="A fast hand draws a thinner line, the way a brush leaves less paint when it is pulled quickly" />
+            </label>
+            <label class="field">
+              <span>Taper ends <output id="taperValue">0px</output></span>
+              <input id="taper" type="range" min="0" max="100" step="5" value="0" title="How many pixels of each end of a stroke taper to a point" />
             </label>
             <label class="field checkbox">
               <input id="touchDraw" type="checkbox" checked />
               <span>Draw with touch</span>
             </label>
-            <div class="meter">Pressure: <output id="pressureValue">—</output></div>
+            <div class="meter">Pressure: <output id="pressureValue">–</output></div>
           </div>
             </div>
           </section>

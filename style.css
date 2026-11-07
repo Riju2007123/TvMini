@@ -1716,6 +1716,26 @@ body.hide-tools .right-column {
   background: var(--well);
 }
 
+/* The curve of the pen, drawn in the property panel the way Clip Studio
+   Paint draws the graph of the pen's press. The hand drags the points of
+   the curve, so the canvas takes the pointer for itself. */
+.pressure-curve {
+  display: block;
+  width: 100%;
+  height: 110px;
+  border-radius: 5px;
+  background: var(--well);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.pressure-curve-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
 /* The note under the settings of the tool in the hand. */
 .tool-note {
   margin: 0;
