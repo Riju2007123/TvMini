@@ -520,9 +520,40 @@ function canAddDrawings(project, layer, count) {
   return true;
 }
 
+/**
+ * A copy of the document for the history, or for handing a snapshot back.
+ *
+ * Every box, list and setting is copied, so whatever the hand does next
+ * touches only the live document and never what the history keeps. But a
+ * stroke that is already on the paper is shared, not copied: a stroke is
+ * never changed once it is put down (it is only replaced whole), and the
+ * points of a long line are most of what a document weighs. Sharing them is
+ * what keeps undo and redo quick when the paper holds many lines.
+ */
+function cloneForHistory(value) {
+  if (Array.isArray(value)) {
+    const out = new Array(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      out[index] = cloneForHistory(value[index]);
+    }
+    return out;
+  }
+  if (value && typeof value === "object") {
+    // A stroke is known by its points, or by the runs a fill keeps. It has
+    // no strokes of its own — that is a drawing, which is copied.
+    if (Array.isArray(value.points) || Array.isArray(value.spans)) return value;
+    const out = {};
+    for (const key of Object.keys(value)) {
+      out[key] = cloneForHistory(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
 function snapshot() {
   const project = state.project;
-  return structuredClone({
+  return cloneForHistory({
     layers: project.layers,
     currentLayer: project.currentLayer,
     currentFrame: project.currentFrame,
@@ -538,7 +569,7 @@ function snapshot() {
 }
 
 function restore(snapshotValue) {
-  const clean = structuredClone(snapshotValue);
+  const clean = cloneForHistory(snapshotValue);
   // The sheet the project had, so the view can follow a sheet that changed:
   // a room that was grown is taken back with the stroke that asked for it.
   const docBefore = state.project ? documentSize(state.project) : null;
@@ -5969,10 +6000,16 @@ function layerThumbnail(project, index) {
     return canvas;
   }
 
-  // The strokes of the layer, drawn small enough to fit.
+  // The strokes of the layer, drawn small enough to fit. A long line can
+  // hold thousands of points, and a thumbnail of twenty-two pixels needs
+  // only a few hundred of them to know its box, so the walk steps over the
+  // run instead of reading every point of it.
   const points = [];
   for (const stroke of drawing.strokes ?? []) {
-    for (const point of stroke.points ?? []) points.push(point);
+    const run = stroke.points ?? [];
+    const step = Math.max(1, Math.floor(run.length / 300));
+    for (let index = 0; index < run.length; index += step) points.push(run[index]);
+    if (step > 1 && run.length) points.push(run[run.length - 1]);
     for (const path of stroke.paths ?? []) for (const point of path) points.push(point);
   }
   if (!points.length) return canvas;
@@ -8475,37 +8512,50 @@ canvas.addEventListener("pointermove", (event) => {
     }
   }
 
-  if (state.tool === "brush" || state.tool === "eraser") {
-    // Flash 8 brush smoothness (`Stroke\Brush Smoothness`): the whole run of
-    // samples is fitted again, so the line that is shown is the line that
-    // will be left behind, and it does not trail the pointer. A brush from
-    // Clip Studio Paint draws the line the hand drew - its own curves shape
-    // the stroke - so the smoothing stands aside for one of those.
-    if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
-      state.drawing.points = catmullRomResample(
-        state.rawSamples,
-        Number(state.drawing.width) || Number(widthInput.value) || 1,
-      );
-    } else {
-      // The fit that never moves a knot behind the pen: while the stroke is
-      // drawn, the line that is shown is already the line that will be left.
-      state.drawing.points = brushSmoothLivePath(state.rawSamples, BRUSH_SMOOTHING);
-    }
-  }
-
-  // The stroke is shown on the sheet on top of the stage; the document
-  // underneath is drawn when the stroke is finished. An eraser is the
-  // exception: it takes ink away from the document, and a sheet on top of
-  // the stage cannot do that, so the document itself is drawn again for
-  // every move of the pointer.
-  if (liveStrokeState.active) {
-    // The dabs that are new go onto the layers of the living ink; the sheet
-    // on top only carries the tip and the edges of the stage.
-    stampLiveStroke();
-    drawOverlay();
-  } else if (state.drawing?.eraser) renderCanvas();
-  else drawOverlay();
+  // The line is fitted and shown once a frame, not once a report of the
+  // pen: the fit and the drawing gather below in `scheduleLiveUpdate`.
+  scheduleLiveUpdate();
 });
+
+/**
+ * The one fit and drawing of the stroke in the hand that a frame gets.
+ *
+ * A pen reports faster than the screen can show, so the move of the pointer
+ * only gathers the places of the hand; here, once a frame, the line is
+ * fitted from them and shown. Fitting the same run of samples always gives
+ * the same line, so putting the fit off changes nothing about the line the
+ * pen leaves — the stroke that is committed is fitted from the same samples
+ * when the hand lifts.
+ */
+let liveUpdatePending = false;
+
+function scheduleLiveUpdate() {
+  if (liveUpdatePending) return;
+  liveUpdatePending = true;
+  requestAnimationFrame(() => {
+    liveUpdatePending = false;
+    if (!state.drawing) return;
+    if (state.tool === "brush" || state.tool === "eraser") {
+      // The same fit the pen lift keeps: the line that is shown is the line
+      // that will be left behind, knot for knot.
+      if (brushFromSut(brushOfStroke(state.drawing, currentBrush()))) {
+        state.drawing.points = catmullRomResample(
+          state.rawSamples,
+          Number(state.drawing.width) || Number(widthInput.value) || 1,
+        );
+      } else {
+        state.drawing.points = brushSmoothLivePath(state.rawSamples, BRUSH_SMOOTHING);
+      }
+    }
+    if (liveStrokeState.active) {
+      // The dabs that are new go onto the layers of the living ink; the
+      // sheet on top only carries the tip and the edges of the stage.
+      stampLiveStroke();
+      drawOverlay();
+    } else if (state.drawing?.eraser) renderCanvas();
+    else drawOverlay();
+  });
+}
 
 /**
  * Does a layer that can be seen stand over the one in the hand?
