@@ -40,8 +40,6 @@ import {
   shiftSelection,
   translateStroke,
 } from "./core/selection.js";
-import * as shapeModel from "./core/shape-model.js";
-
 import { catmullRomResample, dynamicsOf, shareAt, strokeDabs } from "./core/brush-dynamics.js";
 import { StabilizerStream } from "./core/stabilizer.js";
 import { isPlain, pointToPicture, transformAt, transformMatrix, transformOf } from "./core/transform.js";
@@ -2034,7 +2032,30 @@ function paintFillSpans(ctx, stroke) {
   if (!stroke.spans?.length) return;
   if (!parseHexColor(stroke.color)) return;
   ctx.fillStyle = stroke.color;
-  for (const [y, from, to] of stroke.spans) ctx.fillRect(from, y, to - from, 1);
+  // The rows go down as whole pixels of the buffer the context draws into.
+  // The context is often scaled by a fraction (the screen holds more dots
+  // than the document has pixels), and a row drawn through such a scale
+  // half covers the pixel rows it crosses: two rows that share one pixel of
+  // the buffer each put part of the colour in, and the paper keeps showing
+  // through between the fill's own rows. Rounded to whole pixels the rows
+  // tile without gaps, so the fill is the pure colour everywhere it fills.
+  const t = ctx.getTransform();
+  // A turned or mirrored cell has no whole rows to round to, so its rows go
+  // down the old way.
+  if (Math.abs(t.b) > 1e-9 || Math.abs(t.c) > 1e-9 || t.a <= 0 || t.d <= 0) {
+    for (const [y, from, to] of stroke.spans) ctx.fillRect(from, y, to - from, 1);
+    return;
+  }
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  for (const [y, from, to] of stroke.spans) {
+    const x0 = Math.round(t.a * from + t.e);
+    const x1 = Math.round(t.a * to + t.e);
+    const y0 = Math.round(t.d * y + t.f);
+    const y1 = Math.round(t.d * (y + 1) + t.f);
+    if (x1 > x0 && y1 > y0) ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  }
+  ctx.restore();
 }
 
 /* The pictures a region fill reads. */
@@ -2442,28 +2463,6 @@ function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style,
 }
 
 /** Paint the shape of a stroke, in the colour of the stroke and at full strength. */
-/* The half-edge shape of a stroke, kept beside the stroke so the contour that
- * is painted is the contour the model holds. A WeakMap keeps the shape out of
- * the document, so saving and loading are unaffected. */
-const strokeShapeCache = new WeakMap();
-
-function shapeForStroke(stroke) {
-  if (!stroke || stroke.kind || stroke.eraser) return null;
-  // The stroke in the hand is still growing: its shape would be rebuilt on
-  // every move of the pointer, which is the lag a long stroke feels. The
-  // half-edge model is only worth building once the stroke is finished, so
-  // the live stroke is painted from its outline instead.
-  if (stroke === state.drawing) return null;
-  if (strokeShapeCache.has(stroke)) return strokeShapeCache.get(stroke);
-  let shape = null;
-  try {
-    shape = shapeModel.shapeForStroke(stroke);
-  } catch (error) {
-    console.error("shapeForStroke failed", error);
-  }
-  strokeShapeCache.set(stroke, shape);
-  return shape;
-}
 
 /** Paint a closed path as one filled region. */
 function paintFilledPath(ctx, stroke) {
@@ -2623,17 +2622,15 @@ function paintStrokeShape(ctx, stroke, brush, style) {
   // A pressure stroke is one shape: the left side of the line and the
   // right side of it, filled together. The width then changes the way the
   // width of a pen changes, instead of in steps, and the edge of the line
-  // is one clean edge. The shape of the stroke is held by the half-edge
-  // model, so the contour that is painted is the contour that is stored.
-  const shape = shapeForStroke(stroke);
-  let ribbon = null;
-  try {
-    ribbon = shape ? shapeModel.ribbonFromShape(shape) : null;
-  } catch (error) {
-    console.error("ribbonFromShape failed", error);
-    ribbon = null;
-  }
-  const { left, right } = ribbon && ribbon.left?.length ? ribbon : strokeOutline(stroke.points, radii);
+  // is one clean edge.
+  //
+  // The outline is the one generator for the line in the hand and the line
+  // that is kept: the line the pen sees while it draws is built exactly the
+  // way the line the paper keeps, so lifting the pen moves nothing. A wider
+  // model of the contour was tried here, but a contour the hand cannot
+  // afford every frame is a contour the paper must not have either — the
+  // two would be different lines.
+  const { left, right } = strokeOutline(stroke.points, radii);
   ctx.beginPath();
   ctx.moveTo(left[0][0], left[0][1]);
   for (const point of left.slice(1)) ctx.lineTo(point[0], point[1]);
@@ -8700,23 +8697,9 @@ function endStroke(event) {
         kept = false;
       }
     } else {
-      // The half-edge shape of a freehand stroke is built now, once the stroke
-      // is out of the hand, so the contour that will be painted is the contour
-      // the model holds and every later frame only reads it back. A brush that
-      // paints dabs never reads that shape — its painter walks the stroke
-      // itself — and the half-edge model of a long line takes work the line
-      // would never see, so it is left out for one of those brushes.
-      const commitBrush = brushOfStroke(committed, currentBrush());
-      const commitStyle = strokeStyleOf(commitBrush);
-      const paintsDabs =
-        commitBrush?.data || commitStyle.needsDabs || (committed.tip && committed.tip !== "circle");
-      if (!paintsDabs) {
-        try {
-          shapeForStroke(committed);
-        } catch (error) {
-          console.error("shapeForStroke at commit failed", error);
-        }
-      }
+      // The picture of the cell takes the stroke in without any other
+      // preparation: the painter reads the stroke itself, the same way the
+      // line in the hand was built.
       appendStrokeToCellPaint(cell, committed);
       // A stroke that ran past the sheet grows the sheet, so the room to draw
       // in follows the hand the way Flash's work area does. It rides in the

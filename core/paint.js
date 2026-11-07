@@ -17,6 +17,56 @@ export function parseHexColor(hex) {
 }
 
 /**
+ * How much ink a pixel must hold before it counts as the line itself.
+ *
+ * The antialiasing of a line fades it out over a pixel or two. A pixel of
+ * that fade that holds half ink or more reads as the line, and a pixel that
+ * holds less reads as the paper with a hint of the line on it. The fill
+ * stops at the line and takes the rest, so the colour reaches the line art
+ * instead of leaving a pale seam of almost-paper next to it.
+ */
+const FILL_HALF_INK = 128;
+
+/**
+ * The ring of faint pixels a fill reaches into, one step past its region.
+ *
+ * The flood stops at the first pixel that does not look like the paper it
+ * started from, so the soft edge of a line is left out of the region and
+ * shows afterwards as an unfilled seam between the fill and the line. The
+ * pixels of that edge that hold less than half ink are taken here: every
+ * pixel next to the region, on the far side of no line, becomes part of the
+ * fill. A pixel that holds half ink or more stays the line's, so the line
+ * keeps its own edge and stays visible.
+ *
+ * The reach is one step, taken from the region the flood already took, and
+ * the pixels are all found before any of them is taken: a pixel two steps
+ * away is never reached, so the fill cannot walk on through the line it
+ * stopped at, however faint that line is. The runs a fill was kept to hold
+ * the reach in as well.
+ *
+ * @returns {number[]} The pixels of the ring, as buffer offsets.
+ */
+function fillRingPixels(data, width, height, done, clip) {
+  const ring = [];
+  const offer = (pixel) => {
+    if (done[pixel]) return;
+    if (clip && clip[pixel] !== 1) return;
+    if (data[pixel * 4 + 3] >= FILL_HALF_INK) return;
+    ring.push(pixel);
+  };
+  for (let pixel = 0; pixel < done.length; pixel += 1) {
+    if (!done[pixel]) continue;
+    const y = (pixel / width) | 0;
+    const x = pixel - y * width;
+    if (x > 0) offer(pixel - 1);
+    if (x < width - 1) offer(pixel + 1);
+    if (y > 0) offer(pixel - width);
+    if (y < height - 1) offer(pixel + width);
+  }
+  return ring;
+}
+
+/**
  * Flood fill: replace every pixel connected to the seed (4-neighbour hops,
  * each within `tolerance` of the seed's own colour) with an opaque colour.
  * Works on the buffer in place; returns true when the seed was in bounds.
@@ -142,6 +192,19 @@ export function floodFillRgba(
       if (y < height - 1 && !done[pixel + width] && within((pixel + width) * 4, i, y + 1)) stack.push([i, y + 1]);
     }
   }
+  // The colour reaches one pixel into the soft edge of the line it stopped
+  // at, so no pale seam of almost-paper is left between the fill and the
+  // line. The fill that closes gaps keeps its own way of walking.
+  if (gapTolerance === 0) {
+    for (const pixel of fillRingPixels(data, width, height, done, clip)) {
+      done[pixel] = 1;
+      const index = pixel * 4;
+      data[index] = rgb[0];
+      data[index + 1] = rgb[1];
+      data[index + 2] = rgb[2];
+      data[index + 3] = 255;
+    }
+  }
   return true;
 }
 
@@ -236,6 +299,14 @@ export function floodRegionSpans(
       if (y < height - 1 && !done[pixel + width] && within((pixel + width) * 4, i, y + 1)) stack.push([i, y + 1]);
     }
     spans.push([y, left, right + 1]);
+  }
+  // The region takes the same ring of faint pixels the painting flood takes,
+  // so the runs say exactly what the fill will paint: the colour reaches the
+  // line in the window and in the export alike. Read off the mask the walk
+  // marked, so the runs stay row by row and never overlap.
+  if (gapTolerance === 0) {
+    for (const pixel of fillRingPixels(data, width, height, done, clip)) done[pixel] = 1;
+    return spansFromMask(done, width, height);
   }
   spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return spans;
