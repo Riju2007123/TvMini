@@ -1000,15 +1000,21 @@ function stageBuffer() {
 function useDocumentSpace(docWidth, docHeight, target = ctx) {
   // One document pixel equals so many pixels of the buffer the target draws
   // into. The buffer is sized to hold the whole document; when a big zoom
-  // would ask for a buffer no screen can show, the buffer is held back at
-  // its cap and the scale follows the buffer, so the whole document still
+  // would ask for a buffer that no screen can show, the buffer is held back
+  // at its cap and the scale follows the buffer, so the whole document still
   // lands in it: the drawing is only a little softer there, never shifted,
   // and the brush stays under the pointer.
   const scale = target.canvas.width / docWidth;
   // The canvas is in the middle of the sheet, so the sheet starts half of
-  // what it gained before the canvas does.
+  // what it gained before the canvas does. The start is rounded to whole
+  // pixels of the buffer: a picture of a cell is put down at this place one
+  // pixel to one pixel, and a picture put down at a fraction of a pixel is
+  // blended with its neighbours on the way, which would soften every line
+  // the moment the pen is lifted. Everything that is drawn in the pixels of
+  // the document shares the one rounded place, so nothing stands a hair
+  // away from anything else.
   const pad = stagePadding(docWidth, docHeight);
-  target.setTransform(scale, 0, 0, scale, pad.x * scale, pad.y * scale);
+  target.setTransform(scale, 0, 0, scale, Math.round(pad.x * scale), Math.round(pad.y * scale));
   return scale;
 }
 
@@ -1990,7 +1996,7 @@ function fillReferenceCtx() {
       doc.height,
       () => {
         if (painted) {
-          fillSourceCtx.drawImage(painted.canvas, 0, 0);
+          fillSourceCtx.drawImage(painted.canvas, 0, 0, project.width, project.height);
           return;
         }
         const base = drawingImageElement(resolved.drawing);
@@ -2044,23 +2050,35 @@ function fillRegionUnfilled(clipSpans) {
   let width;
   let height;
   let data;
+  let scale;
   if (drawingStaysOnCanvas(cell, project)) {
     const painted = cellPaintOf(cell, project);
     if (!painted) return [];
     width = painted.canvas.width;
     height = painted.canvas.height;
     data = painted.ctx.getImageData(0, 0, width, height).data;
+    // The picture was built at the scale of the stage buffer; the runs it
+    // yields are its pixels, and the stroke keeps runs of the canvas.
+    scale = width / project.width;
   } else {
     const source = cellPictureCtx(project, cell);
     width = source.canvas.width;
     height = source.canvas.height;
     data = source.getImageData(0, 0, width, height).data;
+    // The fallback draws the strokes one to one: its runs are canvas runs.
+    scale = 1;
   }
   const mask = new Uint8Array(width * height);
   for (let i = 0; i < mask.length; i += 1) {
     if (data[i * 4 + 3] < 128) mask[i] = 1;
   }
-  const spans = spansFromMask(mask, width, height);
+  const raw = spansFromMask(mask, width, height);
+  if (scale === 1) return clipSpans ? intersectSpans(raw, clipSpans) : raw;
+  const spans = raw.map(([y, from, to]) => [
+    Math.round(y / scale),
+    Math.round(from / scale),
+    Math.round(to / scale),
+  ]);
   return clipSpans ? intersectSpans(spans, clipSpans) : spans;
 }
 
@@ -2086,27 +2104,46 @@ function fillRegionFromLasso(stroke, reference) {
   const lasso = fillLassoCtx.getImageData(0, 0, width, height).data;
 
   // The lines the fill stops at: the layer in the hand, or the layers it
-  // refers to.
+  // refers to. The picture of a cell is built at the scale of the stage
+  // buffer, so each source says how many of its pixels one canvas pixel is.
   let source = null;
+  let sourceScale = 1;
   if (reference === "other") {
     source = fillReferenceCtx();
   } else {
     const cell = drawingAt(currentLayer(), project.currentFrame);
-    source =
-      cell && drawingStaysOnCanvas(cell, project)
-        ? cellPaintOf(cell, project)?.ctx ?? null
-        : cell
-          ? cellPictureCtx(project, cell)
-          : null;
+    if (cell && drawingStaysOnCanvas(cell, project)) {
+      const painted = cellPaintOf(cell, project);
+      if (painted) {
+        source = painted.ctx;
+        sourceScale = painted.canvas.width / project.width;
+      }
+    } else if (cell) {
+      source = cellPictureCtx(project, cell);
+    }
   }
   if (!source) return [];
-  const ink = source.getImageData(0, 0, width, height).data;
+  const inkW = source.canvas.width;
+  const inkH = source.canvas.height;
+  const ink = source.getImageData(0, 0, inkW, inkH).data;
+  const inkScale = sourceScale;
 
   const mask = new Uint8Array(width * height);
-  for (let i = 0; i < mask.length; i += 1) {
-    // Inside the lasso, and not on a line: the antialiasing of a line is
-    // half ink, and the fill stops at the half of it.
-    if (lasso[i * 4 + 3] > 0 && ink[i * 4 + 3] < 128) mask[i] = 1;
+  for (let y = 0; y < height; y += 1) {
+    const sy = Math.round(y * inkScale);
+    if (sy >= inkH) continue; // past the canvas the source holds no ink
+    const iy = sy * inkW;
+    const lassoRow = y * width * 4;
+    const maskRow = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const sx = Math.round(x * inkScale);
+      if (sx >= inkW) continue; // past the canvas the source holds no ink
+      // Inside the lasso, and not on a line: the antialiasing of a line is
+      // half ink, and the fill stops at the half of it.
+      if (lasso[lassoRow + x * 4 + 3] > 0 && ink[(iy + sx) * 4 + 3] < 128) {
+        mask[maskRow + x] = 1;
+      }
+    }
   }
   return spansFromMask(mask, width, height);
 }
@@ -2584,7 +2621,7 @@ let cellPaintBytes = 0;
 /** What a drawing's picture is made of: the strokes that are on it (the one
     in the hand is left out, the living ink shows it), the raster base and
     the brush the strokes are drawn with. */
-function cellPaintKeyOf(drawing, base) {
+function cellPaintKeyOf(drawing, base, scale = 1) {
   const inHand = state.drawing;
   let count = 0;
   let first = null;
@@ -2595,7 +2632,7 @@ function cellPaintKeyOf(drawing, base) {
     last = stroke;
     count += 1;
   }
-  return { count, first, last, image: drawing.image || null, base: base || null, brush: drawing.brush || null };
+  return { count, first, last, image: drawing.image || null, base: base || null, brush: drawing.brush || null, scale };
 }
 
 function cellPaintKeySame(a, b) {
@@ -2605,7 +2642,8 @@ function cellPaintKeySame(a, b) {
     a.last === b.last &&
     a.image === b.image &&
     a.base === b.base &&
-    a.brush === b.brush
+    a.brush === b.brush &&
+    a.scale === b.scale
   );
 }
 
@@ -2706,16 +2744,50 @@ function drawingStaysOnCanvas(drawing, project) {
  * The picture is built again only when the strokes, the base or the brush
  * of the drawing have changed; otherwise the canvas that was built before
  * is handed back as it is. Returns null when the picture cannot be kept
- * (a canvas of the document's size cannot be made).
+ * (a canvas of the picture's size cannot be made).
  */
+
+/**
+ * The scale the picture of a cell is built at: the scale the stage buffer
+ * renders the document at. A picture built in these pixels lands on the
+ * buffer one pixel to one pixel, so a line it holds is as sharp as the line
+ * in the hand — a picture of the document's own pixels alone would be made
+ * bigger on the way to the buffer, and a made-bigger line is a soft one.
+ *
+ * The scale is the buffer's own, with no rounding: a picture built at a
+ * scale near the buffer's but not at it is made bigger or smaller by a
+ * sliver on the way to the buffer, and a sliver is enough to eat the thin
+ * dark edge of a line and leave the stroke looking washed out. The picture
+ * is built again when the zoom changes, which is work of its own — but a
+ * zoom is the hand's own act, and a sharp line is worth the work.
+ *
+ * The scale never falls below one: a smaller view only shrinks the picture,
+ * and a shrunk picture stays sharp. And it is held back when a big canvas
+ * at a big scale would take more memory than one picture may.
+ */
+const CELL_PAINT_ENTRY_BUDGET = 64 * 1024 * 1024;
+
+function cellPaintScaleOf(project) {
+  const doc = documentSize(project);
+  let scale = Math.max(1, canvas.width / doc.width);
+  const bytes = project.width * project.height * scale * scale * 4;
+  if (bytes > CELL_PAINT_ENTRY_BUDGET) {
+    scale = Math.max(1, Math.sqrt(CELL_PAINT_ENTRY_BUDGET / (project.width * project.height * 4)));
+  }
+  return scale;
+}
+
 function cellPaintOf(drawing, project) {
   if (!drawing || !project) return null;
+  const scale = cellPaintScaleOf(project);
+  const width = Math.max(1, Math.round(project.width * scale));
+  const height = Math.max(1, Math.round(project.height * scale));
   let entry = cellPaintCache.get(drawing);
   if (!entry) {
     const canvas = document.createElement("canvas");
     try {
-      canvas.width = project.width;
-      canvas.height = project.height;
+      canvas.width = width;
+      canvas.height = height;
     } catch {
       return null; // the room for the picture cannot be had
     }
@@ -2723,7 +2795,7 @@ function cellPaintOf(drawing, project) {
       canvas,
       ctx: canvas.getContext("2d"),
       key: null,
-      bytes: project.width * project.height * 4,
+      bytes: width * height * 4,
     };
     cellPaintCache.set(drawing, entry);
     cellPaintBytes += entry.bytes;
@@ -2733,14 +2805,26 @@ function cellPaintOf(drawing, project) {
     cellPaintCache.set(drawing, entry);
   }
   const base = drawingImageElement(drawing);
-  const key = cellPaintKeyOf(drawing, base);
+  const key = cellPaintKeyOf(drawing, base, scale);
   if (entry.key && cellPaintKeySame(entry.key, key)) {
     trimCellPaintCache();
     return entry;
   }
   const { ctx, canvas } = entry;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  // The room the picture takes changed with the scale it is built at now.
+  const bytes = width * height * 4;
+  if (bytes !== entry.bytes) {
+    cellPaintBytes -= entry.bytes;
+    entry.bytes = bytes;
+    cellPaintBytes += bytes;
+  }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, width, height);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
   if (base) ctx.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
   drawStrokesInto(
     ctx,
@@ -2754,11 +2838,49 @@ function cellPaintOf(drawing, project) {
 
 /** The stroke is out of the hand: it goes onto the picture of its own cell
     alone, so the cell is not built from the beginning for every stroke. */
+/**
+ * Put the picture of a cell on a context.
+ *
+ * The picture was built at the scale of the stage buffer, so when the place
+ * it is put on is the size the picture itself has, it goes down one pixel
+ * to one pixel: no making-bigger or making-smaller passes over its pixels,
+ * and a line it holds is as sharp as the line in the hand. The place is
+ * rounded to whole pixels, because a picture put down at a fraction of a
+ * pixel is blended with its neighbours on the way, and a blended edge is a
+ * soft one. When the place does not match — a cell that sits somewhere else
+ * than it was drawn, a camera view of its own, a picture built at a smaller
+ * scale for the memory it would take — the picture is put down the old way,
+ * at the size of the canvas it paints.
+ */
+function drawCellPainted(target, painted, project) {
+  const t = target.getTransform();
+  // A place that only scales and moves (no turn, no skew, no squash) maps
+  // the rectangle of the canvas onto a rectangle: that is the one case where
+  // the picture can be put down one to one.
+  if (Math.abs(t.b) < 1e-9 && Math.abs(t.c) < 1e-9 && Math.abs(t.a - t.d) < 1e-9 && t.a > 0) {
+    const x0 = t.e;
+    const y0 = t.f;
+    const x1 = t.a * project.width + t.e;
+    const y1 = t.d * project.height + t.f;
+    if (
+      Math.abs(x1 - x0 - painted.canvas.width) < 0.5 &&
+      Math.abs(y1 - y0 - painted.canvas.height) < 0.5
+    ) {
+      target.save();
+      target.setTransform(1, 0, 0, 1, 0, 0);
+      target.drawImage(painted.canvas, Math.round(x0), Math.round(y0));
+      target.restore();
+      return;
+    }
+  }
+  target.drawImage(painted.canvas, 0, 0, project.width, project.height);
+}
+
 function appendStrokeToCellPaint(drawing, stroke) {
   const entry = cellPaintCache.get(drawing);
   if (!entry || !entry.key) return;
   const base = drawingImageElement(drawing);
-  const key = cellPaintKeyOf(drawing, base);
+  const key = cellPaintKeyOf(drawing, base, cellPaintScaleOf(state.project));
   if (cellPaintKeySame(entry.key, key)) return; // the picture is up to date
   drawStrokesInto(entry.ctx, [stroke], drawing.brush);
   entry.key = key;
@@ -2993,7 +3115,9 @@ function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targ
   target.globalAlpha = alpha;
   const painted = drawingStaysOnCanvas(drawing, project) ? cellPaintOf(drawing, project) : null;
   if (painted) {
-    target.drawImage(painted.canvas, 0, 0);
+    // The picture goes down one to one where it can, so its lines are as
+    // sharp as the strokes in the hand.
+    drawCellPainted(target, painted, project);
     // The stroke in the hand is left out of the finished picture; while it
     // erases, the hand must see the ink go away as it moves, so the stroke
     // is put on the scratch as well.
@@ -3411,7 +3535,7 @@ function renderCanvas(frame = state.project.currentFrame) {
             ? cellPaintOf(resolved.drawing, project)
             : null;
         if (painted) {
-          ctx.drawImage(painted.canvas, 0, 0, project.width, project.height);
+          drawCellPainted(ctx, painted, project);
         } else {
           if (base) ctx.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
           drawStrokesInto(ctx, strokes, resolved.drawing.brush);
