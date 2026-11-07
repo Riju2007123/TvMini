@@ -1736,10 +1736,32 @@ function strokeBox(stroke, radii) {
  * each one leaves is worked out by `brush-dynamics.js`, the same plan the
  * software renderer uses, so the line on the stage and the line in the file
  * are the same line.
+ *
+ * The plan of a stroke that is on the paper is kept with the stroke: a stroke
+ * never changes once it is put down, so working its dabs out again — for the
+ * picture of a cell, for undo, for the file — would be the same answer every
+ * time, and a long line's plan is work worth keeping. The stroke in the hand
+ * is still growing, so its dabs are planned fresh every time.
  */
+const dabPlans = new WeakMap();
+
+function dabPlanOf(stroke, style, outline) {
+  if (stroke === state.drawing || !("brush" in stroke)) {
+    // In the hand, or a stroke so old it takes the brush of its drawing: the
+    // plan is worked out as it is asked for.
+    return strokeDabs(stroke, style, outline);
+  }
+  let plan = dabPlans.get(stroke);
+  if (plan === undefined) {
+    plan = strokeDabs(stroke, style, outline);
+    dabPlans.set(stroke, plan);
+  }
+  return plan;
+}
+
 function drawStrokeWithDabs(ctx, stroke, style, picture = null, outline = null) {
   const tip = stroke?.tip || "circle";
-  for (const dab of strokeDabs(stroke, style, outline)) {
+  for (const dab of dabPlanOf(stroke, style, outline)) {
     stampDab(ctx, dab, style, picture, stroke.color, tip);
   }
 }
@@ -8680,11 +8702,20 @@ function endStroke(event) {
     } else {
       // The half-edge shape of a freehand stroke is built now, once the stroke
       // is out of the hand, so the contour that will be painted is the contour
-      // the model holds and every later frame only reads it back.
-      try {
-        shapeForStroke(committed);
-      } catch (error) {
-        console.error("shapeForStroke at commit failed", error);
+      // the model holds and every later frame only reads it back. A brush that
+      // paints dabs never reads that shape — its painter walks the stroke
+      // itself — and the half-edge model of a long line takes work the line
+      // would never see, so it is left out for one of those brushes.
+      const commitBrush = brushOfStroke(committed, currentBrush());
+      const commitStyle = strokeStyleOf(commitBrush);
+      const paintsDabs =
+        commitBrush?.data || commitStyle.needsDabs || (committed.tip && committed.tip !== "circle");
+      if (!paintsDabs) {
+        try {
+          shapeForStroke(committed);
+        } catch (error) {
+          console.error("shapeForStroke at commit failed", error);
+        }
       }
       appendStrokeToCellPaint(cell, committed);
       // A stroke that ran past the sheet grows the sheet, so the room to draw
