@@ -813,6 +813,9 @@ function activateDocument(index) {
  * blank tab behind; anything else opens in a new tab.
  */
 function showDocument(project, options = {}) {
+  // Ink that arrived with the document — a Flash pasteboard full of drawing —
+  // needs a sheet that reaches out to it before anything is shown.
+  growSheetToInk(project);
   const current = activeDocument();
   const fresh = {
     project,
@@ -1974,16 +1977,50 @@ function fillReferenceCtx() {
     if (effectiveOpacity(project, index) <= 0) continue;
     const resolved = resolveDrawing(layer, project.currentFrame);
     if (!resolved) continue;
-    const painted = cellPaintOf(resolved.drawing, project);
-    if (!painted) continue;
+    // A drawing with ink on the pasteboard has no finished picture that
+    // holds it, so its strokes are drawn here the way the stage draws them.
+    const painted = drawingStaysOnCanvas(resolved.drawing, project)
+      ? cellPaintOf(resolved.drawing, project)
+      : null;
+    if (!painted && !resolved.drawing.image && !resolved.drawing.strokes.length) continue;
     withCellTransform(
       fillSourceCtx,
       [transformOf(layer), transformAt(resolved.drawing, resolved.sourceFrame)],
       doc.width,
       doc.height,
-      () => fillSourceCtx.drawImage(painted.canvas, 0, 0),
+      () => {
+        if (painted) {
+          fillSourceCtx.drawImage(painted.canvas, 0, 0);
+          return;
+        }
+        const base = drawingImageElement(resolved.drawing);
+        if (base) {
+          fillSourceCtx.drawImage(base, ...cellBaseOrigin(resolved.drawing), ...cellBaseSize(project, resolved.drawing));
+        }
+        drawStrokesInto(fillSourceCtx, resolved.drawing.strokes, resolved.drawing.brush);
+      },
     );
   }
+  return fillSourceCtx;
+}
+
+/**
+ * The picture of one drawing alone, drawn into the scratch the fill reads:
+ * the way out for a drawing with ink on the pasteboard, which has no
+ * finished picture of its own. The stroke in the hand is left out, as it is
+ * out of the finished picture everywhere.
+ */
+function cellPictureCtx(project, drawing) {
+  const doc = documentSize(project);
+  fitScratch(fillSourceCanvas, fillSourceCtx, doc.width, doc.height);
+  fillSourceCtx.setTransform(1, 0, 0, 1, 0, 0);
+  const base = drawingImageElement(drawing);
+  if (base) fillSourceCtx.drawImage(base, ...cellBaseOrigin(drawing), ...cellBaseSize(project, drawing));
+  drawStrokesInto(
+    fillSourceCtx,
+    state.drawing ? drawing.strokes.filter((stroke) => stroke !== state.drawing) : drawing.strokes,
+    drawing.brush,
+  );
   return fillSourceCtx;
 }
 
@@ -2003,11 +2040,22 @@ function fillRegionFromSource(sourceCtx, seed, gap, clipSpans) {
 function fillRegionUnfilled(clipSpans) {
   const project = state.project;
   const cell = drawingAt(currentLayer(), project.currentFrame);
-  const painted = cellPaintOf(cell, project);
-  if (!painted) return [];
-  const width = painted.canvas.width;
-  const height = painted.canvas.height;
-  const data = painted.ctx.getImageData(0, 0, width, height).data;
+  if (!cell) return [];
+  let width;
+  let height;
+  let data;
+  if (drawingStaysOnCanvas(cell, project)) {
+    const painted = cellPaintOf(cell, project);
+    if (!painted) return [];
+    width = painted.canvas.width;
+    height = painted.canvas.height;
+    data = painted.ctx.getImageData(0, 0, width, height).data;
+  } else {
+    const source = cellPictureCtx(project, cell);
+    width = source.canvas.width;
+    height = source.canvas.height;
+    data = source.getImageData(0, 0, width, height).data;
+  }
   const mask = new Uint8Array(width * height);
   for (let i = 0; i < mask.length; i += 1) {
     if (data[i * 4 + 3] < 128) mask[i] = 1;
@@ -2044,7 +2092,12 @@ function fillRegionFromLasso(stroke, reference) {
     source = fillReferenceCtx();
   } else {
     const cell = drawingAt(currentLayer(), project.currentFrame);
-    source = cellPaintOf(cell, project)?.ctx ?? null;
+    source =
+      cell && drawingStaysOnCanvas(cell, project)
+        ? cellPaintOf(cell, project)?.ctx ?? null
+        : cell
+          ? cellPictureCtx(project, cell)
+          : null;
   }
   if (!source) return [];
   const ink = source.getImageData(0, 0, width, height).data;
@@ -2565,6 +2618,88 @@ function trimCellPaintCache() {
   }
 }
 
+const cellPaintCoverMemo = new WeakMap();
+
+/**
+ * Whether every mark of a drawing sits on the canvas.
+ *
+ * The finished picture of a cell is a canvas of the project's size, so ink
+ * that reached onto the pasteboard — coordinates below zero or past the
+ * edge, the way Flash lets a drawing sit outside the stage — would be cut
+ * out of it. A drawing that carries such ink is refused here, and its
+ * readers draw it stroke by stroke instead, in the space of the document,
+ * where nothing is cut off.
+ */
+function drawingStaysOnCanvas(drawing, project) {
+  if (!drawing || !project) return true;
+  const inHand = state.drawing;
+  let count = 0;
+  let first = null;
+  let last = null;
+  for (const stroke of drawing.strokes) {
+    if (stroke === inHand) continue;
+    if (!first) first = stroke;
+    last = stroke;
+    count += 1;
+  }
+  const image = drawing.image || null;
+  const memo = cellPaintCoverMemo.get(drawing);
+  if (
+    memo &&
+    memo.count === count &&
+    memo.first === first &&
+    memo.last === last &&
+    memo.image === image
+  ) {
+    return memo.stays;
+  }
+  let stays = true;
+  if (image) {
+    // A raster base that reaches past the canvas is cut by the cache too.
+    const density = image.density ?? 1;
+    const x = image.x ?? 0;
+    const y = image.y ?? 0;
+    if (
+      x < 0 ||
+      y < 0 ||
+      x + image.width / density > project.width ||
+      y + image.height / density > project.height
+    ) {
+      stays = false;
+    }
+  }
+  if (stays) {
+    for (const stroke of drawing.strokes) {
+      if (stroke === inHand) continue;
+      if (stroke.kind === "fill") {
+        // A flood without runs is bounded by the canvas on its own; runs
+        // are canvas pixels already, so they are read where they lie.
+        for (const span of stroke.spans ?? []) {
+          if (span[0] < 0 || span[1] < 0 || span[2] > project.width) {
+            stays = false;
+            break;
+          }
+        }
+        if (!stays) break;
+        continue;
+      }
+      const extent = strokeExtent(stroke);
+      if (
+        extent &&
+        (extent.x < 0 ||
+          extent.y < 0 ||
+          extent.x + extent.w > project.width ||
+          extent.y + extent.h > project.height)
+      ) {
+        stays = false;
+        break;
+      }
+    }
+  }
+  cellPaintCoverMemo.set(drawing, { count, first, last, image, stays });
+  return stays;
+}
+
 /**
  * The finished picture of a drawing, in the pixels of the document.
  *
@@ -2856,7 +2991,7 @@ function drawDrawingToPaint(project, drawing, alpha = 1, target = paintCtx, targ
   // pasteboard too), so all of it is cleared, not just the canvas part.
   target.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
   target.globalAlpha = alpha;
-  const painted = cellPaintOf(drawing, project);
+  const painted = drawingStaysOnCanvas(drawing, project) ? cellPaintOf(drawing, project) : null;
   if (painted) {
     target.drawImage(painted.canvas, 0, 0);
     // The stroke in the hand is left out of the finished picture; while it
@@ -3053,6 +3188,84 @@ function growSheetForStroke(stroke) {
   return true;
 }
 
+/**
+ * How many pixels the sheet may take when a document arrives with ink far
+ * out on the pasteboard. The scratch canvases that put a layer together are
+ * the size of the sheet, so this is what keeps their memory in hand; it is
+ * looser than the share a drawn sheet starts with, because the room is
+ * only asked for where the ink of the file actually sits.
+ */
+const IMPORT_SHEET_PIXEL_BUDGET = 32_000_000;
+
+/**
+ * Grow the sheet around the canvas so ink a document arrived with has room.
+ *
+ * A Flash file keeps drawings on the pasteboard, often far past the stage —
+ * a whole work area of them — and a sheet that only carries the starting
+ * share would cut them out of the picture. Unlike a stroke drawn outward,
+ * the sheet grows only as far as the ink reaches, and the room is held
+ * inside a budget of pixels: past it, the farthest ink is left outside
+ * rather than the memory being given over to empty pasteboard.
+ */
+function growSheetToInk(project) {
+  if (!project || project.pasteboard === false) return;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const see = (x, y) => {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const layer of project.layers) {
+    for (const drawing of layer.drawings ?? []) {
+      const image = drawing.image;
+      if (image) {
+        const density = image.density ?? 1;
+        const x = image.x ?? 0;
+        const y = image.y ?? 0;
+        see(x, y);
+        see(x + image.width / density, y + image.height / density);
+      }
+      for (const stroke of drawing.strokes ?? []) {
+        if (stroke.kind === "fill") {
+          for (const span of stroke.spans ?? []) {
+            see(span[1], span[0]);
+            see(span[2], span[0] + 1);
+          }
+          continue;
+        }
+        const extent = strokeExtent(stroke);
+        if (extent) {
+          see(extent.x, extent.y);
+          see(extent.x + extent.w, extent.y + extent.h);
+        }
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) return;
+  // The room the ink itself needs, without the spare strip a drawn stroke
+  // keeps for itself: the sheet is grown only as far as the file reaches.
+  let wantedX = Math.max(0, Math.ceil(Math.max(-minX, maxX - project.width)));
+  let wantedY = Math.max(0, Math.ceil(Math.max(-minY, maxY - project.height)));
+  let pixels = (project.width + wantedX * 2) * (project.height + wantedY * 2);
+  if (pixels > IMPORT_SHEET_PIXEL_BUDGET) {
+    const share = Math.sqrt(IMPORT_SHEET_PIXEL_BUDGET / pixels);
+    wantedX = Math.floor(wantedX * share);
+    wantedY = Math.floor(wantedY * share);
+  }
+  const base = pasteboardPadOf(project);
+  const stored = project.pasteboardPad ?? { x: 0, y: 0 };
+  const currentX = base.x + Math.max(0, Math.round(stored.x ?? 0));
+  const currentY = base.y + Math.max(0, Math.round(stored.y ?? 0));
+  const nextX = Math.max(currentX, wantedX);
+  const nextY = Math.max(currentY, wantedY);
+  if (nextX <= currentX && nextY <= currentY) return;
+  project.pasteboardPad = { x: Math.max(0, nextX - base.x), y: Math.max(0, nextY - base.y) };
+}
+
 function renderCanvas(frame = state.project.currentFrame) {
   const project = state.project;
   const { width, height } = project;
@@ -3190,8 +3403,13 @@ function renderCanvas(frame = state.project.currentFrame) {
         // The finished picture of the cell is put on the buffer as it is,
         // while the zoom is small enough for the picture's own pixels to
         // hold the line. Deep in the zoom the strokes are drawn in the
-        // pixels of the screen, so a magnified line stays sharp.
-        const painted = viewZoom <= 2 ? cellPaintOf(resolved.drawing, project) : null;
+        // pixels of the screen, so a magnified line stays sharp. A drawing
+        // with ink on the pasteboard has no picture that holds it, so it is
+        // drawn stroke by stroke however small the zoom is.
+        const painted =
+          viewZoom <= 2 && drawingStaysOnCanvas(resolved.drawing, project)
+            ? cellPaintOf(resolved.drawing, project)
+            : null;
         if (painted) {
           ctx.drawImage(painted.canvas, 0, 0, project.width, project.height);
         } else {
