@@ -10419,6 +10419,7 @@ async function handleAction(action) {
     if (action === "exportTvpp") return exportTvpp();
     if (action === "importPictures") return chooseAndImportPictures();
     if (action === "importFLA") return chooseAndImportFLA();
+    if (action === "exportCsp2Flash") return exportCsp2Flash();
     if (action === "exportSettings") return openExportSettings();
     if (action === "exportTimeSheet") return openTimeSheet();
     const kind = EXPORT_ACTIONS[action];
@@ -11295,6 +11296,22 @@ async function exportKind(kind) {
   const extra = data.extra?.length ? ` and ${data.extra.map(baseName).join(", ")}` : "";
   setStatus(`Exported ${baseName(data.path)}${extra} (${data.bytes} bytes; ${data.summary}).`);
   refreshTitle();
+}
+
+/**
+ * Convert the layered .psd that Clip Studio Paint exports into the package
+ * the Flash 8 command imports: one PNG per layer plus a manifest. The work
+ * does not touch the open project, so nothing is refreshed afterwards.
+ */
+async function exportCsp2Flash() {
+  setStatus("Converting the Clip Studio .psd for Flash 8…");
+  const data = await backend.exportCsp2Flash();
+  if (!data) return;
+  setStatus(
+    `Exported ${baseName(data.path)} (${data.bytes} bytes; ${data.summary}). ` +
+      "Unzip it into the CSP2Flash folder of Flash 8's Configuration folder, " +
+      "then run Commands > CSP2Flash Import in Flash 8.",
+  );
 }
 
 /** Put imported pictures onto the canvas (shared by the dialog and a drop). */

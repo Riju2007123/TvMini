@@ -34,6 +34,7 @@ import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
 import { buildExport, EXPORT_KINDS } from "./export-kinds.js";
 import { importPictures } from "./exporters.js";
+import { buildCsp2FlashPackage } from "./psd-read.js";
 import { writeSutBrush } from "./sut-write.js";
 
 /* ------------------------------------------------------------ server backend */
@@ -367,6 +368,30 @@ function createServerBackend(hooks) {
       if (info.dir) throw new Error("that path is a folder, not a file");
       if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
       return serverRequest("POST", "/api/export-file", { path: clean, project, kind, options });
+    },
+
+    /**
+     * Convert the layered .psd that Clip Studio Paint exports into the
+     * Flash 8 import package: a ZIP of one PNG per layer plus the manifest
+     * that the CSP2Flash-import command of Flash 8 reads.
+     */
+    async exportCsp2Flash() {
+      const psdPath = await hooks.pickPath({
+        mode: "open",
+        title: "Choose the .psd exported from Clip Studio Paint",
+      });
+      if (!psdPath) return null;
+      const target = await hooks.pickPath({
+        mode: "save",
+        title: "Save the Flash 8 import package (CSP2Flash)",
+        name: "CSP2Flash.zip",
+      });
+      if (!target) return null;
+      const clean = /\.zip$/i.test(target.trim()) ? target.trim() : `${target.trim()}.zip`;
+      const info = await askAboutPath(clean);
+      if (info.dir) throw new Error("that path is a folder, not a file");
+      if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+      return serverRequest("POST", "/api/export-csp2flash", { zipPath: clean, psdPath, fps: 12 });
     },
 
     /**
@@ -746,6 +771,38 @@ function createBrowserBackend(hooks) {
       if (!saved) return null;
       for (const file of built.extra) await saveFile(`${stem}.${file.ext}`, new Uint8Array(file.bytes));
       return { path: saved.name, bytes: built.bytes.length, summary: built.summary, extra: built.extra.map((f) => `${stem}.${f.ext}`) };
+    },
+
+    /**
+     * Convert the layered .psd that Clip Studio Paint exports into the
+     * Flash 8 import package. Without a server the PSD is parsed in the
+     * page and the ZIP is saved through the file dialog.
+     */
+    async exportCsp2Flash() {
+      const picked = await pickFiles(".psd,image/vnd.adobe.photoshop");
+      if (!picked) return null;
+      const file = picked[0];
+      if (!file) return null;
+      const name = file.name || "untitled.psd";
+      progress({ start: true, name, phase: "Reading the Clip Studio layers" });
+      let built;
+      try {
+        await tick();
+        built = buildCsp2FlashPackage(file.bytes, { fps: 12 });
+      } catch (error) {
+        progress({ done: true });
+        throw new Error(`the .psd cannot be converted: ${error.message}`);
+      }
+      progress({ phase: "Saving the package" });
+      await tick();
+      try {
+        const zipName = `${name.replace(/\.psd$/i, "")}-CSP2Flash.zip`;
+        const saved = await saveFile(zipName, new Uint8Array(built.zip));
+        if (!saved) return null;
+        return { path: saved.name, bytes: built.zip.length, summary: built.summary, layers: built.layers };
+      } finally {
+        progress({ done: true });
+      }
     },
 
     /**
