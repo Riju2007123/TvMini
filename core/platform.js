@@ -33,6 +33,7 @@ import { parseFla } from "./fla-parser.js";
 import { normalizeProject } from "./model.js";
 import { renderPng } from "./png.js";
 import { buildExport, EXPORT_KINDS } from "./export-kinds.js";
+import { createMp4Buffer } from "./mp4.js";
 import { importPictures } from "./exporters.js";
 import { buildCsp2FlashPackage } from "./psd-read.js";
 import { writeSutBrush } from "./sut-write.js";
@@ -352,6 +353,34 @@ function createServerBackend(hooks) {
     },
 
     async exportFile(kind, project, stem, options) {
+      // The MP4 video is encoded in this page (WebCodecs), whatever backend
+      // runs behind it; the finished bytes are handed to the server to write.
+      if (kind === "mp4") {
+        const target = await hooks.pickPath({
+          mode: "save",
+          title: "Export MP4 video (H.264)",
+          name: `${stem}.mp4`,
+        });
+        if (!target) return null;
+        const clean = /\.mp4$/i.test(target.trim()) ? target.trim() : `${target.trim()}.mp4`;
+        reportToServer(`the export has the path ${clean}`);
+        const info = await askAboutPath(clean);
+        if (info.dir) throw new Error("that path is a folder, not a file");
+        if (info.exists && !confirm(`Replace existing file?\n\n${clean}`)) return null;
+        progress({ start: true, name: `${stem}.mp4`, phase: "Rendering the frames" });
+        let built;
+        try {
+          built = await createMp4Buffer(project, {
+            range: options.range,
+            scale: options.scale,
+            onPhase: (phase) => progress({ phase }),
+          });
+        } finally {
+          progress({ done: true });
+        }
+        await serverRequest("POST", "/api/save-file", { path: clean, data: bytesToBase64(built.buffer) });
+        return { path: clean, bytes: built.buffer.length, summary: built.summary };
+      }
       const ext = EXPORT_KINDS[kind].ext;
       const target = await hooks.pickPath({
         mode: "save",
@@ -766,6 +795,24 @@ function createBrowserBackend(hooks) {
     },
 
     async exportFile(kind, project, stem, options) {
+      // Without a server the MP4 is encoded here in the page all the same
+      // and saved as a download.
+      if (kind === "mp4") {
+        progress({ start: true, name: `${stem}.mp4`, phase: "Rendering the frames" });
+        let built;
+        try {
+          built = await createMp4Buffer(project, {
+            range: options.range,
+            scale: options.scale,
+            onPhase: (phase) => progress({ phase }),
+          });
+        } finally {
+          progress({ done: true });
+        }
+        const saved = await saveFile(`${stem}.mp4`, new Uint8Array(built.buffer), "mp4");
+        if (!saved) return null;
+        return { path: saved.name, bytes: built.buffer.length, summary: built.summary };
+      }
       const built = buildExport(kind, project, stem, options);
       const saved = await saveFile(`${stem}.${built.ext}`, new Uint8Array(built.bytes));
       if (!saved) return null;

@@ -11252,6 +11252,7 @@ async function exportTvpp() {
 const EXPORT_ACTIONS = {
   exportPsd: "psd",
   exportGif: "gif",
+  exportMp4: "mp4",
   exportSheet: "sheet",
   exportSequence: "sequence",
   exportXdts: "xdts",

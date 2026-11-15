@@ -131,6 +131,11 @@ export const FILE_KINDS = {
     mime: "image/png",
     extensions: [".png"],
   },
+  mp4: {
+    description: "MP4 video",
+    mime: "video/mp4",
+    extensions: [".mp4"],
+  },
   clip: {
     description: "Clip Studio Paint document",
     mime: "application/octet-stream",

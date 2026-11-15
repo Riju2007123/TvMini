@@ -14,6 +14,7 @@ export const EXPORT_KINDS = {
   xdts: { label: "Timesheet XDTS (Clip Studio / OpenToonz)", ext: "xdts" },
   csv: { label: "Timesheet CSV", ext: "csv" },
   gif: { label: "Animated GIF", ext: "gif" },
+  mp4: { label: "MP4 video (H.264)", ext: "mp4" },
   sheet: { label: "Sprite sheet PNG + JSON", ext: "png" },
   sequence: { label: "Image sequence (ZIP)", ext: "zip" },
 };
@@ -96,6 +97,11 @@ export function buildExport(kind, project, stem, rawOptions = {}) {
       };
     }
     default:
+      // The MP4 video is encoded by the app window (WebCodecs), which the
+      // server does not have; the page never sends the kind here.
+      if (kind === "mp4") {
+        throw new Error("the MP4 video is encoded in the app window; export it from the app, not from the server");
+      }
       throw new Error(`unknown export kind: ${kind}`);
   }
 }
