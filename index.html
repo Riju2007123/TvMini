@@ -655,10 +655,13 @@
           <div class="canvas-scroll">
             <div class="canvas-world">
               <div class="canvas-stack">
-                <canvas id="canvas" width="960" height="600"></canvas>
-                <canvas id="liveInk" aria-hidden="true" hidden></canvas>
-                <canvas id="liveGrain" aria-hidden="true" hidden></canvas>
-                <canvas id="overlay" aria-hidden="true"></canvas>
+                <div id="paperBackdrop" aria-hidden="true"></div>
+                <div id="canvasWindow">
+                  <canvas id="canvas" width="960" height="600"></canvas>
+                  <canvas id="liveInk" aria-hidden="true" hidden></canvas>
+                  <canvas id="liveGrain" aria-hidden="true" hidden></canvas>
+                  <canvas id="overlay" aria-hidden="true"></canvas>
+                </div>
               </div>
             </div>
           </div>

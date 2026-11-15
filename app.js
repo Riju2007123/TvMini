@@ -120,6 +120,16 @@ const STABILIZER_GUIDE = "#9aa4b2";
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+// The box the stage canvases sit in, inside the sheet: it is moved over the
+// sheet to the window of the document the pane is looking at, so the buffer
+// is only ever as big as the view and a magnified line stays sharp.
+const canvasWindow = document.getElementById("canvasWindow");
+// The paper of the document, painted under the stage canvases, so the sheet
+// looks whole beyond the window too.
+const paperBackdrop = document.getElementById("paperBackdrop");
+// The window the stage canvas was last drawn for, so a view change that
+// only moved the window draws the stage again.
+let renderedWindow = null;
 // The sheet on top of the stage: the shape of the brush and the stroke that is
 // being drawn. It is drawn again for every move of the pointer, so the
 // document underneath is only drawn when the document itself changes.
@@ -1020,58 +1030,97 @@ function updateFrameLabel() {
  * pixel of the screen has. That is what keeps the picture sharp on a screen
  * with many dots per pixel, and it is the way MoArt draws as well.
  *
- * A big zoom would ask for a buffer that no screen can show, so the buffer
- * is held back at four thousand pixels on its longest side.
+ * A big zoom would ask for a buffer that no screen can show, so the window
+ * the buffer holds is kept at four thousand pixels of the screen on its
+ * longest side, and the buffer's area at a budget of its own.
  */
 const MAX_STAGE_BUFFER = 4096;
+const MAX_STAGE_AREA = 48 * 1024 * 1024;
+
+/**
+ * The window of the document the stage canvas holds, in the pixels of the
+ * document.
+ *
+ * The pane shows part of the sheet, and only that part (with a margin around
+ * it, so panning about does not draw the stage again on every scroll) is
+ * drawn - at the full density of the screen. That is what keeps a magnified
+ * line as sharp as the zoom says: the buffer covers the visible part of the
+ * sheet, however big the document around it is, where a buffer for the whole
+ * sheet would be held back by its cap and everything on the stage would be
+ * drawn at a fraction of the screen's dots.
+ */
+let stageWindow = { x: 0, y: 0, width: 1, height: 1 };
 
 function stageBuffer() {
   const project = state.project;
   const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   const zoom = viewZoom || 1;
-  // The buffer must hold the whole document, including strokes outside the
-  // project canvas (the Flash pasteboard).
   const doc = documentSize(project);
-  const docWidth = doc.width;
-  const docHeight = doc.height;
-  // The size the stage is shown at, measured from the element itself. That is
-  // the size the buffer has to match, whatever the page, the window or the
-  // browser does to it.
-  const box = canvas.getBoundingClientRect();
-  const shownWidth = box.width || docWidth * zoom;
-  const shownHeight = box.height || docHeight * zoom;
-  // The buffer holds the dots of the screen: the size on the screen, times
-  // the number of dots a pixel of the screen has.
-  let width = Math.round(shownWidth * ratio);
-  let height = Math.round(shownHeight * ratio);
-  const biggest = Math.max(width, height);
-  if (biggest > MAX_STAGE_BUFFER) {
-    const shrink = MAX_STAGE_BUFFER / biggest;
-    width = Math.max(1, Math.round(width * shrink));
-    height = Math.max(1, Math.round(height * shrink));
+  const pad = stagePadding(doc.width, doc.height);
+  // The part of the sheet the pane shows, in the sheet's own pixels on the
+  // screen. The sheet is what the canvas stack is sized to, so its box is
+  // the sheet's place, whatever the page does to it.
+  const pane = canvasScroll.getBoundingClientRect();
+  const sheet = canvasStack.getBoundingClientRect();
+  const visX = Math.max(0, pane.left - sheet.left);
+  const visY = Math.max(0, pane.top - sheet.top);
+  const visW = Math.max(1, Math.min(pane.right, sheet.right) - Math.max(pane.left, sheet.left));
+  const visH = Math.max(1, Math.min(pane.bottom, sheet.bottom) - Math.max(pane.top, sheet.top));
+  // A margin of half a pane on every side, held back when the budget for
+  // the window's size asks for it: the margin gives way before the pane
+  // does, so the pane is always inside the window.
+  const marginX = Math.min(visW / 2, Math.max(0, (MAX_STAGE_BUFFER - visW) / 2));
+  const marginY = Math.min(visH / 2, Math.max(0, (MAX_STAGE_BUFFER - visH) / 2));
+  const cssX = Math.max(0, visX - marginX);
+  const cssY = Math.max(0, visY - marginY);
+  const cssW = Math.min(visW + marginX * 2, sheet.width - cssX);
+  const cssH = Math.min(visH + marginY * 2, sheet.height - cssY);
+  // From the sheet's pixels on the screen to the pixels of the document.
+  const x = cssX / zoom - pad.x;
+  const y = cssY / zoom - pad.y;
+  const width = cssW / zoom;
+  const height = cssH / zoom;
+  stageWindow = { x, y, width, height };
+  // The buffer holds the dots of the screen: the window's size on the
+  // screen, times the number of dots a pixel of the screen has.
+  let bufferWidth = Math.max(1, Math.round(cssW * ratio));
+  let bufferHeight = Math.max(1, Math.round(cssH * ratio));
+  if (bufferWidth * bufferHeight > MAX_STAGE_AREA) {
+    const shrink = Math.sqrt(MAX_STAGE_AREA / (bufferWidth * bufferHeight));
+    bufferWidth = Math.max(1, Math.round(bufferWidth * shrink));
+    bufferHeight = Math.max(1, Math.round(bufferHeight * shrink));
   }
-  return { width, height, ratio, scale: (width / project.width) };
+  return { width: bufferWidth, height: bufferHeight, ratio, scale: bufferWidth / width };
+}
+
+/** Which window of the document a canvas holds.
+ *
+ * The canvases of the stage (the stage itself, the sheet on top of it, the
+ * living ink and the scratch a layer is drawn through) hold the window the
+ * pane is looking at; a scratch the size of the document holds the whole
+ * sheet.
+ */
+function stageWindowOf(target, docWidth, docHeight) {
+  if (target === canvas || target === overlay || target === liveInkCanvas || target === layerCanvas) {
+    return stageWindow;
+  }
+  const pad = stagePadding(docWidth, docHeight);
+  return { x: -pad.x, y: -pad.y, width: docWidth, height: docHeight };
 }
 
 /** Put a context into the pixels of the document. */
 function useDocumentSpace(docWidth, docHeight, target = ctx) {
   // One document pixel equals so many pixels of the buffer the target draws
-  // into. The buffer is sized to hold the whole document; when a big zoom
-  // would ask for a buffer that no screen can show, the buffer is held back
-  // at its cap and the scale follows the buffer, so the whole document still
-  // lands in it: the drawing is only a little softer there, never shifted,
-  // and the brush stays under the pointer.
-  const scale = target.canvas.width / docWidth;
-  // The canvas is in the middle of the sheet, so the sheet starts half of
-  // what it gained before the canvas does. The start is rounded to whole
-  // pixels of the buffer: a picture of a cell is put down at this place one
-  // pixel to one pixel, and a picture put down at a fraction of a pixel is
-  // blended with its neighbours on the way, which would soften every line
-  // the moment the pen is lifted. Everything that is drawn in the pixels of
-  // the document shares the one rounded place, so nothing stands a hair
-  // away from anything else.
-  const pad = stagePadding(docWidth, docHeight);
-  target.setTransform(scale, 0, 0, scale, Math.round(pad.x * scale), Math.round(pad.y * scale));
+  // into, and the window the buffer holds decides where the document's
+  // origin sits in it: the whole document still lands where it belongs, and
+  // what falls outside the window is simply not drawn. The start is rounded
+  // to whole pixels of the buffer: a picture of a cell is put down at this
+  // place one pixel to one pixel, and a picture put down at a fraction of a
+  // pixel is blended with its neighbours on the way, which would soften
+  // every line the moment the pen is lifted.
+  const win = stageWindowOf(target.canvas, docWidth, docHeight);
+  const scale = target.canvas.width / win.width;
+  target.setTransform(scale, 0, 0, scale, Math.round(-win.x * scale), Math.round(-win.y * scale));
   return scale;
 }
 
@@ -1107,15 +1156,18 @@ function useStageSpace(docWidth, docHeight, target = ctx) {
   const scale = useDocumentSpace(docWidth, docHeight, target);
   const view = currentCameraView();
   if (!view) return { scale, view: null };
-  const pad = stagePadding(docWidth, docHeight);
+  // The shot is placed on the sheet, and the sheet is read from the window
+  // the canvas holds: the window's own place is taken out, the way it is in
+  // the plain document space.
+  const win = stageWindowOf(target.canvas, docWidth, docHeight);
   target.save();
   target.setTransform(
     view.scale * scale,
     0,
     0,
     view.scale * scale,
-    (pad.x + view.offsetX - view.camera.x * view.scale) * scale,
-    (pad.y + view.offsetY - view.camera.y * view.scale) * scale,
+    (view.offsetX - view.camera.x * view.scale - win.x) * scale,
+    (view.offsetY - view.camera.y * view.scale - win.y) * scale,
   );
   target.beginPath();
   target.rect(view.camera.x, view.camera.y, view.camera.width, view.camera.height);
@@ -1127,20 +1179,9 @@ function useStageSpace(docWidth, docHeight, target = ctx) {
 // the screen, so it is made again when the window changes.
 if (typeof window !== "undefined") {
   window.addEventListener("resize", () => {
-    const buffer = stageBuffer();
-    if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
-      canvas.width = buffer.width;
-      canvas.height = buffer.height;
-      renderCanvas();
-    }
-    // The world follows the pane, so the bars of the pane keep their room
-    // when the window is made bigger.
-    const project = state.project;
-    if (project) {
-      const zoom = viewZoom || 1;
-      const doc = documentSize(project);
-      sizeWorld(Math.round(doc.width * zoom), Math.round(doc.height * zoom));
-    }
+    // The window of the sheet the stage holds follows the pane, so the
+    // whole view is laid out again.
+    if (state.project) applyView();
   });
 
   // The panels of the window can be pulled out of it and made bigger, so
@@ -1155,14 +1196,10 @@ if (typeof window !== "undefined") {
 }
 
 function resizeCanvas() {
-  const buffer = stageBuffer();
-  canvas.width = buffer.width;
-  canvas.height = buffer.height;
-  // The element is the size the document is shown at, and the buffer holds
-  // the dots of the screen.
+  // The whole view follows: the sheet, the window of it the stage holds and
+  // the buffer of the screen dots.
   applyView();
   centreStage();
-  renderCanvas();
   renderTimeline();
   renderLayerPanel();
   syncLayerControls();
@@ -1437,10 +1474,15 @@ function drawStrokesInto(ctx, strokes, brush = null) {
       // pass — a multi-part stroke must not darken its own overlaps. The
       // pass is the size of the ink, not of the whole buffer, and the mask
       // is moved by the pad of the sheet, so the pasteboard is covered too.
-      const pad = stagePadding(canvasWidth, canvasHeight);
-      if (blendCanvas.width !== canvasWidth || blendCanvas.height !== canvasHeight) {
-        blendCanvas.width = canvasWidth;
-        blendCanvas.height = canvasHeight;
+      // The pass is the size of the ink, held inside a window of the
+      // document three panes wide, so a stroke that runs far past the sheet
+      // cannot ask for an impossible canvas and the ink inside the view is
+      // always whole.
+      const box = strokeInkBox(stroke, canvasWidth, canvasHeight);
+      if (!box) continue;
+      if (blendCanvas.width !== box.w || blendCanvas.height !== box.h) {
+        blendCanvas.width = box.w;
+        blendCanvas.height = box.h;
         blendScratch.stroke = null;
         blendScratch.box = { x: 0, y: 0, w: 0, h: 0 };
       }
@@ -1453,33 +1495,14 @@ function drawStrokesInto(ctx, strokes, brush = null) {
         blendScratch.stroke = stroke;
         blendScratch.box = { x: 0, y: 0, w: 0, h: 0 };
       }
-      const extent = strokeExtent(stroke);
-      const cover = { x: -pad.x, y: -pad.y, w: canvasWidth, h: canvasHeight };
-      const box = extent ? intersectBoxes(extent, cover) : null;
-      if (!box) continue;
-      const dirty = unionBox(blendScratch.box, {
-        x: box.x + pad.x,
-        y: box.y + pad.y,
-        w: box.w,
-        h: box.h,
-      });
+      const dirty = unionBox(blendScratch.box, { x: 0, y: 0, w: box.w, h: box.h });
       blendCtx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
-      blendCtx.setTransform(1, 0, 0, 1, pad.x, pad.y);
-      drawStrokeDirect(blendCtx, stroke, canvasWidth, canvasHeight, brushOfStroke(stroke, brush), true);
+      blendCtx.setTransform(1, 0, 0, 1, -box.x, -box.y);
+      drawStrokeDirect(blendCtx, stroke, box.w, box.h, brushOfStroke(stroke, brush), true);
       ctx.globalAlpha = opacity;
       ctx.globalCompositeOperation =
         stroke.eraser === true ? "destination-out" : blend === "normal" ? "source-over" : blend;
-      ctx.drawImage(
-        blendCanvas,
-        dirty.x,
-        dirty.y,
-        dirty.w,
-        dirty.h,
-        dirty.x - pad.x,
-        dirty.y - pad.y,
-        dirty.w,
-        dirty.h,
-      );
+      ctx.drawImage(blendCanvas, 0, 0, box.w, box.h, box.x, box.y, box.w, box.h);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
       blendScratch.box = dirty;
@@ -1526,12 +1549,14 @@ function setLiveGrainMask() {
     return;
   }
   const doc = documentSize(state.project);
-  const scale = liveInkCanvas.width / doc.width;
-  const pad = stagePadding(doc.width, doc.height);
+  // The layer holds the window of the document the stage holds, so the
+  // pattern is anchored where the document's origin sits in that window.
+  const scale = liveInkCanvas.width / stageWindow.width;
+  const origin = { x: -stageWindow.x, y: -stageWindow.y };
   const mask = grainMaskFor(
     liveStrokeState.style.grain,
     scale,
-    pad,
+    origin,
     liveInkCanvas.width,
     liveInkCanvas.height,
   );
@@ -2397,6 +2422,45 @@ function intersectBoxes(a, b) {
   return w > 0 && h > 0 ? { x, y, w, h } : null;
 }
 
+/**
+ * The box of a stroke held inside a window of the document three panes wide:
+ * the room a scratch canvas for the stroke alone may take. The pane's window
+ * always lies inside, so the ink the eye sees is always whole, and a stroke
+ * that runs far past the sheet cannot ask for an impossible canvas. Whole
+ * pixels of the document, so the pass is copied without blending.
+ */
+function strokeInkBox(stroke) {
+  const extent = strokeExtent(stroke);
+  if (!extent) return null;
+  const cover = {
+    x: stageWindow.x - stageWindow.width,
+    y: stageWindow.y - stageWindow.height,
+    w: stageWindow.width * 3,
+    h: stageWindow.height * 3,
+  };
+  let box = intersectBoxes(extent, cover);
+  if (!box) return null; // the stroke lies entirely outside the view
+  // The pass is held back at a budget of the document's pixels: a stroke
+  // seen small enough for its box to pass the budget gives way at its far
+  // corners, the way the whole-sheet passes of older versions gave way at
+  // the cap of the buffer.
+  const budget = 16 * 1024 * 1024;
+  if (box.w * box.h > budget) {
+    const share = Math.sqrt(budget / (box.w * box.h));
+    const centreX = Math.max(stageWindow.x, Math.min(stageWindow.x + stageWindow.width, box.x + box.w / 2));
+    const centreY = Math.max(stageWindow.y, Math.min(stageWindow.y + stageWindow.height, box.y + box.h / 2));
+    box = {
+      x: centreX - (box.w * share) / 2,
+      y: centreY - (box.h * share) / 2,
+      w: box.w * share,
+      h: box.h * share,
+    };
+  }
+  const x = Math.floor(box.x);
+  const y = Math.floor(box.y);
+  return { x, y, w: Math.ceil(box.x + box.w) - x, h: Math.ceil(box.y + box.h) - y };
+}
+
 /** Paint a stroke into a scratch canvas, then take the paper's grain out.
  *
  * The scratch is moved by the pad of the sheet, so its room covers the
@@ -2408,10 +2472,13 @@ function intersectBoxes(a, b) {
 const grainScratch = { canvas: null, stroke: null, box: { x: 0, y: 0, w: 0, h: 0 } };
 
 function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style, eraser) {
-  const pad = stagePadding(canvasWidth, canvasHeight);
-  if (grainCanvas.width !== canvasWidth || grainCanvas.height !== canvasHeight) {
-    grainCanvas.width = canvasWidth;
-    grainCanvas.height = canvasHeight;
+  // The pass is the size of the ink, held inside the window of the document
+  // the view is looking at (see strokeInkBox).
+  const box = strokeInkBox(stroke);
+  if (!box) return;
+  if (grainCanvas.width !== box.w || grainCanvas.height !== box.h) {
+    grainCanvas.width = box.w;
+    grainCanvas.height = box.h;
     grainScratch.stroke = null;
     grainScratch.box = { x: 0, y: 0, w: 0, h: 0 };
   }
@@ -2427,37 +2494,20 @@ function drawStrokeOnPaper(ctx, stroke, canvasWidth, canvasHeight, brush, style,
     grainScratch.stroke = stroke;
     grainScratch.box = { x: 0, y: 0, w: 0, h: 0 };
   }
-  const extent = strokeExtent(stroke);
-  if (!extent) return;
-  // The room the scratch has, in the coordinates the strokes are drawn in.
-  const cover = { x: -pad.x, y: -pad.y, w: canvasWidth, h: canvasHeight };
-  const box = intersectBoxes(extent, cover);
-  if (!box) return;
-  const dirty = unionBox(grainScratch.box, {
-    x: box.x + pad.x,
-    y: box.y + pad.y,
-    w: box.w,
-    h: box.h,
-  });
+  const dirty = unionBox(grainScratch.box, { x: 0, y: 0, w: box.w, h: box.h });
   grainCtx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
   // The stroke is painted with the brush it has, but without the grain: the
   // grain belongs to the paper under the whole stroke, not to one dab.
   const plain = { ...(brush ?? {}), grain: null };
-  grainCtx.setTransform(1, 0, 0, 1, pad.x, pad.y);
-  drawStrokeDirect(grainCtx, { ...stroke, eraser: false }, canvasWidth, canvasHeight, plain, true);
+  grainCtx.setTransform(1, 0, 0, 1, -box.x, -box.y);
+  drawStrokeDirect(grainCtx, { ...stroke, eraser: false }, box.w, box.h, plain, true);
+  // The grain is anchored at the origin of the document, so the same brush
+  // drawn twice leaves the same holes in the same places: the strokes are
+  // drawn in the pixels of the document here, so the pattern's own origin
+  // is the origin of the document already.
   applyGrainToCanvas(grainCtx, box, style.grain);
   ctx.globalCompositeOperation = eraser ? "destination-out" : "source-over";
-  ctx.drawImage(
-    grainCanvas,
-    dirty.x,
-    dirty.y,
-    dirty.w,
-    dirty.h,
-    dirty.x - pad.x,
-    dirty.y - pad.y,
-    dirty.w,
-    dirty.h,
-  );
+  ctx.drawImage(grainCanvas, 0, 0, box.w, box.h, box.x, box.y, box.w, box.h);
   ctx.globalCompositeOperation = "source-over";
   grainScratch.box = dirty;
 }
@@ -2846,8 +2896,10 @@ function drawingStaysOnCanvas(drawing, project) {
 const CELL_PAINT_ENTRY_BUDGET = 64 * 1024 * 1024;
 
 function cellPaintScaleOf(project) {
-  const doc = documentSize(project);
-  let scale = Math.max(1, canvas.width / doc.width);
+  // The picture is put down one to one when it is built at the density the
+  // stage is drawn at: the zoom times the dots a screen pixel holds.
+  const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  let scale = Math.max(1, (viewZoom || 1) * ratio);
   const bytes = project.width * project.height * scale * scale * 4;
   if (bytes > CELL_PAINT_ENTRY_BUDGET) {
     scale = Math.max(1, Math.sqrt(CELL_PAINT_ENTRY_BUDGET / (project.width * project.height * 4)));
@@ -3471,6 +3523,7 @@ function growSheetToInk(project) {
 function renderCanvas(frame = state.project.currentFrame) {
   const project = state.project;
   const { width, height } = project;
+  renderedWindow = { ...stageWindow };
   const camera = cameraAt(project.camera, frame);
   // The stage shows the shot the camera takes; switching the camera view off
   // shows the whole canvas with the camera frame drawn on it instead.
@@ -3632,7 +3685,15 @@ function renderCanvas(frame = state.project.currentFrame) {
 
     ctx.globalAlpha = opacity;
     withCellTransform(ctx, [layerTransform, transform], docWidth, docHeight, () => {
-      ctx.drawImage(layerCanvas, 0, 0);
+      // The layer was drawn in the pixels of the screen, over the window of
+      // the sheet the stage holds, so it goes down exactly there.
+      ctx.drawImage(
+        layerCanvas,
+        stageWindow.x,
+        stageWindow.y,
+        stageWindow.width,
+        stageWindow.height,
+      );
     });
     ctx.globalAlpha = 1;
   }
@@ -3821,7 +3882,7 @@ function withCellTransform(context, transforms, width, height, draw) {
 function cameraTolerance() {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width) return 10;
-  return (10 * documentSize(state.project).width) / rect.width;
+  return (10 * stageWindow.width) / rect.width;
 }
 
 /** The handle inside the top edge that turns the frame. */
@@ -5027,13 +5088,15 @@ let expectedScrollTop = null;
 function applyView() {
   const project = state.project;
   const zoom = viewZoom || 1;
-  // The sheet shows the whole document, the pasteboard included, the way the
-  // buffer and the world around it do.
+  // The sheet is the size of the whole document, the pasteboard included:
+  // it is what the scroll bars scroll. The canvas holds only the window of
+  // it the pane is looking at, at the full density of the screen, so a
+  // magnified line stays as sharp as the zoom says.
   const doc = documentSize(project);
   const paperW = Math.round(doc.width * zoom);
   const paperH = Math.round(doc.height * zoom);
-  canvas.style.width = `${paperW}px`;
-  canvas.style.height = `${paperH}px`;
+  canvasStack.style.width = `${paperW}px`;
+  canvasStack.style.height = `${paperH}px`;
   if (canvasStack) {
     canvasStack.style.transform = viewShiftX || viewShiftY
       ? `translate(${viewShiftX}px, ${viewShiftY}px)`
@@ -5041,11 +5104,47 @@ function applyView() {
   }
   sizeWorld(paperW, paperH);
   // The buffer holds the dots of the screen, so it follows the zoom.
+  const pad = stagePadding(doc.width, doc.height);
   const buffer = stageBuffer();
+  const left = Math.round((stageWindow.x + pad.x) * zoom);
+  const top = Math.round((stageWindow.y + pad.y) * zoom);
+  const width = Math.round(stageWindow.width * zoom);
+  const height = Math.round(stageWindow.height * zoom);
+  if (canvasWindow) {
+    canvasWindow.style.left = `${left}px`;
+    canvasWindow.style.top = `${top}px`;
+    canvasWindow.style.width = `${width}px`;
+    canvasWindow.style.height = `${height}px`;
+  }
+  // The paper under the window: the stage's own colour, and the pasteboard
+  // around it, so the sheet looks whole beyond the window too. In the
+  // camera view the whole sheet is the letterbox.
+  const view = currentCameraView();
+  canvasStack.style.background = view ? CAMERA_BACKDROP : PASTEBOARD;
+  if (paperBackdrop) {
+    paperBackdrop.hidden = Boolean(view);
+    paperBackdrop.style.left = `${Math.round(pad.x * zoom)}px`;
+    paperBackdrop.style.top = `${Math.round(pad.y * zoom)}px`;
+    paperBackdrop.style.width = `${Math.round(project.width * zoom)}px`;
+    paperBackdrop.style.height = `${Math.round(project.height * zoom)}px`;
+    paperBackdrop.style.background = project.background;
+  }
+  // The window is drawn again when it moved as well as when it changed its
+  // size: its pixels show the part of the document it stood on before.
+  const moved =
+    !renderedWindow ||
+    renderedWindow.x !== stageWindow.x ||
+    renderedWindow.y !== stageWindow.y ||
+    renderedWindow.width !== stageWindow.width ||
+    renderedWindow.height !== stageWindow.height ||
+    canvas.width !== buffer.width ||
+    canvas.height !== buffer.height;
   if (canvas.width !== buffer.width || canvas.height !== buffer.height) {
     canvas.width = buffer.width;
     canvas.height = buffer.height;
-    // A new buffer is empty, so the picture is drawn again.
+  }
+  if (moved) {
+    // A new window is empty, so the picture is drawn again.
     renderCanvas();
   }
   showZoom();
@@ -5111,10 +5210,12 @@ function zoomStage(factor, clientX, clientY) {
   const doc = documentSize(project);
   // The scale the document is really shown at. It can differ from the zoom
   // by a fraction of a pixel, because the size of the canvas is rounded.
-  const scale = rect.width / doc.width;
+  const scale = rect.width / stageWindow.width;
   const pad = stagePadding(doc.width, doc.height);
-  const localX = (clientX - rect.left) / scale - pad.x;
-  const localY = (clientY - rect.top) / scale - pad.y;
+  // The point under the pointer, in the pixels of the document: the window's
+  // own place is a place in the document already.
+  const localX = (clientX - rect.left) / scale + stageWindow.x;
+  const localY = (clientY - rect.top) / scale + stageWindow.y;
 
   const next = Math.max(0.1, Math.min(16, viewZoom * factor));
   if (next === viewZoom) return;
@@ -5123,8 +5224,10 @@ function zoomStage(factor, clientX, clientY) {
 
   // The scale after the zoom, and the place the document has to sit at for
   // the point under the pointer to stay under the pointer. The point sits
-  // that much inside the sheet, not at its edge.
-  const after = canvas.getBoundingClientRect();
+  // that much inside the sheet, not at its edge. The sheet is the stack (the
+  // canvas holds only the window of it the pane is looking at), so its place
+  // is measured from the stack.
+  const after = canvasStack.getBoundingClientRect();
   const afterScale = after.width / documentSize(project).width;
   const wantX = clientX - (localX + pad.x) * afterScale;
   const wantY = clientY - (localY + pad.y) * afterScale;
@@ -5141,15 +5244,44 @@ function zoomStage(factor, clientX, clientY) {
   // Where the document ended up, and the shift that puts it where it has
   // to be. The old shift is taken out first, because the place the document
   // was measured at already carries it.
-  const settled = canvas.getBoundingClientRect();
+  const settled = canvasStack.getBoundingClientRect();
   viewShiftX = wantX - (settled.x - viewShiftX);
   viewShiftY = wantY - (settled.y - viewShiftY);
+  applyView();
+}
+
+/**
+ * Draw the window of the sheet again when the pane has come near its edge.
+ *
+ * The canvas holds a window of the document with a margin around the visible
+ * part, so ordinary panning only moves it; when the pane shows more than the
+ * window holds, the window is drawn again further along.
+ */
+function reflowStageWindow() {
+  if (!state.project) return;
+  const zoom = viewZoom || 1;
+  const doc = documentSize(state.project);
+  const pad = stagePadding(doc.width, doc.height);
+  const pane = canvasScroll.getBoundingClientRect();
+  const sheet = canvasStack.getBoundingClientRect();
+  const x0 = (pane.left - sheet.left) / zoom - pad.x;
+  const y0 = (pane.top - sheet.top) / zoom - pad.y;
+  const x1 = (pane.right - sheet.left) / zoom - pad.x;
+  const y1 = (pane.bottom - sheet.top) / zoom - pad.y;
+  const inside =
+    x0 >= stageWindow.x &&
+    y0 >= stageWindow.y &&
+    x1 <= stageWindow.x + stageWindow.width &&
+    y1 <= stageWindow.y + stageWindow.height;
+  if (inside) return;
   applyView();
 }
 
 // A pane that was moved by hand takes the shift with it: the shift only
 // ever stands in for a scroll that could not be made.
 canvasScroll?.addEventListener("scroll", () => {
+  // The window follows the pane, whatever moved it.
+  reflowStageWindow();
   if (expectedScrollLeft === null) return;
   if (canvasScroll.scrollLeft === expectedScrollLeft && canvasScroll.scrollTop === expectedScrollTop) return;
   expectedScrollLeft = null;
@@ -5161,7 +5293,8 @@ canvasScroll?.addEventListener("scroll", () => {
 
 /** Zoom the stage about the middle of the document. */
 function zoomStageAtCentre(factor) {
-  const box = canvas.getBoundingClientRect();
+  // The middle of the sheet, and the canvas holds only a window of it.
+  const box = canvasStack.getBoundingClientRect();
   zoomStage(factor, box.left + box.width / 2, box.top + box.height / 2);
 }
 
@@ -7700,12 +7833,11 @@ function stepFrame(delta) {
 
 function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
-  // The sheet holds the whole document, the pasteboard included, so the
-  // pointer is measured in the pixels of the document, not of the project.
-  const doc = documentSize(state.project);
-  const pad = stagePadding(doc.width, doc.height);
-  const canvasX = ((event.clientX - rect.left) * doc.width) / rect.width - pad.x;
-  const canvasY = ((event.clientY - rect.top) * doc.height) / rect.height - pad.y;
+  // The canvas holds a window of the sheet, so the pointer is read in the
+  // window's pixels and put back where the window sits in the document (the
+  // window's own place is a place in the document already).
+  const canvasX = ((event.clientX - rect.left) * stageWindow.width) / rect.width + stageWindow.x;
+  const canvasY = ((event.clientY - rect.top) * stageWindow.height) / rect.height + stageWindow.y;
 
   // In the camera view the stage shows a crop, so the pointer has to be
   // mapped back through the camera to find the canvas position. The camera
