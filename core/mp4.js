@@ -96,6 +96,11 @@ function avc1Entry(width, height, description) {
     u16(0x0018), // depth
     u16(0xffff), // pre_defined, -1
     box("avcC", description),
+    // What colour the pictures carry: BT.709 primaries, transfer and
+    // matrix, limited ("video") range. Without this record players guess
+    // the conversion, and a wrong guess draws the film darker or washed
+    // out.
+    box("colr", ascii("nclx"), u16(1), u16(1), u16(1), u8(0)),
   );
 }
 
@@ -229,14 +234,48 @@ export function mp4EncoderAvailable() {
   return typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
 }
 
-/** RGB with three bytes a pixel becomes RGBA with four, opaque. */
-function rgbaOf(rgb) {
-  const out = new Uint8ClampedArray((rgb.length / 3) * 4);
-  for (let at = 0, to = 0; at < rgb.length; at += 3, to += 4) {
-    out[to] = rgb[at];
-    out[to + 1] = rgb[at + 1];
-    out[to + 2] = rgb[at + 2];
-    out[to + 3] = 255;
+/**
+ * RGB with three bytes a pixel becomes I420: a luma plane, then two chroma
+ * planes at half the size, in BT.709 with limited ("video") range - the
+ * shape and the colours an H.264 picture carries, and what the `colr`
+ * record of the file declares.
+ *
+ * The conversion is done here, not left to the browser, because browsers
+ * disagree: Chrome turns RGBA frames into limited BT.601, the desktop
+ * program's encoder into full-range BT.709, and a player that guesses
+ * wrong draws the film darker. Handing the encoder ready-made I420 leaves
+ * it nothing to convert, so every machine writes the same picture.
+ */
+function i420Of(rgb, width, height) {
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const chromaAt = width * height;
+  const out = new Uint8Array(chromaAt + 2 * halfWidth * halfHeight);
+  const clip = (value) => Math.max(0, Math.min(255, Math.round(value)));
+  for (let row = 0; row < height; row += 1) {
+    const rgbRow = row * width * 3;
+    const yRow = row * width;
+    const evenRow = (row & 1) === 0;
+    const belowRow = Math.min(row + 1, height - 1) * width * 3;
+    for (let column = 0; column < width; column += 1) {
+      const at = rgbRow + column * 3;
+      const r = rgb[at];
+      const g = rgb[at + 1];
+      const b = rgb[at + 2];
+      out[yRow + column] = clip(16 + (46.5594 * r + 156.6288 * g + 15.8118 * b) / 255);
+      if (evenRow && (column & 1) === 0) {
+        // The chroma of a two-by-two block: the colours are averaged first
+        // and converted once, which is kinder to thin strokes than
+        // averaging the converted chroma of four different colours.
+        const right = Math.min(column + 1, width - 1) * 3;
+        const r2 = (rgb[at] + rgb[rgbRow + right] + rgb[belowRow + column * 3] + rgb[belowRow + right]) / 4;
+        const g2 = (rgb[at + 1] + rgb[rgbRow + right + 1] + rgb[belowRow + column * 3 + 1] + rgb[belowRow + right + 1]) / 4;
+        const b2 = (rgb[at + 2] + rgb[rgbRow + right + 2] + rgb[belowRow + column * 3 + 2] + rgb[belowRow + right + 2]) / 4;
+        const index = chromaAt + (row >> 1) * halfWidth + (column >> 1);
+        out[index] = clip(128 + (-25.6642 * r2 - 86.3349 * g2 + 112 * b2) / 255);
+        out[index + halfWidth * halfHeight] = clip(128 + (112 * r2 - 101.7341 * g2 - 10.2682 * b2) / 255);
+      }
+    }
   }
   return out;
 }
@@ -322,8 +361,11 @@ export async function createMp4Buffer(project, { range = "all", scale = 100, key
   const perFrame = 1_000_000 / fps;
   for (let index = 0; index < pictures.length; index += 1) {
     if (failure) throw failure;
-    const videoFrame = new VideoFrame(rgbaOf(pictures[index]), {
-      format: "RGBA",
+    const videoFrame = new VideoFrame(i420Of(pictures[index], width, height), {
+      format: "I420",
+      // What the planes carry, so an encoder that writes colour records
+      // itself writes the same ones the file declares.
+      colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
       codedWidth: width,
       codedHeight: height,
       timestamp: Math.round(index * perFrame),
