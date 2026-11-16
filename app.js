@@ -3668,7 +3668,10 @@ function renderCanvas(frame = state.project.currentFrame) {
         if (painted) {
           drawCellPainted(ctx, painted, project);
         } else {
-          if (base) ctx.drawImage(base, 0, 0, ...cellBaseSize(project, resolved.drawing));
+          // The base sits where its place says, which may be past the canvas
+          // onto the pasteboard - a sheet bigger than the stage, as Flash
+          // keeps one.
+          if (base) ctx.drawImage(base, ...cellBaseOrigin(resolved.drawing), ...cellBaseSize(project, resolved.drawing));
           drawStrokesInto(ctx, strokes, resolved.drawing.brush);
         }
       });
