@@ -20,11 +20,11 @@
  *    DIFAT, FAT, MiniFAT, directory chains) that turns a binary .fla
  *    into named streams.
  * 3. `parseFla` — the document: for a ZIP the XFL DOM (edge strings,
- *    fills, strokes, timelines, symbol instances, matrices); for the
- *    binary package, the readable report (`Contents` properties, scene
- *    name, page summaries) plus Umoupen's "open it in Animate and save
- *    as XFL" guidance, because TVMini does not carry the MFC drawing
- *    schemas needed to rebuild legacy vectors.
+ *    fills, strokes, timelines, symbol instances, matrices, placed
+ *    bitmaps); for the binary package, the readable report (`Contents`
+ *    properties, scene name, page summaries) plus Umoupen's "open it in
+ *    Animate and save as XFL" guidance, because TVMini does not carry
+ *    the MFC drawing schemas needed to rebuild legacy vectors.
  *
  * The parsed result is a TVMini project of the same shape `model.js`
  * produces; `normalizeProject` on the caller side takes it from there.
@@ -33,6 +33,8 @@
 import { Buffer } from "./bytes.js";
 import { unzipSync } from "../vendor/fflate.js";
 import { binaryPageToProject, joinRuns } from "./fla-binary.js";
+import { decodeImage } from "./imageio.js";
+import { encodeRgbaPng } from "./png.js";
 import { decodeArchivePage } from "./fla-archive.js";
 
 /* ---------------------------------------------------------------- container */
@@ -788,9 +790,117 @@ export function parseXflPackage(name, bytes) {
   if (!timeline) throw new Error("the document has no timeline to import");
 
   const library = mapLibrary(files);
-  const project = timelineToProject(timeline, { width, height, fps, document, library, warnings });
+  const media = mapMedia(files, document, warnings);
+  const project = timelineToProject(timeline, { width, height, fps, document, library, media, warnings });
   project.sourceName = name;
   return project;
+}
+
+/**
+ * The library's bitmap pictures, decoded once: `item name -> picture`.
+ * A bitmap is referenced by a `DOMBitmapItem` under the document's
+ * `<media>` (or inside a LIBRARY/*.xml), or by a bare `DOMMediaItem`
+ * naming the file; the pixels sit in LIBRARY/<original file> or
+ * bin/<id>.dat. PNG, GIF, BMP and TGA decode here; JPEG is reported.
+ */
+function mapMedia(files, document, warnings) {
+  const media = new Map();
+  const byLower = new Map(Object.keys(files).map((path) => [path.toLowerCase(), path]));
+  const findFile = (...candidates) => {
+    for (const raw of candidates) {
+      if (!raw) continue;
+      const clean = String(raw).replace(/\\/g, "/").replace(/^\.\//, "");
+      for (const path of [clean, `LIBRARY/${clean}`, `LIBRARY/${clean.split("/").pop()}`]) {
+        const hit = byLower.get(path.toLowerCase());
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const seen = new Set();
+  const mapBitmap = (name, attrs) => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    const file = findFile(attrs.sourceExternalFilepath, attrs.href, attrs.bitmapDataHRef ? `bin/${attrs.bitmapDataHRef}` : null);
+    if (!file) {
+      warnings.push(`the bitmap "${name}" has no readable media file; it was left out`);
+      return;
+    }
+    try {
+      const img = decodeImage(new Uint8Array(files[file]));
+      media.set(name, { rgba: img.frames[0].data, width: img.width, height: img.height });
+    } catch (error) {
+      warnings.push(`the bitmap "${name}" could not be decoded (${error.message ?? error}); it was left out`);
+    }
+  };
+  for (const item of childrenNamed(childNamed(document, "media") ?? document, "DOMBitmapItem")) {
+    mapBitmap(attrString(item.attrs, "name", ""), item.attrs);
+  }
+  for (const item of childrenNamed(childNamed(document, "media") ?? document, "DOMMediaItem")) {
+    mapBitmap(attrString(item.attrs, "name", ""), item.attrs);
+  }
+  for (const path of Object.keys(files)) {
+    if (!/^LIBRARY\//i.test(path) || !path.toLowerCase().endsWith(".xml")) continue;
+    let item;
+    try {
+      item = parseXml(new TextDecoder("utf-8").decode(files[path]));
+    } catch {
+      continue;
+    }
+    if (item.name === "DOMBitmapItem") {
+      mapBitmap(attrString(item.attrs, "name", ""), item.attrs);
+    }
+  }
+  return media;
+}
+
+/** Paint placed bitmaps into one stage-size RGBA picture. */
+function composeXflBitmaps(placements, width, height) {
+  const out = new Uint8Array(width * height * 4);
+  for (const { picture, matrix } of placements) {
+    const { a, b, c, d, tx, ty } = matrix ?? IDENTITY;
+    const det = a * d - b * c;
+    if (!det) continue;
+    const at = (x, y, channel) =>
+      x >= 0 && x < picture.width && y >= 0 && y < picture.height
+        ? picture.rgba[(y * picture.width + x) * 4 + channel]
+        : 0;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const u = x + 0.5 - tx;
+        const v = y + 0.5 - ty;
+        const px = (d * u - c * v) / det;
+        const py = (a * v - b * u) / det;
+        if (px < -1 || py < -1 || px > picture.width + 1 || py > picture.height + 1) continue;
+        const gx = px - 0.5;
+        const gy = py - 0.5;
+        const x0 = Math.floor(gx);
+        const y0 = Math.floor(gy);
+        const fx = gx - x0;
+        const fy = gy - y0;
+        const w00 = (1 - fx) * (1 - fy);
+        const w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy;
+        const w11 = fx * fy;
+        const alpha =
+          (at(x0, y0, 3) * w00 + at(x0 + 1, y0, 3) * w10 +
+            at(x0, y0 + 1, 3) * w01 + at(x0 + 1, y0 + 1, 3) * w11) / 255;
+        if (alpha <= 0) continue;
+        const dest = (y * width + x) * 4;
+        const oa = alpha + (out[dest + 3] / 255) * (1 - alpha);
+        if (oa <= 0) continue;
+        for (let channel = 0; channel < 3; channel += 1) {
+          const source =
+            (at(x0, y0, channel) * w00 + at(x0 + 1, y0, channel) * w10 +
+              at(x0, y0 + 1, channel) * w01 + at(x0 + 1, y0 + 1, channel) * w11);
+          out[dest + channel] =
+            (source * alpha + out[dest + channel] * (out[dest + 3] / 255) * (1 - alpha)) / oa;
+        }
+        out[dest + 3] = oa * 255;
+      }
+    }
+  }
+  return encodeRgbaPng(width, height, out).toString("base64");
 }
 
 /** `PublishSettings.xml` carries the stage in worker blues attributes. */
@@ -823,7 +933,7 @@ function publishStageSize(settings) {
  * drawing shown for d frames.
  */
 function timelineToProject(timeline, context) {
-  const { width, height, fps, document, library, warnings } = context;
+  const { width, height, fps, document, library, media, warnings } = context;
   const layers = [];
   const sheet = [];
 
@@ -852,14 +962,26 @@ function timelineToProject(timeline, context) {
       const index = attrInt(frame.attrs, "index", layers.length + layer.drawings.length);
       const duration = Math.max(1, attrInt(frame.attrs, "duration", 1));
       const frameName = attrString(frame.attrs, "name", "") || null;
-      const strokes = [];
+      const out = { strokes: [], bitmaps: [] };
 
       for (const element of childNamed(frame, "elements")?.children ?? []) {
-        elementStrokes(element, strokes, library, warnings, 0, null);
+        elementStrokes(element, out, library, media, warnings, 0, null);
       }
 
-      if (strokes.length || frameName) {
-        layer.drawings.push({ at: index + 1, hold: duration, strokes, name: frameName });
+      // Bitmaps paint into one stage-size picture under the strokes, the
+      // way the binary importer lays a frame's bitmaps out.
+      const image = out.bitmaps.length
+        ? { data: composeXflBitmaps(out.bitmaps, width, height), width, height }
+        : null;
+
+      if (out.strokes.length || image || frameName) {
+        layer.drawings.push({
+          at: index + 1,
+          hold: duration,
+          strokes: out.strokes,
+          ...(image ? { image } : {}),
+          name: frameName,
+        });
       }
     }
   }
@@ -919,12 +1041,14 @@ function layerElementChildren(layerElement, wrapperName, itemName) {
 }
 
 /**
- * One placed element → strokes. Shapes give edge strings; symbol
- * instances are walked recursively with their matrices; groups are
- * flattened the same way; text and bitmaps arrive as warnings (which
- * is what the reference importer reports for them too).
+ * One placed element → strokes and bitmap placements (`out.strokes`,
+ * `out.bitmaps`). Shapes give edge strings; symbol instances are walked
+ * recursively with their matrices; groups are flattened the same way;
+ * bitmap instances carry their picture for the frame's own composite;
+ * text arrives as a warning (which is what the reference importer
+ * reports for it too).
  */
-function elementStrokes(element, out, library, warnings, depth, parentMatrix) {
+function elementStrokes(element, out, library, media, warnings, depth, parentMatrix) {
   if (!element) return;
   if (depth > MAX_SYMBOL_DEPTH) {
     warnings.push("a symbol nesting goes deeper than the import follows; the rest was skipped");
@@ -934,14 +1058,14 @@ function elementStrokes(element, out, library, warnings, depth, parentMatrix) {
     case "DOMShape": {
       const matrix = matrixOf(element, parentMatrix);
       for (const stroke of shapeStrokes(element, warnings)) {
-        out.push(matrix ? applyMatrix(stroke, matrix) : stroke);
+        out.strokes.push(matrix ? applyMatrix(stroke, matrix) : stroke);
       }
       return;
     }
     case "DOMGroup": {
       const matrix = matrixOf(element, parentMatrix);
       for (const member of childNamed(element, "members")?.children ?? []) {
-        elementStrokes(member, out, library, warnings, depth + 1, matrix);
+        elementStrokes(member, out, library, media, warnings, depth + 1, matrix);
       }
       return;
     }
@@ -958,14 +1082,21 @@ function elementStrokes(element, out, library, warnings, depth, parentMatrix) {
       for (const frame of layerElementChildren(firstChildLayer(timeline), "frames", "DOMFrame")) {
         if (attrInt(frame.attrs, "index", 0) !== 0) continue; // the instance's first frame
         for (const elementInner of childNamed(frame, "elements")?.children ?? []) {
-          elementStrokes(elementInner, out, library, warnings, depth + 1, matrix);
+          elementStrokes(elementInner, out, library, media, warnings, depth + 1, matrix);
         }
       }
       return;
     }
-    case "DOMBitmapInstance":
-      warnings.push(`a bitmap ("${attrString(element.attrs, "libraryItemName", "") || "unnamed"}") is not imported`);
+    case "DOMBitmapInstance": {
+      const ref = attrString(element.attrs, "libraryItemName", "");
+      const picture = media.get(ref);
+      if (!picture) {
+        warnings.push(`a bitmap ("${ref || "unnamed"}") was not imported`);
+        return;
+      }
+      out.bitmaps.push({ picture, matrix: matrixOf(element, parentMatrix) ?? IDENTITY });
       return;
+    }
     case "DOMStaticText":
     case "DOMDynamicText":
     case "DOMInputText":
@@ -988,8 +1119,10 @@ function matrixOf(element, parentMatrix) {
         b: attrFloat(matrixNode.attrs, "b", 0),
         c: attrFloat(matrixNode.attrs, "c", 0),
         d: attrFloat(matrixNode.attrs, "d", 1),
-        tx: attrFloat(matrixNode.attrs, "tx", 0) / TWIPS,
-        ty: attrFloat(matrixNode.attrs, "ty", 0) / TWIPS,
+        // Matrix translation is in pixels in XFL (the edge strings are the
+        // only twips here), as real files place elements by px values.
+        tx: attrFloat(matrixNode.attrs, "tx", 0),
+        ty: attrFloat(matrixNode.attrs, "ty", 0),
       }
     : { ...IDENTITY };
   return parentMatrix ? composeMatrix(parentMatrix, matrix) : matrix;

@@ -10,15 +10,18 @@
  *   - every keyframe becomes a cell of the layer, held for its length;
  *   - symbols are drawn inside the cell, and a layer whose symbols animate
  *     (or that has a motion tween) gets a cell for every frame that changes;
- *   - fills, strokes, gradients, rectangles and ovals are painted.
+ *   - fills, strokes, gradients, rectangles and ovals are painted;
+ *   - bitmap instances and bitmap fills paint the library's images
+ *     (PNG, GIF, BMP and TGA; JPEG carries a warning).
  *
  * Not imported (the result carries a warning for each): mask and guide
- * layers, shape tweens, bitmaps, text, sounds, filters and blend modes.
+ * layers, shape tweens, text, sounds, filters and blend modes.
  *
  * Pure JavaScript: runs in the browser and under Node 18+.
  */
 import { readFla, frameAt, stitch } from "./fla-reader.js";
 import { readBinaryFla } from "./fla-binary-scan.js";
+import { decodeImage } from "./imageio.js";
 import { encodeRgbaPng } from "./png.js";
 import { createGroup, createLayer, normalizeProject, MAX_FPS, MAX_PIXELS, MAX_SIZE, MIN_SIZE, MAX_HOLD } from "./model.js";
 
@@ -88,7 +91,7 @@ function parseColor(hex) {
 }
 
 /** Colour source for a fill/stroke style: a constant RGBA or a function of the pixel. */
-function makePaint(style, m, alpha) {
+function makePaint(style, m, alpha, bitmaps = null) {
   if (!style || style.type === "solid") {
     const [r, g, b] = parseColor(style?.color);
     return [r, g, b, (style?.alpha ?? 1) * alpha];
@@ -109,7 +112,52 @@ function makePaint(style, m, alpha) {
       return [a.rgb[0] + (b.rgb[0] - a.rgb[0]) * p, a.rgb[1] + (b.rgb[1] - a.rgb[1]) * p, a.rgb[2] + (b.rgb[2] - a.rgb[2]) * p, (a.a + (b.a - a.a) * p) * alpha];
     };
   }
-  return null; // bitmap fills are not painted
+  if (style.type === "bitmap" && bitmaps) {
+    const picture = bitmaps.get(style.bitmap);
+    const inv = picture ? invert(mul(m, style.matrix)) : null;
+    if (!picture || !inv) return null;
+    return (x, y) => {
+      const [sx, sy] = apply(inv, x, y);
+      const px = sampleBilinear(picture, sx, sy);
+      return [px[0], px[1], px[2], px[3] * alpha];
+    };
+  }
+  return null;
+}
+
+/** Bilinear sample of a straight-alpha RGBA picture; outside is transparent. */
+function sampleBilinear(picture, sx, sy) {
+  const { rgba, width, height } = picture;
+  const tx = sx - 0.5, ty = sy - 0.5;
+  const x0 = Math.floor(tx), y0 = Math.floor(ty);
+  const fx = tx - x0, fy = ty - y0;
+  const inside = (x, y) => x >= 0 && x < width && y >= 0 && y < height;
+  const at = (x, y, c) => (inside(x, y) ? rgba[(y * width + x) * 4 + c] : 0);
+  const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+  const w01 = (1 - fx) * fy, w11 = fx * fy;
+  return [
+    at(x0, y0, 0) * w00 + at(x0 + 1, y0, 0) * w10 + at(x0, y0 + 1, 0) * w01 + at(x0 + 1, y0 + 1, 0) * w11,
+    at(x0, y0, 1) * w00 + at(x0 + 1, y0, 1) * w10 + at(x0, y0 + 1, 1) * w01 + at(x0 + 1, y0 + 1, 1) * w11,
+    at(x0, y0, 2) * w00 + at(x0 + 1, y0, 2) * w10 + at(x0, y0 + 1, 2) * w01 + at(x0 + 1, y0 + 1, 2) * w11,
+    (at(x0, y0, 3) * w00 + at(x0 + 1, y0, 3) * w10 + at(x0, y0 + 1, 3) * w01 + at(x0 + 1, y0 + 1, 3) * w11) / 255,
+  ];
+}
+
+/** Paint a placed bitmap into the cell canvas through its matrix. */
+function drawBitmap(cv, picture, m, alpha) {
+  const inv = invert(m);
+  if (!inv) return;
+  const { w, h, data } = cv;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const sx = inv[0] * (x + 0.5) + inv[2] * (y + 0.5) + inv[4];
+      const sy = inv[1] * (x + 0.5) + inv[3] * (y + 0.5) + inv[5];
+      if (sx < -1 || sy < -1 || sx > picture.width + 1 || sy > picture.height + 1) continue;
+      const px = sampleBilinear(picture, sx, sy);
+      if (px[3] <= 0) continue;
+      blendPixel(data, (y * w + x) * 4, px[0], px[1], px[2], px[3] * alpha);
+    }
+  }
 }
 
 function blendPixel(data, o, r, g, b, a) {
@@ -246,14 +294,14 @@ function layerVisible(l) {
   return l.visible && l.type !== "guide" && l.type !== "folder" && l.type !== "mask";
 }
 
-/** Flatten what a set of elements shows at time `t` into [{shape, m, alpha}] in painting order. */
-function collect(doc, layer, fr, t, m, alpha, out, ctx, depth, elements = elementsAt(layer, fr, t)) {
+/** Flatten what a set of elements shows at time `t` into [{shape|bitmap, m, alpha}] in painting order. */
+function collect(doc, layer, fr, t, m, alpha, out, ctx, depth, bitmaps, elements = elementsAt(layer, fr, t)) {
   if (depth > 12) { ctx.warn("symbols nested more than 12 deep were cut off"); return; }
   const rel = t - fr.index;
   for (const el of elements) {
     switch (el.type) {
       case "shape": out.push({ shape: el, m: mul(m, el.matrix), alpha }); break;
-      case "group": collect(doc, layer, fr, t, mul(m, el.matrix), alpha, out, ctx, depth + 1, el.children); break;
+      case "group": collect(doc, layer, fr, t, mul(m, el.matrix), alpha, out, ctx, depth + 1, bitmaps, el.children); break;
       case "symbol": {
         const sym = doc.symbols[el.name];
         if (!sym) { ctx.warn(`symbol "${el.name}" is missing from the library`); break; }
@@ -264,11 +312,16 @@ function collect(doc, layer, fr, t, m, alpha, out, ctx, depth, elements = elemen
           const L = tl.layers[i];
           if (!layerVisible(L)) continue;
           const f = frameAt(L, ft);
-          if (f) collect(doc, L, f, ft, mm, alpha * el.alpha, out, ctx, depth + 1);
+          if (f) collect(doc, L, f, ft, mm, alpha * el.alpha, out, ctx, depth + 1, bitmaps);
         }
         break;
       }
-      case "bitmap": ctx.warn("bitmaps were not imported"); break;
+      case "bitmap": {
+        const picture = bitmaps?.get(el.name);
+        if (picture) out.push({ bitmap: picture, m: mul(m, el.matrix), alpha });
+        else ctx.warn(`the bitmap "${el.name}" was not imported`);
+        break;
+      }
       case "text": ctx.warn("text was not imported"); break;
       default: ctx.warn(`${el.tag || el.type} objects were not imported`);
     }
@@ -276,19 +329,25 @@ function collect(doc, layer, fr, t, m, alpha, out, ctx, depth, elements = elemen
 }
 
 const matrixKey = (m) => m.map((v) => Math.round(v * 1000)).join(",");
-const keyOf = (items) => items.map((i) => `${shapeId(i.shape)}:${matrixKey(i.m)}:${Math.round(i.alpha * 100)}`).join("|");
+const bitmapIds = new WeakMap();
+const keyOf = (items) => items.map((i) => `${i.bitmap ? "bm" + bitmapIds.get(i.bitmap) : "s" + shapeId(i.shape)}:${matrixKey(i.m)}:${Math.round(i.alpha * 100)}`).join("|");
 
-function rasterize(items, w, h, root) {
+function rasterize(items, w, h, root, bitmaps = null) {
   const cv = { w, h, data: new Uint8ClampedArray(w * h * 4) };
-  for (const { shape, m: local, alpha } of items) {
+  for (const item of items) {
+    if (item.bitmap) {
+      drawBitmap(cv, item.bitmap, mul(root, item.m), item.alpha);
+      continue;
+    }
+    const { shape, m: local, alpha } = item;
     const m = mul(root, local);
     for (const fl of shape.fills) {
       // every edge has its fill on one side, so contours wind consistently: the non-zero rule unites overlaps and keeps holes
-      fillPolygons(cv, flatten(fl.d, m).map((p) => p.pts), "nonzero", makePaint(fl.style, m, alpha));
+      fillPolygons(cv, flatten(fl.d, m).map((p) => p.pts), "nonzero", makePaint(fl.style, m, alpha, bitmaps));
     }
     const scale = Math.sqrt(Math.abs(det(m)));
     for (const sk of shape.strokes) {
-      const paint = makePaint(sk.style.paint, m, alpha);
+      const paint = makePaint(sk.style.paint, m, alpha, bitmaps);
       fillPolygons(cv, strokePolygons(flatten(sk.d, m), sk.style.weight * scale, sk.style.caps !== "none"), "nonzero", paint);
     }
   }
@@ -318,6 +377,22 @@ export async function importFlaBytes(bytes, options = {}) {
   }
   const ctx = { warn: (m) => warnings.add(m) };
 
+  // The library's bitmaps, decoded once: `name -> { rgba, width, height }`.
+  const bitmaps = new Map();
+  let nextBitmapId = 1;
+  for (const item of Object.values(doc.bitmaps ?? {})) {
+    if (!item.read) continue;
+    try {
+      const bytes = await item.read();
+      const img = decodeImage(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      const picture = { rgba: img.frames[0].data, width: img.width, height: img.height };
+      bitmapIds.set(picture, nextBitmapId++);
+      bitmaps.set(item.name, picture);
+    } catch (error) {
+      warnings.add(`the bitmap "${item.name}" could not be decoded (${error.message ?? error}); it was left out`);
+    }
+  }
+
   if (doc.timelines.length === 0) throw new Error("This Flash file has no timeline.");
   if (doc.timelines.length > 1) warnings.add(`only the first of ${doc.timelines.length} scenes was imported`);
   const tl = doc.timelines[0];
@@ -344,7 +419,7 @@ export async function importFlaBytes(bytes, options = {}) {
       const last = fr.index + fr.duration;
       for (let t = fr.index; t < last; t += stepped ? 1 : fr.duration) {
         const items = [];
-        collect(doc, layer, fr, t, IDENTITY, 1, items, ctx, 0);
+        collect(doc, layer, fr, t, IDENTITY, 1, items, ctx, 0, bitmaps);
         const span = stepped ? 1 : fr.duration;
         const key = items.length ? keyOf(items) : "";
         const prev = cells[cells.length - 1];
@@ -379,7 +454,7 @@ export async function importFlaBytes(bytes, options = {}) {
     for (const cell of plans[i]) {
       if (keepVectors) {
         // Store strokes directly — convert items to TVMini stroke format
-        const strokes = cell.items.map((item) => {
+        const strokes = cell.items.filter((item) => !item.bitmap).map((item) => {
           if (item.shape && item.shape.fills) {
             // Apply the composed matrix to path coordinates
             const m = item.m;
@@ -416,14 +491,21 @@ export async function importFlaBytes(bytes, options = {}) {
           return [];
         }).flat();
 
+        // Bitmaps cannot be strokes; they paint into the cell's picture
+        // underneath the strokes, the way the binary importer lays them.
+        const bitmapItems = cell.items.filter((item) => item.bitmap);
+        const image = bitmapItems.length
+          ? { data: encodeRgbaPng(width, height, rasterize(bitmapItems, width, height, root, bitmaps)).toString("base64"), width, height }
+          : null;
         layer.drawings.push({
           at: cell.at, hold: cell.hold, strokes,
+          ...(image ? { image } : {}),
           ...(cell.name ? { name: String(cell.name).slice(0, 80) } : {}),
         });
       } else {
         let data = pictures.get(cell.key);
         if (!data) {
-          data = encodeRgbaPng(width, height, rasterize(cell.items, width, height, root)).toString("base64");
+          data = encodeRgbaPng(width, height, rasterize(cell.items, width, height, root, bitmaps)).toString("base64");
           pictures.set(cell.key, data);
         }
         layer.drawings.push({

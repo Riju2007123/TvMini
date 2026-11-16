@@ -337,12 +337,47 @@ export async function readPackage(pkg, parseXML = defaultParse) {
     const name = str(sym, 'name') || href.replace(/\.xml$/, '');
     doc.symbols[name] = { name, type: str(sym, 'symbolType', 'graphic'), timeline: parseTimeline(kid(kid(sym, 'timeline'), 'DOMTimeline')) };
   }
-  for (const b of kids(kid(root, 'media'), 'DOMBitmapItem')) {
-    const name = str(b, 'name');
-    // Embedded pixel data is stored in LIBRARY/<href> (png/jpg) or bin/*.dat (Animate's own container).
-    const href = str(b, 'href'), dat = str(b, 'bitmapDataHRef');
-    const file = href && pkg.has('LIBRARY/' + href) ? 'LIBRARY/' + href : dat && pkg.has('bin/' + dat) ? 'bin/' + dat : null;
-    doc.bitmaps[name] = { name, width: num(b, 'frameRight') / 20, height: num(b, 'frameBottom') / 20, file, read: file ? () => pkg.read(file) : null };
+  // Bitmap media: a `DOMBitmapItem` under <media> (CS5+) or inside a
+  // LIBRARY/*.xml (uncompressed folders), or a bare `DOMMediaItem` naming
+  // the file. The pixels live in LIBRARY/<original file> or bin/<id>.dat.
+  const byLower = new Map(pkg.names.map((n) => [n.toLowerCase(), n]));
+  const findFile = (...candidates) => {
+    for (const raw of candidates) {
+      if (!raw) continue;
+      const clean = String(raw).replace(/\\/g, '/').replace(/^\.\//, '');
+      for (const path of [clean, 'LIBRARY/' + clean, 'LIBRARY/' + clean.split('/').pop()]) {
+        const hit = byLower.get(path.toLowerCase());
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  const mapBitmap = (name, attrs) => {
+    if (!name || doc.bitmaps[name]) return;
+    const file = findFile(attrs.sourceExternalFilepath, attrs.href, attrs.bitmapDataHRef
+      ? 'bin/' + attrs.bitmapDataHRef : null);
+    doc.bitmaps[name] = {
+      name,
+      width: num({ hasAttribute: (a) => attrs[a] != null, getAttribute: (a) => attrs[a] }, 'frameRight') / 20,
+      height: num({ hasAttribute: (a) => attrs[a] != null, getAttribute: (a) => attrs[a] }, 'frameBottom') / 20,
+      file,
+      read: file ? () => pkg.read(file) : null,
+    };
+  };
+  const attrsOf = (el) => el.attrs ?? Object.fromEntries([...el.attributes ?? []].map((a) => [a.name, a.value]));
+  for (const b of kids(kid(root, 'media'), 'DOMBitmapItem')) mapBitmap(str(b, 'name'), attrsOf(b));
+  for (const m of kids(kid(root, 'media'), 'DOMMediaItem')) {
+    if (str(m, 'sourceExternalFilepath') || str(m, 'videoDataHRef')) {
+      mapBitmap(str(m, 'name'), attrsOf(m));
+    }
+  }
+  for (const path of pkg.names) {
+    if (!/^LIBRARY\//i.test(path) || !path.toLowerCase().endsWith('.xml')) continue;
+    let item;
+    try { item = parseXML(await pkg.text(path)).documentElement; } catch { continue; }
+    if (item?.localName === 'DOMBitmapItem') {
+      mapBitmap(str(item, 'name'), attrsOf(item));
+    }
   }
   return doc;
 }
