@@ -1266,16 +1266,13 @@ export function parseEdgeString(data) {
 function parseEdgeNumber(token) {
   if (token[0] !== "#") return Number.parseFloat(token) / TWIPS;
   const parts = token.slice(1).split(".");
-  const intPart = parts[0].padStart(6, "0");
-  const fracPart = (parts[1] ?? "").padEnd(2, "0");
-  let value = 0;
-  for (let c = 0; c < intPart.length + fracPart.length; c += 2) {
-    const digits = (intPart + fracPart).slice(c, c + 2);
-    value = value * 256 + Number.parseInt(digits, 16);
-  }
-  const bits = (intPart.length + fracPart.length) * 4 / 2;
-  if (value >= 2 ** (bits - 1)) value -= 2 ** bits;
-  return value / 256 / TWIPS;
+  let value = Number.parseInt(parts[0], 16);
+  // The integer part is a 16-bit two's-complement word when spelled with
+  // four or more digits; shorter spellings are plain unsigned integers.
+  if (parts[0].length >= 4 && value >= 0x8000) value -= 0x10000;
+  const fracPart = parts[1] ?? "";
+  if (fracPart) value += Number.parseInt(fracPart, 16) / 16 ** fracPart.length;
+  return value / TWIPS;
 }
 
 /* ---------------------------------------------------------------- symbols */
