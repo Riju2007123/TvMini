@@ -1628,4 +1628,4 @@ function takeCameraLayers(project, stage, warnings) {
       "on the camera track (the viewfinder of a Flash virtual camera is not artwork)",
   );
 }
-export { BinaryCursor, StopDecode, readShapeBody, shapeToStrokes, composeCellBitmaps };
+export { BinaryCursor, StopDecode, readShapeBody, shapeToStrokes, composeCellBitmaps, joinRuns };

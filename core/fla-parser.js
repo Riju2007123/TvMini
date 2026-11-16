@@ -32,7 +32,7 @@
 
 import { Buffer } from "./bytes.js";
 import { unzipSync } from "../vendor/fflate.js";
-import { binaryPageToProject } from "./fla-binary.js";
+import { binaryPageToProject, joinRuns } from "./fla-binary.js";
 import { decodeArchivePage } from "./fla-archive.js";
 
 /* ---------------------------------------------------------------- container */
@@ -730,8 +730,8 @@ export function utf16Runs(bytes) {
 
 /* ------------------------------------------------------------- XFL packages */
 
-/** Umoupen's XFL fallback when the document omits its size. */
-const DEFAULT_XFL_SIZE = { width: 1920, height: 1080 };
+/** Umoupen's XFL fallback when neither the document nor the publish settings name a size. */
+const DEFAULT_XFL_SIZE = { width: 550, height: 400 };
 /** XFL geometry is in twentieths of a pixel. */
 const TWIPS = 20;
 
@@ -776,7 +776,7 @@ export function parseXflPackage(name, bytes) {
   if (!(width >= 16 && height >= 16)) {
     width = DEFAULT_XFL_SIZE.width;
     height = DEFAULT_XFL_SIZE.height;
-    warnings.push("the stage size was not in the document; using 1920×1080");
+    warnings.push("the stage size was not in the document; using 550×400");
   }
 
   let fps = attrFloat(document.attrs, "frameRate", 0);
@@ -796,10 +796,25 @@ export function parseXflPackage(name, bytes) {
 /** `PublishSettings.xml` carries the stage in worker blues attributes. */
 function publishStageSize(settings) {
   // The helpful values are `PublishSizeWidth` style attributes or the
-  // document `publishSize`; try the obvious attribute spellings.
+  // document `publishSize`; try the obvious attribute spellings, then
+  // the `<Width>/<Height>` text elements CS6 writes under
+  // `PublishFormatProperties`.
   const width = attrNumber(settings.attrs, "width", 0) || attrNumber(settings.attrs, "movieWidth", 0);
   const height = attrNumber(settings.attrs, "height", 0) || attrNumber(settings.attrs, "movieHeight", 0);
-  return { width, height };
+  if (width >= 16 && height >= 16) return { width, height };
+  const valueOf = (name) => {
+    const element = (function find(node) {
+      for (const child of node.children ?? []) {
+        if (child.name === name) return child;
+        const deeper = find(child);
+        if (deeper) return deeper;
+      }
+      return null;
+    })(settings);
+    const value = Number.parseFloat(element ? textContentOf(element) : "");
+    return Number.isFinite(value) ? value : 0;
+  };
+  return { width: width || valueOf("Width"), height: height || valueOf("Height") };
 }
 
 /**
@@ -999,14 +1014,13 @@ function applyMatrix(stroke, matrix) {
   if (matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1 && matrix.tx === 0 && matrix.ty === 0) {
     return stroke;
   }
-  return {
-    ...stroke,
-    points: stroke.points.map(([x, y, pressure]) => {
-      const nx = matrix.a * x + matrix.c * y + matrix.tx;
-      const ny = matrix.b * x + matrix.d * y + matrix.ty;
-      return Number.isFinite(pressure) ? [nx, ny, pressure] : [nx, ny];
-    }),
+  const map = ([x, y, pressure]) => {
+    const nx = matrix.a * x + matrix.c * y + matrix.tx;
+    const ny = matrix.b * x + matrix.d * y + matrix.ty;
+    return Number.isFinite(pressure) ? [nx, ny, pressure] : [nx, ny];
   };
+  if (Array.isArray(stroke.paths)) return { ...stroke, paths: stroke.paths.map((path) => path.map(map)) };
+  return { ...stroke, points: stroke.points.map(map) };
 }
 
 /* ---------------------------------------------------------------- shapes */
@@ -1019,11 +1033,18 @@ function applyMatrix(stroke, matrix) {
  *   fill on the left/right of each segment.
  * - `strokeStyle` — the 1-based `StrokeStyle` index of the stroke.
  *
- * TVMini draws strokes, so each edge segment arrives as one stroke:
- * stroked segments take the stroke style's colour and width, and
- * segments without a stroke take the fill colour so shapes survive
- * with an outline of what they were filled with.
+ * Flash writes long contours as many `!`-runs that chain end-to-start —
+ * one run per curve piece, often thousands per shape — so the segments
+ * are joined the same way the binary decoder joins its edges
+ * (`shapeToStrokes` in fla-binary.js): the runs of one fill style chain
+ * into contours and arrive as one `kind: "paths"` fill, and stroked
+ * runs chain, while their ends touch and they share a style, into line
+ * strokes. Painting follows Flash's order: the fills first, then the
+ * strokes on top.
  */
+/** Contours stop growing past this many points, like the binary decoder. */
+const MAX_EDGE_POINTS = 120000;
+
 function shapeStrokes(shape, warnings) {
   const fills = fillStyles(childNamed(shape, "fills"), warnings);
   const strokes = strokeStyles(childNamed(shape, "strokes"), warnings);
@@ -1031,26 +1052,100 @@ function shapeStrokes(shape, warnings) {
 
   const edgesContainer = childNamed(shape, "edges");
   if (!edgesContainer) return out;
-  for (const edge of edgesContainer.children ?? []) {
+
+  const fillRuns = new Map(); // style index → [{ from, to, points }]
+  const lineChains = []; // { color, width, points, tail, style }
+  let lineChain = null;
+  let points = 0;
+  let overflow = false;
+  const keyOf = (point) => `${point[0]},${point[1]}`;
+  const joins = (a, b) => Boolean(a && b) && Math.hypot(a[0] - b[0], a[1] - b[1]) <= 0.01;
+
+  edgeLoop: for (const edge of edgesContainer.children ?? []) {
     if (edge.name !== "Edge") continue;
     const data = typeof edge.attrs.edges === "string" ? edge.attrs.edges : textOf(edge);
     if (!data) continue;
     const fillA = attrInt(edge.attrs, "fillStyle0", 0);
     const fillB = attrInt(edge.attrs, "fillStyle1", 0);
     const strokeIndex = attrInt(edge.attrs, "strokeStyle", 0);
-    const fill = fills[fillA] ?? fills[fillB] ?? null;
     const stroke = strokes[strokeIndex] ?? null;
 
     for (const segment of parseEdgeString(data)) {
-      if (segment.length < 2) continue;
-      out.push({
-        color: stroke ? stroke.color : fill ? fill.color : "#000000",
-        width: stroke ? stroke.width : 1,
-        points: segment,
-        opacity: 1,
-        blend: "normal",
-      });
+      const start = segment[0];
+      const end = segment[segment.length - 1];
+
+      // Going along the edge, the fill on its right (`fillStyle1`) keeps
+      // the edge's own direction and the one on its left (`fillStyle0`)
+      // is reversed, so the runs of one fill chain into loops with a
+      // single winding. An edge with the same fill on both sides is not
+      // a boundary at all.
+      if (fillA !== fillB) {
+        if (fills[fillB]) {
+          let runs = fillRuns.get(fillB);
+          if (!runs) fillRuns.set(fillB, (runs = []));
+          points += segment.length;
+          if (points >= MAX_EDGE_POINTS) {
+            overflow = true;
+            break edgeLoop;
+          }
+          runs.push({ from: keyOf(start), to: keyOf(end), points: segment });
+        }
+        if (fills[fillA]) {
+          let runs = fillRuns.get(fillA);
+          if (!runs) fillRuns.set(fillA, (runs = []));
+          points += segment.length;
+          if (points >= MAX_EDGE_POINTS) {
+            overflow = true;
+            break edgeLoop;
+          }
+          runs.push({ from: keyOf(end), to: keyOf(start), points: [...segment].reverse() });
+        }
+      }
+
+      // Stroked runs chain while they touch and share a stroke style.
+      if (stroke) {
+        if (!lineChain || lineChain.style !== strokeIndex || !joins(start, lineChain.tail)) {
+          lineChain = {
+            style: strokeIndex,
+            color: stroke.color,
+            width: stroke.width,
+            points: [start],
+            tail: start,
+          };
+          lineChains.push(lineChain);
+        }
+        for (let i = 1; i < segment.length; i += 1) lineChain.points.push(segment[i]);
+        lineChain.tail = end;
+      }
     }
+  }
+  if (overflow) {
+    warnings.push("a drawing has more points than can be imported; the rest was dropped");
+  }
+
+  // The fills of one style fill together with a combined winding, the
+  // way Flash fills a shape; the strokes go on top of them.
+  for (const [style, runs] of fillRuns) {
+    const contours = joinRuns(runs);
+    if (!contours.length) continue;
+    out.push({
+      kind: "paths",
+      color: fills[style].color,
+      width: 1,
+      paths: contours,
+      opacity: 1,
+      blend: "normal",
+    });
+  }
+  for (const chain of lineChains) {
+    if (chain.points.length < 2) continue;
+    out.push({
+      color: chain.color,
+      width: chain.width,
+      points: chain.points,
+      opacity: 1,
+      blend: "normal",
+    });
   }
   return out;
 }
@@ -1065,15 +1160,17 @@ function fillStyles(fillsNode, warnings) {
     const solid = childNamed(style, "SolidColor");
     const gradient = style.children?.find((c) => /Gradient$/.test(c.name));
     if (solid) {
-      styles[index] = { color: normalizeColor(attrString(solid.attrs, "color", "#888888")) };
+      // A bare `<SolidColor/>` means black, the way Flash writes a
+      // shape filled with the default colour.
+      styles[index] = { color: normalizeColor(attrString(solid.attrs, "color", "#000000")) };
     } else if (gradient) {
       const stop = (childNamed(gradient, "GradientEntry") ?? gradient.children?.[0]);
       styles[index] = {
-        color: normalizeColor(attrString(stop?.attrs ?? {}, "color", "#888888")),
+        color: normalizeColor(attrString(stop?.attrs ?? {}, "color", "#000000")),
       };
       warnings.push("a gradient fill was imported as its first colour");
     } else {
-      styles[index] = { color: "#888888" };
+      styles[index] = { color: "#000000" };
     }
   }
   return styles;
