@@ -1,7 +1,9 @@
 /**
  * Still-image readers and writers for the formats a drawing app trades in:
  * BMP and TGA (both public, simple formats), plus a sniffing `decodeImage`
- * that also takes PNG and GIF.
+ * that also takes PNG, GIF and Flash's lossless `.dat` bitmap container
+ * (the form Animate keeps uncompressed library bitmaps in, inside an XFL's
+ * `bin/` folder).
  *
  * Everything decodes to straight-alpha RGBA, `{ width, height, data }`.
  * JPEG is not decoded here: it needs a full DCT decoder, and the browser
@@ -10,6 +12,7 @@
 import { Buffer } from "./bytes.js";
 import { decodeGif } from "./gif.js";
 import { decodePng } from "./png.js";
+import { inflateSync } from "./zlib.js";
 
 const MAX_PIXELS = 64_000_000;
 
@@ -179,7 +182,23 @@ export function sniffImage(input) {
   if (b.toString("latin1", 0, 3) === "GIF") return "gif";
   if (b.toString("latin1", 0, 2) === "BM") return "bmp";
   if (b[0] === 0xff && b[1] === 0xd8) return "jpeg";
+  if (b.length >= 8 && looksLikeFlashDat(b)) return "flashdat";
   return "tga"; // TGA has no magic number; it is the last thing to try
+}
+
+/**
+ * A Flash lossless `.dat` starts u16 0x0503, u16 row bytes, u16 width,
+ * u16 height — with row bytes matching a 3- or 4-byte pixel. A real TGA
+ * cannot begin this way (its second byte would be a colour-map type 5,
+ * which does not exist), so this check steals nothing from it.
+ */
+function looksLikeFlashDat(b) {
+  if (b.readUInt16LE(0) !== 0x0503) return false;
+  const rowBytes = b.readUInt16LE(2);
+  const width = b.readUInt16LE(4);
+  const height = b.readUInt16LE(6);
+  if (!width || !height || width > 8192 || height > 8192) return false;
+  return rowBytes === width * 4 || rowBytes === width * 3;
 }
 
 /**
@@ -199,7 +218,11 @@ export function decodeImage(input) {
       frames: gif.frames.map((f) => ({ data: f.rgba, delay: f.delay })),
     };
   }
-  const still = kind === "png" ? decodePng(Buffer.from(input)) : kind === "bmp" ? decodeBmp(input) : decodeTga(input);
+  const still =
+    kind === "png" ? decodePng(Buffer.from(input)) :
+    kind === "bmp" ? decodeBmp(input) :
+    kind === "flashdat" ? decodeFlashDat(input) :
+    decodeTga(input);
   const data = still.data.length === still.width * still.height * 4 ? still.data : toRgba(still);
   return { kind, width: still.width, height: still.height, frames: [{ data, delay: 0 }] };
 }
@@ -213,4 +236,73 @@ function toRgba(still) {
     out[i * 4 + 3] = 255;
   }
   return out;
+}
+
+/**
+ * Flash's lossless `.dat` bitmap (XFL `bin/*.dat`, Animate CS5+): a 26-byte
+ * header, then one zlib stream split into pieces of a u16 length each, up
+ * to a zero terminator. The header is u16 0x0503, u16 row bytes, u16
+ * width, u16 height, four u32s of the bitmap's twip rectangle, and two
+ * flag bytes. Inflated, every row is 4 bytes A, R, G, B with the colour
+ * premultiplied by alpha (or 3 bytes R, G, B when the row is narrow).
+ */
+function decodeFlashDat(input) {
+  const b = Buffer.from(input);
+  if (b.length < 28 || !looksLikeFlashDat(b)) throw new Error("not a Flash lossless bitmap");
+  const rowBytes = b.readUInt16LE(2);
+  const width = b.readUInt16LE(4);
+  const height = b.readUInt16LE(6);
+
+  const pieces = [];
+  let at = 26;
+  for (;;) {
+    if (at + 2 > b.length) throw new Error("not a Flash lossless bitmap (its piece list runs past the file)");
+    const len = b.readUInt16LE(at);
+    if (!len) break;
+    if (at + 2 + len > b.length) throw new Error("not a Flash lossless bitmap (a piece runs past the file)");
+    pieces.push(b.subarray(at + 2, at + 2 + len));
+    at += 2 + len;
+  }
+  if (!pieces.length) throw new Error("not a Flash lossless bitmap (it has no data pieces)");
+  const stream = Buffer.concat(pieces);
+  const raw = inflateSync(stream);
+  if (raw.length !== rowBytes * height) {
+    throw new Error(`Flash lossless bitmap inflates to ${raw.length} bytes, expected ${rowBytes * height}`);
+  }
+
+  const data = new Uint8Array(width * height * 4);
+  if (rowBytes === width * 4) {
+    for (let y = 0; y < height; y += 1) {
+      const row = y * rowBytes;
+      for (let x = 0; x < width; x += 1) {
+        const inAt = row + x * 4;
+        const outAt = (y * width + x) * 4;
+        const a = raw[inAt];
+        data[outAt + 3] = a;
+        if (a === 255 || a === 0) {
+          data[outAt] = a ? raw[inAt + 1] : 0;
+          data[outAt + 1] = a ? raw[inAt + 2] : 0;
+          data[outAt + 2] = a ? raw[inAt + 3] : 0;
+        } else {
+          // premultiplied -> straight: divide the colour back out by alpha
+          data[outAt] = Math.min(255, Math.round((raw[inAt + 1] * 255) / a));
+          data[outAt + 1] = Math.min(255, Math.round((raw[inAt + 2] * 255) / a));
+          data[outAt + 2] = Math.min(255, Math.round((raw[inAt + 3] * 255) / a));
+        }
+      }
+    }
+  } else {
+    for (let y = 0; y < height; y += 1) {
+      const row = y * rowBytes;
+      for (let x = 0; x < width; x += 1) {
+        const inAt = row + x * 3;
+        const outAt = (y * width + x) * 4;
+        data[outAt] = raw[inAt];
+        data[outAt + 1] = raw[inAt + 1];
+        data[outAt + 2] = raw[inAt + 2];
+        data[outAt + 3] = 255;
+      }
+    }
+  }
+  return { width, height, data };
 }
