@@ -737,6 +737,9 @@ const DEFAULT_XFL_SIZE = { width: 550, height: 400 };
 /** XFL geometry is in twentieths of a pixel. */
 const TWIPS = 20;
 
+/** The most pixels one frame's composed bitmap picture may hold. */
+const MAX_PICTURE_PIXELS = 16_000_000;
+
 /**
  * The ZIP/XFL package: `DOMDocument.xml`, the library of symbol items
  * and (optionally) `PublishSettings.xml` for the stage.
@@ -854,9 +857,56 @@ function mapMedia(files, document, warnings) {
   return media;
 }
 
-/** Paint placed bitmaps into one stage-size RGBA picture. */
+/**
+ * Paint placed bitmaps into one RGBA picture, and say where it sits.
+ *
+ * The picture covers every placed bitmap's box - which may reach past the
+ * stage on any side, the way a Flash sheet lies on the work area - so it
+ * comes back with its place on the canvas: `{ data, width, height, x, y }`,
+ * with `x`/`y` possibly negative. A box that would blow up past sane
+ * picture sizes is cut back to the stage and its surroundings first.
+ */
 function composeXflBitmaps(placements, width, height) {
-  const out = new Uint8Array(width * height * 4);
+  // The box each placement paints, through its matrix.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const { picture, matrix } of placements) {
+    const { a, b, c, d, tx, ty } = matrix ?? IDENTITY;
+    if (a * d - b * c === 0) continue;
+    for (const [cornerX, cornerY] of [[0, 0], [picture.width, 0], [0, picture.height], [picture.width, picture.height]]) {
+      const px = a * cornerX + c * cornerY + tx;
+      const py = b * cornerX + d * cornerY + ty;
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
+  }
+  if (!Number.isFinite(minX)) return null;
+  minX = Math.floor(minX);
+  minY = Math.floor(minY);
+  maxX = Math.ceil(maxX);
+  maxY = Math.ceil(maxY);
+  // A pathological placement (a bitmap scaled absurdly) is cut back: first
+  // to the stage plus one stage of pasteboard on every side, then, if that
+  // is still too many pixels to hold, to the stage itself.
+  const clipBox = (lowX, lowY, highX, highY) => {
+    minX = Math.max(minX, lowX);
+    minY = Math.max(minY, lowY);
+    maxX = Math.min(maxX, highX);
+    maxY = Math.min(maxY, highY);
+  };
+  clipBox(-width, -height, width * 2, height * 2);
+  if ((maxX - minX) * (maxY - minY) > MAX_PICTURE_PIXELS) {
+    clipBox(0, 0, width, height);
+  }
+  if (maxX <= minX || maxY <= minY) return null;
+  // The picture has to meet the canvas, or the model would refuse it; a
+  // bitmap that lies wholly on the pasteboard paints nothing on the stage.
+  if (maxX <= 0 || minX >= width || maxY <= 0 || minY >= height) return null;
+  const pictureWidth = maxX - minX;
+  const pictureHeight = maxY - minY;
+
+  const out = new Uint8Array(pictureWidth * pictureHeight * 4);
   for (const { picture, matrix } of placements) {
     const { a, b, c, d, tx, ty } = matrix ?? IDENTITY;
     const det = a * d - b * c;
@@ -865,8 +915,8 @@ function composeXflBitmaps(placements, width, height) {
       x >= 0 && x < picture.width && y >= 0 && y < picture.height
         ? picture.rgba[(y * picture.width + x) * 4 + channel]
         : 0;
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
+    for (let y = minY; y < maxY; y += 1) {
+      for (let x = minX; x < maxX; x += 1) {
         const u = x + 0.5 - tx;
         const v = y + 0.5 - ty;
         const px = (d * u - c * v) / det;
@@ -886,7 +936,7 @@ function composeXflBitmaps(placements, width, height) {
           (at(x0, y0, 3) * w00 + at(x0 + 1, y0, 3) * w10 +
             at(x0, y0 + 1, 3) * w01 + at(x0 + 1, y0 + 1, 3) * w11) / 255;
         if (alpha <= 0) continue;
-        const dest = (y * width + x) * 4;
+        const dest = ((y - minY) * pictureWidth + (x - minX)) * 4;
         const oa = alpha + (out[dest + 3] / 255) * (1 - alpha);
         if (oa <= 0) continue;
         for (let channel = 0; channel < 3; channel += 1) {
@@ -900,7 +950,13 @@ function composeXflBitmaps(placements, width, height) {
       }
     }
   }
-  return encodeRgbaPng(width, height, out).toString("base64");
+  return {
+    data: encodeRgbaPng(pictureWidth, pictureHeight, out).toString("base64"),
+    width: pictureWidth,
+    height: pictureHeight,
+    x: minX,
+    y: minY,
+  };
 }
 
 /** `PublishSettings.xml` carries the stage in worker blues attributes. */
@@ -968,11 +1024,10 @@ function timelineToProject(timeline, context) {
         elementStrokes(element, out, library, media, warnings, 0, null);
       }
 
-      // Bitmaps paint into one stage-size picture under the strokes, the
-      // way the binary importer lays a frame's bitmaps out.
-      const image = out.bitmaps.length
-        ? { data: composeXflBitmaps(out.bitmaps, width, height), width, height }
-        : null;
+      // Bitmaps paint into one picture under the strokes, covering every
+      // placement's box - which may reach past the stage onto the
+      // pasteboard, the way the sheet lies in Flash's work area.
+      const image = out.bitmaps.length ? composeXflBitmaps(out.bitmaps, width, height) : null;
 
       if (out.strokes.length || image || frameName) {
         layer.drawings.push({
