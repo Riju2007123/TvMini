@@ -2300,6 +2300,49 @@ export function clipSheetSize(width, height) {
   return { pasteX, pasteY, width: safeWidth + pasteX * 2, height: safeHeight + pasteY * 2 };
 }
 
+/**
+ * Where the project's artwork reaches, in canvas coordinates.
+ *
+ * Every drawing counts: a raster base sits in its box (which may reach past
+ * the stage onto the pasteboard, the way a Flash sheet does), and the strokes
+ * spread over the runs of ink that sketch on the work area.
+ */
+function projectContentBounds(project) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const see = (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const layer of project.layers ?? []) {
+    for (const drawing of layer.drawings ?? []) {
+      const image = drawing.image;
+      if (image) {
+        const density = image.density ?? 1;
+        const x = image.x ?? 0;
+        const y = image.y ?? 0;
+        see(x, y);
+        see(x + image.width / density, y + image.height / density);
+      }
+      for (const stroke of drawing.strokes ?? []) {
+        const walk = (point) => {
+          if (typeof point[0] === "number" && Number.isFinite(point[0]) && Number.isFinite(point[1])) {
+            see(point[0], point[1]);
+          } else for (const child of point) walk(child);
+        };
+        for (const point of stroke.paths ?? stroke.points ?? []) walk(point);
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
 export function clipExportScale(width, height, { pasteboard = true } = {}) {
   // A document that came from a .clip is written at its own size, so its
   // scale is measured on the canvas itself; a document drawn here keeps the
@@ -2384,12 +2427,21 @@ function shiftDrawingForSheet(drawing, pasteX, pasteY, scale, width, height, pro
     const sheet = new Uint8Array(width * height * 4);
     const left = Math.round((pasteX + (drawing.image.x ?? 0)) * scale);
     const top = Math.round((pasteY + (drawing.image.y ?? 0)) * scale);
-    const copyWidth = Math.min(drawWidth, width - left);
-    const copyHeight = Math.min(drawHeight, height - top);
+    // A picture may reach past the sheet on any side - a Flash sheet bigger
+    // than the stage lies on the pasteboard - so the copy clips both the
+    // source rows and the target rows like a blit: only the part that falls
+    // inside the sheet moves over.
+    const atX = Math.max(0, left);
+    const atY = Math.max(0, top);
+    const fromX = Math.max(0, -left);
+    const fromY = Math.max(0, -top);
+    const copyWidth = Math.min(drawWidth - fromX, width - atX);
+    const copyHeight = Math.min(drawHeight - fromY, height - atY);
     for (let y = 0; y < copyHeight; y += 1) {
+      const from = ((y + fromY) * drawWidth + fromX) * 4;
       sheet.set(
-        stage.subarray(y * drawWidth * 4, (y + 1) * drawWidth * 4),
-        ((y + top) * width + left) * 4,
+        stage.subarray(from, from + copyWidth * 4),
+        ((y + atY) * width + atX) * 4,
       );
     }
     shifted.image = { data: encodeRgbaPng(width, height, sheet), width, height };
@@ -2439,7 +2491,7 @@ export async function createClipBuffer(
   project,
   { name = "TVMini export", animation = null, validate = true, scale: requestedScale = 1 } = {},
 ) {
-  const scale = Math.max(1, Math.min(CLIP_MAX_SCALE, Math.round(Number(requestedScale) || 1)));
+  let scale = Math.max(1, Math.min(CLIP_MAX_SCALE, Math.round(Number(requestedScale) || 1)));
   // Where the seconds of the build go. The caller gets it back with the
   // file, so a slow document can be told apart from a slow machine.
   const timings = {
@@ -2472,13 +2524,41 @@ export async function createClipBuffer(
   // work area around the stage, belongs to the documents TVMini and Flash
   // draw.
   const pasteboard = project.pasteboard !== false;
-  const sheet = pasteboard
+  let sheet = pasteboard
     ? clipSheetSize(project.width, project.height)
     : { pasteX: 0, pasteY: 0, width: project.width, height: project.height };
+  if (pasteboard) {
+    // A quarter of the stage is the least pasteboard. Artwork that reaches
+    // further past the stage - a Flash sheet whose paper lies on the work
+    // area, a sketch that runs off - asks for a bigger margin, so the export
+    // keeps the whole sheet the way the stage pane shows it. The margins are
+    // the stage's own size at most, so a drawing parked far away cannot blow
+    // the canvas up without end.
+    const bounds = projectContentBounds(project);
+    if (bounds) {
+      const cap = Math.max(project.width, project.height);
+      const left = Math.min(cap, Math.max(sheet.pasteX, -Math.floor(bounds.minX)));
+      const top = Math.min(cap, Math.max(sheet.pasteY, -Math.floor(bounds.minY)));
+      const right = Math.min(cap, Math.max(sheet.pasteX, Math.ceil(bounds.maxX) - project.width));
+      const bottom = Math.min(cap, Math.max(sheet.pasteY, Math.ceil(bounds.maxY) - project.height));
+      sheet = {
+        pasteX: left,
+        pasteY: top,
+        width: project.width + left + right,
+        height: project.height + top + bottom,
+      };
+    }
+  }
   const pasteX = sheet.pasteX;
   const pasteY = sheet.pasteY;
   const sheetWidth = sheet.width;
   const sheetHeight = sheet.height;
+  // The scale the caller asked for was measured on the stage's own sheet, so
+  // a sheet that content grew backs the scale down: the pixel budget the
+  // export scale keeps holds here too.
+  while (scale > 1 && Math.round(sheetWidth * scale) * Math.round(sheetHeight * scale) > CLIP_PIXEL_BUDGET) {
+    scale -= 1;
+  }
   const width = Math.round(sheetWidth * scale);
   const height = Math.round(sheetHeight * scale);
   // A stage of 1280x720 or larger is written at twice its resolution, and
