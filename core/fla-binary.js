@@ -948,14 +948,15 @@ function mediaPicture(mediaId, media, cache, warnings) {
 }
 
 /**
- * Paint one placed bitmap into a stage-size RGBA buffer.
+ * Paint one placed bitmap into an RGBA buffer, given the box of the buffer
+ * on the document: destination coordinates run from `originX`/`originY`.
  *
  * The placement matrix is the shape form: `a,b,c,d` are 16.16 and `tx,ty` are
  * twips, but the source coordinates are bitmap pixels, which is the same
  * scaling the media's own twip rectangle uses. Destination pixels are mapped
  * back through the inverse and sampled bilinearly.
  */
-function drawBitmapInto(out, width, height, picture, matrix) {
+function drawBitmapInto(out, width, height, picture, matrix, originX = 0, originY = 0) {
   const [a, b, c, d, tx, ty] = matrix;
   const det = a * d - b * c;
   if (det === 0) return;
@@ -966,9 +967,9 @@ function drawBitmapInto(out, width, height, picture, matrix) {
   const sh = picture.height;
   const src = picture.rgba;
 
-  for (let y = 0; y < height; y += 1) {
+  for (let y = originY; y < originY + height; y += 1) {
     const v = y + 0.5 - offsetY;
-    for (let x = 0; x < width; x += 1) {
+    for (let x = originX; x < originX + width; x += 1) {
       const u = x + 0.5 - offsetX;
       const sx = (65536 * (d * u - c * v)) / det - 0.5;
       const sy = (65536 * (a * v - b * u)) / det - 0.5;
@@ -1001,7 +1002,7 @@ function drawBitmapInto(out, width, height, picture, matrix) {
       const b2 = src[i00 + 2] * w00 + src[i10 + 2] * w10 + src[i01 + 2] * w01 + src[i11 + 2] * w11;
 
       // Source-over onto the transparent image of this layer.
-      const to = (y * width + x) * 4;
+      const to = ((y - originY) * width + (x - originX)) * 4;
       const underAlpha = out[to + 3] / 255;
       const outAlpha = alpha + underAlpha * (1 - alpha);
       if (outAlpha <= 0) continue;
@@ -1014,18 +1015,78 @@ function drawBitmapInto(out, width, height, picture, matrix) {
   }
 }
 
-/** Compose every bitmap placed in one cell into a stage-size transparent PNG. */
+/**
+ * Paint placed bitmaps into one RGBA picture, and say where it sits.
+ *
+ * The picture covers every placed bitmap's box - which may reach past the
+ * stage on any side, the way a Flash sheet lies on the work area - so it
+ * comes back with its place on the canvas: `{ data, width, height, x, y }`,
+ * with `x`/`y` possibly negative. A box that would blow up past sane
+ * picture sizes is cut back to the stage first, and one that misses the
+ * canvas paints nothing on it.
+ */
+const MAX_PICTURE_PIXELS = 16_000_000;
+
 function composeCellBitmaps(bitmaps, media, cache, width, height, warnings) {
-  let painted = false;
-  let out = null;
+  // The box each placement paints, through its matrix.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const placement of bitmaps) {
     const picture = mediaPicture(placement.media, media, cache, warnings);
     if (!picture) continue;
-    if (!out) out = new Uint8Array(width * height * 4);
-    drawBitmapInto(out, width, height, picture, placement.matrix);
+    const [a, b, c, d, tx, ty] = placement.matrix;
+    if (a * d - b * c === 0) continue;
+    const offsetX = tx * TRANSLATE_SCALE;
+    const offsetY = ty * TRANSLATE_SCALE;
+    for (const [cornerX, cornerY] of [[0, 0], [picture.width, 0], [0, picture.height], [picture.width, picture.height]]) {
+      const px = offsetX + (a * cornerX + c * cornerY) * MATRIX_SCALE;
+      const py = offsetY + (b * cornerX + d * cornerY) * MATRIX_SCALE;
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
+  }
+  if (!Number.isFinite(minX)) return null;
+  minX = Math.floor(minX);
+  minY = Math.floor(minY);
+  maxX = Math.ceil(maxX);
+  maxY = Math.ceil(maxY);
+  // A pathological placement (a bitmap scaled absurdly) is cut back: first
+  // to the stage plus one stage of pasteboard on every side, then, if that
+  // is still too many pixels to hold, to the stage itself.
+  const clipBox = (lowX, lowY, highX, highY) => {
+    minX = Math.max(minX, lowX);
+    minY = Math.max(minY, lowY);
+    maxX = Math.min(maxX, highX);
+    maxY = Math.min(maxY, highY);
+  };
+  clipBox(-width, -height, width * 2, height * 2);
+  if ((maxX - minX) * (maxY - minY) > MAX_PICTURE_PIXELS) {
+    clipBox(0, 0, width, height);
+  }
+  if (maxX <= minX || maxY <= minY) return null;
+  // The picture has to meet the canvas, or the model would refuse it; a
+  // bitmap that lies wholly on the pasteboard paints nothing on the stage.
+  if (maxX <= 0 || minX >= width || maxY <= 0 || minY >= height) return null;
+  const pictureWidth = maxX - minX;
+  const pictureHeight = maxY - minY;
+
+  const out = new Uint8Array(pictureWidth * pictureHeight * 4);
+  let painted = false;
+  for (const placement of bitmaps) {
+    const picture = mediaPicture(placement.media, media, cache, warnings);
+    if (!picture) continue;
+    drawBitmapInto(out, pictureWidth, pictureHeight, picture, placement.matrix, minX, minY);
     painted = true;
   }
-  return painted ? encodeRgbaPng(width, height, out).toString("base64") : null;
+  if (!painted) return null;
+  return {
+    data: encodeRgbaPng(pictureWidth, pictureHeight, out).toString("base64"),
+    width: pictureWidth,
+    height: pictureHeight,
+    x: minX,
+    y: minY,
+  };
 }
 
 function decodeCPicFrame(cursor, registry, ctx) {
@@ -1496,7 +1557,10 @@ export function binaryPageToProject(name, { page, stage, document }) {
         delete drawing.bitmaps;
         continue;
       }
-      const image = composeCellBitmaps(
+      // Bitmaps paint into one picture under the strokes, covering every
+      // placement's box - which may reach past the stage onto the
+      // pasteboard, the way the sheet lies in Flash's work area.
+      const composed = composeCellBitmaps(
         drawing.bitmaps,
         media,
         cache,
@@ -1504,8 +1568,14 @@ export function binaryPageToProject(name, { page, stage, document }) {
         stage.height,
         { add: (message) => warnings.push(message) },
       );
-      if (image) {
-        drawing.image = { data: image, width: stage.width, height: stage.height };
+      if (composed) {
+        drawing.image = {
+          data: composed.data,
+          width: composed.width,
+          height: composed.height,
+          x: composed.x,
+          y: composed.y,
+        };
       }
       delete drawing.bitmaps;
     }
